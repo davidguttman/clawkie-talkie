@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>WalkyTalkAI — Wireframes</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Kalam:wght@400;700&family=Caveat:wght@400;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet"/>
+<style>
+  html, body { margin: 0; padding: 0; background: #f0eee9; font-family: 'Kalam', system-ui, sans-serif; color: #1a1a1a; }
+  * { box-sizing: border-box; }
+  @keyframes sketchpulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(1.3); }
+  }
+  @keyframes sketchring {
+    0% { transform: scale(0.9); opacity: 0.6; }
+    100% { transform: scale(1.3); opacity: 0; }
+  }
+  @keyframes sketchbreathe {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+  }
+  @keyframes sketchbob {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-4px); }
+  }
+</style>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="wireframe-primitives.jsx"></script>
+<script type="text/babel" src="variations-1-3.jsx"></script>
+<script type="text/babel" src="variations-4-5.jsx"></script>
+<script type="text/babel" src="review-screens.jsx"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="env,react">
+const TWEAKS = /*EDITMODE-BEGIN*/{
+  "state": "recording",
+  "showAnnotations": true
+}/*EDITMODE-END*/;
+
+const STATES = ['idle', 'recording', 'thinking', 'ai'];
+const STATE_LABEL = {
+  idle: 'Idle / Ready',
+  recording: 'Recording (you talking)',
+  thinking: 'Processing',
+  ai: 'AI Speaking',
+};
+
+function App() {
+  const [state, setState] = React.useState(TWEAKS.state || 'idle');
+  const [autoCycle, setAutoCycle] = React.useState(false);
+  const [tweaksOpen, setTweaksOpen] = React.useState(false);
+  const [showAnno, setShowAnno] = React.useState(TWEAKS.showAnnotations);
+
+  // auto-cycle animation
+  React.useEffect(() => {
+    if (!autoCycle) return;
+    const interval = setInterval(() => {
+      setState(s => STATES[(STATES.indexOf(s) + 1) % STATES.length]);
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [autoCycle]);
+
+  // Tweaks protocol
+  React.useEffect(() => {
+    const handler = (e) => {
+      if (e.data?.type === '__activate_edit_mode') setTweaksOpen(true);
+      if (e.data?.type === '__deactivate_edit_mode') setTweaksOpen(false);
+    };
+    window.addEventListener('message', handler);
+    window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+    return () => window.removeEventListener('message', handler);
+  }, []);
+
+  const setStateAndPersist = (s) => {
+    setState(s);
+    window.parent.postMessage({ type: '__edit_mode_set_keys', edits: { state: s } }, '*');
+  };
+
+  // Shared heading style
+  const variations = [
+    { id: 'v1', name: 'V1 · Giant PTT Button',
+      note: 'Classic walkie-talkie. Bottom-half button, last-turn caption on top.',
+      render: () => <V1_BigButton state={state} /> },
+    { id: 'v2', name: 'V2 · Full-Bleed Tap-Anywhere',
+      note: 'Screen IS the button. Color fills the phone when active. Zero-miss target.',
+      render: () => <V2_FullBleed state={state} /> },
+    { id: 'v3', name: 'V3 · Siri-style Orb + Caption',
+      note: 'Visual orb carries state, live caption reads beneath, smaller tap target.',
+      render: () => <V3_OrbCaption state={state} /> },
+    { id: 'v4', name: 'V4 · CarPlay-style Tiles',
+      note: 'Oversized tiles, replay + record + log in a thumb-reach row. Glanceable.',
+      render: () => <V4_CarPlay state={state} /> },
+    { id: 'v5', name: 'V5 · Live Transcript + Dock',
+      note: 'Chat-style scroll for passengers or non-driving use. Dock pins the button.',
+      render: () => <V5_LiveTranscript state={state} /> },
+  ];
+
+  const reviewScreens = [
+    { id: 'landing', name: 'Handoff Landing (from agent URL)',
+      note: 'Opened via walkytalk.ai/s/<session-id>. Agent in Discord hands off context; user taps to start talking.',
+      render: () => <HandoffLanding state="ready" /> },
+    { id: 'h', name: 'History List',
+      note: 'Searchable log of all conversations, grouped by day. Stars = keep.',
+      render: () => <HistoryList /> },
+    { id: 't', name: 'Transcript Detail',
+      note: 'Clean read view — built to copy, export MD, or pipe into a PRD/blog.',
+      render: () => <TranscriptDetail /> },
+    { id: 'e', name: 'Empty / First Use',
+      note: 'Minimal onboarding. Explain the toggle. Get to CarPlay fast.',
+      render: () => <EmptyState /> },
+    { id: 's', name: 'Settings',
+      note: 'Voice, driving behavior, transcript cleanup, export format.',
+      render: () => <Settings /> },
+  ];
+
+  return (
+    <DesignCanvas>
+      {/* HEADER */}
+      <div style={{ padding: '20px 60px 40px', maxWidth: 900 }}>
+        <div style={{ fontFamily: '"Caveat", cursive', fontSize: 54, fontWeight: 700, lineHeight: 1, color: '#1a1a1a' }}>
+          WalkyTalkAI — wireframes
+        </div>
+        <div style={{ fontFamily: '"Kalam", cursive', fontSize: 18, color: '#666', marginTop: 8, lineHeight: 1.5, maxWidth: 720 }}>
+          A walky-talky for your brain. Tap once to start talking, tap again to stop. AI replies out loud, but <i>everything</i> is saved as text for later reuse — PRDs, blog posts, reminders, emails.
+        </div>
+
+        {showAnno && (
+          <div style={{
+            marginTop: 22, padding: '16px 20px',
+            background: '#fef4a8', border: '1.5px solid #1a1a1a',
+            maxWidth: 780, transform: 'rotate(-0.4deg)',
+            boxShadow: '2px 3px 0 rgba(0,0,0,0.08)',
+            fontFamily: '"Caveat", cursive', fontSize: 18, lineHeight: 1.45, color: '#5a4a2a',
+          }}>
+            <b>Design assumptions (from your answers):</b><br/>
+            · Primary use = <b>car / driving</b>. Button is the hero, text is for later.<br/>
+            · Two modes of the product: <b>driving mode</b> (button + minimal text) and <b>review mode</b> (transcript-as-source).<br/>
+            · Tap = toggle (not hold). Thumb target must survive bumps and glances.<br/>
+            · Five button-forward variants below. Pick elements from each — we'll combine them into a hi-fi prototype next.
+          </div>
+        )}
+      </div>
+
+      {/* STATE CYCLER */}
+      <div style={{
+        margin: '0 60px 36px', padding: '14px 18px',
+        background: '#fff', border: '1.5px solid #1a1a1a',
+        display: 'inline-flex', gap: 14, alignItems: 'center', flexWrap: 'wrap',
+        boxShadow: '2px 3px 0 rgba(0,0,0,0.08)',
+      }}>
+        <div style={{ fontFamily: '"Caveat", cursive', fontSize: 22, fontWeight: 700 }}>
+          Cycle state →
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {STATES.map(s => (
+            <button key={s} onClick={() => { setAutoCycle(false); setStateAndPersist(s); }} style={{
+              padding: '6px 14px', border: '1.5px solid #1a1a1a',
+              background: state === s ? '#1a1a1a' : '#fff',
+              color: state === s ? '#fff' : '#1a1a1a',
+              fontFamily: 'JetBrains Mono, monospace', fontSize: 11, letterSpacing: 1,
+              fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase',
+            }}>{STATE_LABEL[s]}</button>
+          ))}
+        </div>
+        <button onClick={() => setAutoCycle(a => !a)} style={{
+          padding: '6px 14px', border: '1.5px solid #d94a2c',
+          background: autoCycle ? '#d94a2c' : '#fff',
+          color: autoCycle ? '#fff' : '#d94a2c',
+          fontFamily: 'JetBrains Mono, monospace', fontSize: 11, letterSpacing: 1,
+          fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase',
+        }}>{autoCycle ? '■ STOP' : '▶ AUTO'}</button>
+        <div style={{ fontFamily: '"Caveat", cursive', fontSize: 16, color: '#888', fontStyle: 'italic' }}>
+          watch each variation respond to the state
+        </div>
+      </div>
+
+      {/* DRIVING MODE VARIATIONS */}
+      <DCSection title="Driving mode — 5 button-forward variations"
+                 subtitle="Each variation reacts to the current state. Scroll horizontally.">
+        {variations.map(v => (
+          <DCArtboard key={v.id} label={v.name} width={340} height={720}
+            style={{ background: 'transparent', boxShadow: 'none' }}>
+            <div style={{ position: 'relative' }}>
+              {v.render()}
+              {showAnno && (
+                <div style={{
+                  marginTop: 16, maxWidth: 340,
+                  fontFamily: '"Caveat", cursive', fontSize: 17, lineHeight: 1.35,
+                  color: '#5a4a2a',
+                }}>{v.note}</div>
+              )}
+            </div>
+          </DCArtboard>
+        ))}
+      </DCSection>
+
+      {/* REVIEW MODE SCREENS */}
+      <DCSection title="Review mode — out of the car"
+                 subtitle="Text as source material: history, transcript detail, empty state, settings.">
+        {reviewScreens.map(s => (
+          <DCArtboard key={s.id} label={s.name} width={340} height={720}
+            style={{ background: 'transparent', boxShadow: 'none' }}>
+            <div>
+              {s.render()}
+              {showAnno && (
+                <div style={{
+                  marginTop: 16, maxWidth: 340,
+                  fontFamily: '"Caveat", cursive', fontSize: 17, lineHeight: 1.35,
+                  color: '#5a4a2a',
+                }}>{s.note}</div>
+              )}
+            </div>
+          </DCArtboard>
+        ))}
+      </DCSection>
+
+      {/* NEXT STEPS */}
+      <div style={{ padding: '0 60px 80px', maxWidth: 900 }}>
+        <div style={{
+          padding: '22px 26px', background: '#fff', border: '1.5px solid #1a1a1a',
+          transform: 'rotate(-0.3deg)', boxShadow: '3px 4px 0 rgba(0,0,0,0.08)',
+        }}>
+          <div style={{ fontFamily: '"Caveat", cursive', fontSize: 28, fontWeight: 700, marginBottom: 10 }}>
+            Next steps →
+          </div>
+          <ol style={{ fontFamily: '"Kalam", cursive', fontSize: 16, lineHeight: 1.6, paddingLeft: 22, margin: 0 }}>
+            <li>Pick a direction for driving-mode (my gut: <b>V4 CarPlay</b> as primary + <b>V2 full-bleed</b> as emergency-glance fallback).</li>
+            <li>Decide AI-speaking visual: orb, waveform, or caption-only?</li>
+            <li>Flesh out transcript export flow — markdown, "send to blog draft", "send to reminders", etc.</li>
+            <li>Move to hi-fi: pick a brand direction (playful/friendly vs industrial/radio vs soft-utility).</li>
+            <li>Prototype: full interactive flow with real audio states + mock AI responses.</li>
+          </ol>
+        </div>
+      </div>
+
+      {/* TWEAKS PANEL */}
+      {tweaksOpen && (
+        <div style={{
+          position: 'fixed', bottom: 20, right: 20, width: 280,
+          background: '#fff', border: '1.5px solid #1a1a1a',
+          boxShadow: '3px 4px 0 rgba(0,0,0,0.15), 0 20px 40px rgba(0,0,0,0.12)',
+          padding: '14px 16px', zIndex: 100, fontFamily: 'Kalam, system-ui',
+        }}>
+          <div style={{ fontFamily: '"Caveat", cursive', fontSize: 24, fontWeight: 700, marginBottom: 8 }}>
+            Tweaks
+          </div>
+          <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, letterSpacing: 1, color: '#888', marginBottom: 6 }}>
+            STATE
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 12 }}>
+            {STATES.map(s => (
+              <label key={s} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, cursor: 'pointer' }}>
+                <input type="radio" name="state" checked={state === s}
+                  onChange={() => { setAutoCycle(false); setStateAndPersist(s); }} />
+                {STATE_LABEL[s]}
+              </label>
+            ))}
+          </div>
+          <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, letterSpacing: 1, color: '#888', marginBottom: 6 }}>
+            ANIMATION
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, cursor: 'pointer', marginBottom: 12 }}>
+            <input type="checkbox" checked={autoCycle} onChange={() => setAutoCycle(a => !a)} />
+            Auto-cycle states (2s each)
+          </label>
+          <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, letterSpacing: 1, color: '#888', marginBottom: 6 }}>
+            ANNOTATIONS
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, cursor: 'pointer' }}>
+            <input type="checkbox" checked={showAnno} onChange={(e) => {
+              setShowAnno(e.target.checked);
+              window.parent.postMessage({ type: '__edit_mode_set_keys', edits: { showAnnotations: e.target.checked } }, '*');
+            }} />
+            Show sticky notes + captions
+          </label>
+        </div>
+      )}
+    </DesignCanvas>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

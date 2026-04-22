@@ -1,0 +1,14 @@
+node_modules
+.git
+.jump.sh
+dump
+data
+tmp
+.worktrees
+*.log
+.env*
+coverage
+.nyc_output
+dist
+build
+.DS_Store

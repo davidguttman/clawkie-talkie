@@ -1,0 +1,14 @@
+{
+  "name": "clawkie-talkie",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Walkie-talkie voice surface for an OpenClaw session",
+  "workspaces": [
+    "client"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace client",
+    "build": "npm run build --workspace client",
+    "typecheck": "npm run typecheck --workspace client"
+  }
+}
