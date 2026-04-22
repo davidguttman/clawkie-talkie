@@ -114,6 +114,7 @@ export function App() {
           onHistory={() => go('history')}
           onSettings={() => go('settings')}
           compact={compact}
+          settings={settings}
         />
       )}
       {screen === 'history' && (
@@ -183,8 +184,8 @@ function MobileShell({ children }: { children: ReactNode }) {
         // still honors notch/home indicator.
         paddingTop: 'env(safe-area-inset-top, 0)',
         paddingBottom: 'env(safe-area-inset-bottom, 0)',
-        paddingLeft: 14,
-        paddingRight: 14,
+        paddingLeft: 'calc(14px + env(safe-area-inset-left, 0px))',
+        paddingRight: 'calc(14px + env(safe-area-inset-right, 0px))',
       }}
     >
       {children}
