@@ -16,7 +16,7 @@ import {
   MicPermissionError,
   type STTHandle,
 } from './stt';
-import { speakWithBrowserTTS, type TTSHandle, type TTSOptions } from './tts';
+import { speakWithXaiTTS, type TTSHandle, type TTSOptions } from './tts';
 import type { ReplyProvider, ReplyResult } from './reply';
 
 export type DrivingState = 'idle' | 'recording' | 'thinking' | 'ai';
@@ -46,11 +46,11 @@ export function useDrivingLoop(opts: {
   replyProvider: ReplyProvider;
   ttsOptions?: TTSOptions;
   // Read fresh at call time so Settings edits take effect on the next turn
-  // without re-mounting the hook.
-  getSttApiKey: () => string;
+  // without re-mounting the hook. The same xAI key is used for STT + TTS.
+  getXaiApiKey: () => string;
   sttLanguage?: string;
 }): DrivingLoop {
-  const { replyProvider, ttsOptions, getSttApiKey, sttLanguage } = opts;
+  const { replyProvider, ttsOptions, getXaiApiKey, sttLanguage } = opts;
 
   const [state, setState] = useState<DrivingState>('idle');
   const [liveText, setLiveText] = useState('');
@@ -58,14 +58,14 @@ export function useDrivingLoop(opts: {
   const [replySource, setReplySource] = useState<ReplyResult['source'] | null>(null);
   const [intensities, setIntensities] = useState<number[]>(() => [...IDLE_INTENSITIES]);
   const [error, setError] = useState<string | null>(null);
-  const [hasApiKey, setHasApiKey] = useState<boolean>(() => !!getSttApiKey().trim());
+  const [hasApiKey, setHasApiKey] = useState<boolean>(() => !!getXaiApiKey().trim());
 
   const sttRef = useRef<STTHandle | null>(null);
   const ttsRef = useRef<TTSHandle | null>(null);
   const liveTextRef = useRef('');
   const replyProviderRef = useRef(replyProvider);
   const ttsOptionsRef = useRef(ttsOptions);
-  const getSttApiKeyRef = useRef(getSttApiKey);
+  const getXaiApiKeyRef = useRef(getXaiApiKey);
   const sttLanguageRef = useRef(sttLanguage);
   // Set if the user taps stop before the mic stream has finished opening —
   // the pending acquisition discards its handle instead of publishing it.
@@ -80,8 +80,8 @@ export function useDrivingLoop(opts: {
   }, [ttsOptions]);
 
   useEffect(() => {
-    getSttApiKeyRef.current = getSttApiKey;
-  }, [getSttApiKey]);
+    getXaiApiKeyRef.current = getXaiApiKey;
+  }, [getXaiApiKey]);
 
   useEffect(() => {
     sttLanguageRef.current = sttLanguage;
@@ -97,7 +97,7 @@ export function useDrivingLoop(opts: {
   useEffect(() => {
     if (state !== 'idle') return;
     const id = window.setInterval(() => {
-      const next = !!getSttApiKeyRef.current().trim();
+      const next = !!getXaiApiKeyRef.current().trim();
       setHasApiKey((prev) => (prev === next ? prev : next));
     }, 500);
     return () => window.clearInterval(id);
@@ -153,12 +153,17 @@ export function useDrivingLoop(opts: {
     setLiveText(result.text);
     setState('ai');
 
-    const tts = speakWithBrowserTTS(result.text, ttsOptionsRef.current || {});
+    const apiKey = getXaiApiKeyRef.current().trim();
+    const tts = speakWithXaiTTS(result.text, {
+      ...(ttsOptionsRef.current || {}),
+      apiKey,
+    });
     ttsRef.current = tts;
     try {
       await tts.done;
     } finally {
       ttsRef.current = null;
+      if (tts.error) setError(tts.error);
       setLastTurn({ who: 'ai', text: result.text, source: result.source });
       setLiveText('');
       setState('idle');
@@ -167,7 +172,7 @@ export function useDrivingLoop(opts: {
 
   const tap = useCallback(() => {
     if (state === 'idle') {
-      const apiKey = getSttApiKeyRef.current().trim();
+      const apiKey = getXaiApiKeyRef.current().trim();
       if (!apiKey) {
         setError('missing_xai_api_key');
         setHasApiKey(false);

@@ -58,7 +58,7 @@ export function DrivingScreen({
   const loop = useDrivingLoop({
     replyProvider,
     ttsOptions,
-    getSttApiKey: () => settingsRef.current?.apiKeys?.xai || '',
+    getXaiApiKey: () => settingsRef.current?.apiKeys?.xai || '',
   });
 
   const { state, liveText, lastTurn, replySource, intensities, error, hasApiKey, tap } = loop;
@@ -542,8 +542,17 @@ function errorLabelFor(code: string): string {
   if (code === 'empty_audio') return 'NO AUDIO CAPTURED — TRY AGAIN';
   if (code === 'media_recorder_unsupported')
     return 'AUDIO CAPTURE UNSUPPORTED ON THIS BROWSER';
-  if (code.startsWith('xai_stt_http_')) return `XAI STT · ${code.replace('xai_stt_http_', 'HTTP ')}`;
-  return `STT ERROR · ${code}`;
+  if (code.startsWith('xai_stt_http_'))
+    return `XAI STT · ${code.replace('xai_stt_http_', 'HTTP ')}`;
+  if (code.startsWith('xai_tts_http_'))
+    return `XAI TTS · ${code.replace('xai_tts_http_', 'HTTP ')}`;
+  if (code === 'xai_tts_fetch_failed') return 'XAI TTS · NETWORK FAILED';
+  if (code === 'xai_tts_blob_failed') return 'XAI TTS · AUDIO DECODE FAILED';
+  if (code === 'xai_tts_empty_audio') return 'XAI TTS · EMPTY AUDIO';
+  if (code.startsWith('audio_play_rejected'))
+    return 'XAI TTS · PLAYBACK BLOCKED BY BROWSER';
+  if (code.startsWith('audio_playback_failed')) return 'XAI TTS · PLAYBACK FAILED';
+  return `VOICE ERROR · ${code}`;
 }
 
 function PTTButton({
