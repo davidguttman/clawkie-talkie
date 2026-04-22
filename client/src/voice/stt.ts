@@ -1,127 +1,174 @@
-// Streaming speech-to-text seam.
+// xAI-backed speech-to-text.
 //
-// This slice uses the browser's built-in Web Speech API for live
-// transcription — the fastest working path to "see my voice" in the UI.
-// The exported interface intentionally hides that detail so a later phase
-// can swap in a daemon-backed or xAI-streaming transport without touching
-// the driving state machine.
+// The previous slice used the browser's Web Speech API. David requires xAI
+// STT as the only transcription path — no browser SpeechRecognition
+// fallback. This module captures mic audio with MediaRecorder during the
+// recording phase and POSTs the resulting blob to xAI's batch STT endpoint
+// when the user taps Stop.
+//
+// Endpoint (confirmed from docs.x.ai/developers/model-capabilities/audio/voice):
+//   POST https://api.x.ai/v1/stt
+//   Authorization: Bearer <key>
+//   multipart/form-data with field `file`, plus optional `model`, `language`.
+//   Response JSON: { text: string, ... }
+//
+// Streaming via wss://api.x.ai/v1/realtime is the voice-agent product, not
+// a plain STT stream — out of scope for this slice. Transcription here is
+// chunked-on-stop, not streaming; the driving loop surfaces that as a
+// "Transcribing…" caption during the THINKING state.
 
-type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
+const XAI_STT_ENDPOINT = 'https://api.x.ai/v1/stt';
+const XAI_STT_MODEL = 'grok-stt';
 
-interface SpeechRecognitionLike extends EventTarget {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  start(): void;
-  stop(): void;
-  abort(): void;
-  onresult: ((ev: SpeechRecognitionEventLike) => void) | null;
-  onerror: ((ev: { error?: string; message?: string }) => void) | null;
-  onend: (() => void) | null;
+export class MissingApiKeyError extends Error {
+  constructor() {
+    super('missing_xai_api_key');
+    this.name = 'MissingApiKeyError';
+  }
 }
 
-interface SpeechRecognitionEventLike {
-  resultIndex: number;
-  results: ArrayLike<{
-    isFinal: boolean;
-    0: { transcript: string };
-  }>;
-}
-
-function getRecognitionCtor(): SpeechRecognitionCtor | null {
-  const w = window as unknown as {
-    SpeechRecognition?: SpeechRecognitionCtor;
-    webkitSpeechRecognition?: SpeechRecognitionCtor;
-  };
-  return w.SpeechRecognition || w.webkitSpeechRecognition || null;
-}
-
-export function isSTTSupported(): boolean {
-  return getRecognitionCtor() !== null;
-}
-
-export interface STTHandlers {
-  onPartial: (text: string) => void;
-  onFinal: (text: string) => void;
-  onError: (reason: string) => void;
+export class MicPermissionError extends Error {
+  constructor(cause?: unknown) {
+    super('mic_denied');
+    this.name = 'MicPermissionError';
+    if (cause && cause instanceof Error) this.cause = cause;
+  }
 }
 
 export interface STTHandle {
-  // Ask the underlying recognizer to finalize. onFinal will fire with the
-  // full accumulated transcript before the handle settles.
-  stop(): void;
-  // Abort without publishing a final result.
+  // Finalize the recording and return the transcript from xAI. Throws on
+  // HTTP / network / parse errors so the driving loop can route to the
+  // error state.
+  stop(): Promise<string>;
+  // Abort without calling xAI. Releases the mic.
   cancel(): void;
 }
 
-export function startBrowserSTT(handlers: STTHandlers): STTHandle {
-  const Ctor = getRecognitionCtor();
-  if (!Ctor) {
-    handlers.onError('stt_unsupported');
-    return { stop: () => {}, cancel: () => {} };
+export interface STTStartOptions {
+  apiKey: string;
+  // Optional ISO language hint (e.g. "en"). Omit to let xAI detect.
+  language?: string;
+}
+
+export async function startXaiSTT(opts: STTStartOptions): Promise<STTHandle> {
+  if (!opts.apiKey || !opts.apiKey.trim()) {
+    throw new MissingApiKeyError();
+  }
+  if (typeof MediaRecorder === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+    throw new Error('media_recorder_unsupported');
   }
 
-  const rec = new Ctor();
-  rec.continuous = true;
-  rec.interimResults = true;
-  rec.lang = navigator.language || 'en-US';
-
-  // The recognizer emits partials and finals as separate result entries.
-  // We accumulate finalized segments into `finalized` and append the live
-  // tail so the UI reads as one continuous transcript.
-  let finalized = '';
-  let published = false;
-
-  rec.onresult = (ev) => {
-    let tail = '';
-    for (let i = ev.resultIndex; i < ev.results.length; i++) {
-      const r = ev.results[i];
-      const text = r[0]?.transcript || '';
-      if (r.isFinal) {
-        finalized = (finalized ? finalized + ' ' : '') + text.trim();
-      } else {
-        tail += text;
-      }
-    }
-    const combined = (finalized + ' ' + tail).trim();
-    handlers.onPartial(combined);
-  };
-
-  rec.onerror = (ev) => {
-    const reason = ev?.error || ev?.message || 'stt_failed';
-    // `no-speech` / `aborted` are expected — treat as benign so the UI
-    // doesn't route into an error state on a quiet recording.
-    if (reason === 'no-speech' || reason === 'aborted') return;
-    handlers.onError(String(reason));
-  };
-
-  rec.onend = () => {
-    if (published) return;
-    published = true;
-    handlers.onFinal(finalized.trim());
-  };
-
+  let stream: MediaStream;
   try {
-    rec.start();
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (err) {
-    handlers.onError(err instanceof Error ? err.message : 'stt_start_failed');
+    throw new MicPermissionError(err);
   }
+
+  const mimeType = pickMimeType();
+  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+  const chunks: Blob[] = [];
+  recorder.ondataavailable = (ev) => {
+    if (ev.data && ev.data.size > 0) chunks.push(ev.data);
+  };
+
+  // Start recording immediately. A small timeslice keeps chunks flowing so
+  // a very long turn doesn't accumulate one giant blob in memory.
+  recorder.start(1000);
+
+  let settled = false;
+
+  const releaseMic = () => {
+    try {
+      for (const t of stream.getTracks()) t.stop();
+    } catch {
+      // already released
+    }
+  };
+
+  const waitForStop = () =>
+    new Promise<void>((resolve) => {
+      if (recorder.state === 'inactive') return resolve();
+      recorder.addEventListener('stop', () => resolve(), { once: true });
+    });
 
   return {
-    stop() {
+    async stop(): Promise<string> {
+      if (settled) throw new Error('stt_already_settled');
+      settled = true;
+
       try {
-        rec.stop();
+        if (recorder.state !== 'inactive') recorder.stop();
       } catch {
-        // already stopped
+        // recorder may race to inactive — fine
       }
+      await waitForStop();
+      releaseMic();
+
+      const effectiveType = recorder.mimeType || mimeType || 'audio/webm';
+      const blob = new Blob(chunks, { type: effectiveType });
+      if (blob.size === 0) throw new Error('empty_audio');
+
+      const form = new FormData();
+      form.append('file', blob, `recording.${extForMime(effectiveType)}`);
+      form.append('model', XAI_STT_MODEL);
+      if (opts.language) form.append('language', opts.language);
+
+      const res = await fetch(XAI_STT_ENDPOINT, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${opts.apiKey}` },
+        body: form,
+      });
+
+      if (!res.ok) {
+        const detail = (await res.text().catch(() => '')).slice(0, 200);
+        throw new Error(`xai_stt_http_${res.status}${detail ? ': ' + detail : ''}`);
+      }
+
+      const data = (await res.json().catch(() => ({}))) as {
+        text?: string;
+      };
+      return (data.text || '').trim();
     },
     cancel() {
-      published = true;
+      if (settled) return;
+      settled = true;
       try {
-        rec.abort();
+        if (recorder.state !== 'inactive') recorder.stop();
       } catch {
-        // already aborted
+        // ignore
       }
+      releaseMic();
     },
   };
+}
+
+function pickMimeType(): string | undefined {
+  // xAI docs list mp3/wav/mp4/m4a explicitly. Safari's MediaRecorder
+  // produces audio/mp4 which lines up; Chrome only produces webm/opus and
+  // xAI has been accepting that in practice. If neither is supported we
+  // let MediaRecorder pick its default.
+  const candidates = [
+    'audio/mp4',
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/ogg;codecs=opus',
+  ];
+  for (const c of candidates) {
+    try {
+      if (MediaRecorder.isTypeSupported(c)) return c;
+    } catch {
+      // some browsers throw on invalid input — skip
+    }
+  }
+  return undefined;
+}
+
+function extForMime(type: string): string {
+  if (type.includes('mp4')) return 'm4a';
+  if (type.includes('webm')) return 'webm';
+  if (type.includes('ogg')) return 'ogg';
+  if (type.includes('wav')) return 'wav';
+  if (type.includes('mpeg')) return 'mp3';
+  return 'bin';
 }

@@ -6,10 +6,11 @@ import { createLocalReplyProvider, type ReplyResult } from '../voice/reply';
 import type { Settings } from '../storage';
 
 // Visual layout ported from docs/design/hifi-driving.jsx, now driven by a
-// real state machine: Web Speech API STT while recording, xAI chat (or
-// stub) for the reply, and SpeechSynthesis for audible playback. The
-// daemon/WebRTC transport will later replace the ReplyProvider + STT
-// transport behind this same UI without further layout changes.
+// real state machine: MediaRecorder capture plus xAI STT for the user
+// turn, xAI chat (or stub) for the reply, and SpeechSynthesis for audible
+// playback. The daemon/WebRTC transport will later replace the
+// ReplyProvider + STT transport behind this same UI without further
+// layout changes.
 
 const WAVE_BARS = 28;
 
@@ -54,9 +55,13 @@ export function DrivingScreen({
     [settings?.speed],
   );
 
-  const loop = useDrivingLoop({ replyProvider, ttsOptions });
+  const loop = useDrivingLoop({
+    replyProvider,
+    ttsOptions,
+    getSttApiKey: () => settingsRef.current?.apiKeys?.xai || '',
+  });
 
-  const { state, liveText, lastTurn, replySource, intensities, error, sttSupported, tap } = loop;
+  const { state, liveText, lastTurn, replySource, intensities, error, hasApiKey, tap } = loop;
 
   // Ambient idle waveform drift — keeps the panel feeling alive when no
   // turn is in flight. The driving loop owns intensities for non-idle
@@ -256,7 +261,15 @@ export function DrivingScreen({
           boxSizing: 'border-box',
         }}
       >
-        <Caption caption={caption} baseFont={baseFont} replySource={replySource} error={error} sttSupported={sttSupported} />
+        <Caption
+          caption={caption}
+          baseFont={baseFont}
+          replySource={replySource}
+          error={error}
+          hasApiKey={hasApiKey}
+          onSettings={onSettings}
+          compact={compact}
+        />
         <div
           style={{
             marginTop: 10,
@@ -348,9 +361,11 @@ function pickCaption({
 }): CaptionData {
   if (state === 'recording') {
     return {
-      label: 'YOU · LIVE',
+      label: 'YOU · RECORDING',
       color: accentRec,
-      text: liveText || 'Listening…',
+      // xAI STT is chunked-on-stop, not streaming — no partial transcript
+      // to show here. The waveform + mic dot carry the activity signal.
+      text: 'Listening… tap again to finish and transcribe with xAI.',
       live: true,
     };
   }
@@ -358,7 +373,13 @@ function pickCaption({
     return { label: 'AI · READING ALOUD', color: stateColor, text: liveText || '…', live: true };
   }
   if (state === 'thinking') {
-    return { label: 'THINKING', color: stateColor, text: '…', live: false };
+    const transcribing = liveText === 'Transcribing…';
+    return {
+      label: transcribing ? 'TRANSCRIBING · XAI' : 'THINKING',
+      color: stateColor,
+      text: liveText || '…',
+      live: transcribing,
+    };
   }
   if (lastTurn) {
     return {
@@ -381,14 +402,24 @@ function Caption({
   baseFont,
   replySource,
   error,
-  sttSupported,
+  hasApiKey,
+  onSettings,
+  compact = false,
 }: {
   caption: CaptionData;
   baseFont: string;
   replySource: ReplyResult['source'] | null;
   error: string | null;
-  sttSupported: boolean;
+  hasApiKey: boolean;
+  onSettings?: () => void;
+  compact?: boolean;
 }) {
+  const isMissingKey = !hasApiKey || error === 'missing_xai_api_key';
+  const errorMessage = isMissingKey
+    ? 'XAI API KEY REQUIRED FOR TRANSCRIPTION'
+    : error
+      ? errorLabelFor(error)
+      : null;
   const showStubBadge = caption.label === 'AI · READING ALOUD' && replySource === 'stub';
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: 96 }}>
@@ -449,7 +480,7 @@ function Caption({
           />
         )}
       </div>
-      {(error || !sttSupported) && (
+      {errorMessage && (
         <div
           style={{
             marginTop: 10,
@@ -458,15 +489,61 @@ function Caption({
             letterSpacing: 1,
             color: '#ef6155',
             fontWeight: 600,
+            display: 'flex',
+            // Stack on compact so the OPEN SETTINGS CTA never has to fit on
+            // the same row as the long "XAI API KEY REQUIRED" label.
+            flexDirection: compact ? 'column' : 'row',
+            alignItems: compact ? 'stretch' : 'center',
+            gap: 8,
+            flexWrap: 'wrap',
+            minWidth: 0,
+            maxWidth: '100%',
           }}
         >
-          {!sttSupported
-            ? 'SPEECH RECOGNITION UNAVAILABLE — USE CHROME / EDGE'
-            : `STT ERROR · ${error}`}
+          <span
+            style={{
+              minWidth: 0,
+              overflowWrap: 'anywhere',
+              wordBreak: 'break-word',
+            }}
+          >
+            {errorMessage}
+          </span>
+          {isMissingKey && onSettings && (
+            <button
+              onClick={onSettings}
+              style={{
+                background: 'transparent',
+                border: `1px solid #ef6155`,
+                color: '#ef6155',
+                borderRadius: 6,
+                padding: compact ? '6px 10px' : '3px 8px',
+                fontFamily: HIFI.fonts.mono,
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: 1.2,
+                cursor: 'pointer',
+                alignSelf: compact ? 'flex-start' : 'auto',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              OPEN SETTINGS
+            </button>
+          )}
         </div>
       )}
     </div>
   );
+}
+
+function errorLabelFor(code: string): string {
+  if (code === 'mic_denied') return 'MIC PERMISSION DENIED';
+  if (code === 'empty_transcript') return 'NO SPEECH DETECTED — TRY AGAIN';
+  if (code === 'empty_audio') return 'NO AUDIO CAPTURED — TRY AGAIN';
+  if (code === 'media_recorder_unsupported')
+    return 'AUDIO CAPTURE UNSUPPORTED ON THIS BROWSER';
+  if (code.startsWith('xai_stt_http_')) return `XAI STT · ${code.replace('xai_stt_http_', 'HTTP ')}`;
+  return `STT ERROR · ${code}`;
 }
 
 function PTTButton({

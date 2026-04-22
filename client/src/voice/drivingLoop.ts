@@ -1,16 +1,21 @@
 // Driving state machine.
 //
-// Ports the IDLE → REC → THINK → AI → IDLE flow from
-// docs/design/hifi-driving.jsx, swapping the scripted `streamText` for a
-// live STT handle and the browser SpeechSynthesis fallback for a pluggable
-// TTS handle driven by the real reply provider.
+// IDLE → REC → THINK → AI → IDLE, ported from docs/design/hifi-driving.jsx.
+// REC captures mic audio via MediaRecorder; tap-stop uploads the blob to
+// xAI STT (the only transcription path — no browser-side fallback). THINK
+// covers both transcription and reply generation; AI is TTS playback.
 //
-// The shape here is what the daemon/WebRTC transport will plug into in a
-// later phase: `replyProvider` becomes DataChannel-backed, `startBrowserSTT`
-// becomes a daemon-forwarded stream. The hook itself doesn't change.
+// The daemon/WebRTC transport phase will replace `replyProvider` and the
+// STT call with DataChannel-backed variants; the hook contract stays the
+// same.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { startBrowserSTT, isSTTSupported, type STTHandle } from './stt';
+import {
+  startXaiSTT,
+  MissingApiKeyError,
+  MicPermissionError,
+  type STTHandle,
+} from './stt';
 import { speakWithBrowserTTS, type TTSHandle, type TTSOptions } from './tts';
 import type { ReplyProvider, ReplyResult } from './reply';
 
@@ -32,7 +37,7 @@ export interface DrivingLoop {
   replySource: ReplyResult['source'] | null;
   intensities: number[];
   error: string | null;
-  sttSupported: boolean;
+  hasApiKey: boolean;
   tap: () => void;
   silence: () => void;
 }
@@ -40,8 +45,12 @@ export interface DrivingLoop {
 export function useDrivingLoop(opts: {
   replyProvider: ReplyProvider;
   ttsOptions?: TTSOptions;
+  // Read fresh at call time so Settings edits take effect on the next turn
+  // without re-mounting the hook.
+  getSttApiKey: () => string;
+  sttLanguage?: string;
 }): DrivingLoop {
-  const { replyProvider, ttsOptions } = opts;
+  const { replyProvider, ttsOptions, getSttApiKey, sttLanguage } = opts;
 
   const [state, setState] = useState<DrivingState>('idle');
   const [liveText, setLiveText] = useState('');
@@ -49,12 +58,18 @@ export function useDrivingLoop(opts: {
   const [replySource, setReplySource] = useState<ReplyResult['source'] | null>(null);
   const [intensities, setIntensities] = useState<number[]>(() => [...IDLE_INTENSITIES]);
   const [error, setError] = useState<string | null>(null);
+  const [hasApiKey, setHasApiKey] = useState<boolean>(() => !!getSttApiKey().trim());
 
   const sttRef = useRef<STTHandle | null>(null);
   const ttsRef = useRef<TTSHandle | null>(null);
   const liveTextRef = useRef('');
   const replyProviderRef = useRef(replyProvider);
   const ttsOptionsRef = useRef(ttsOptions);
+  const getSttApiKeyRef = useRef(getSttApiKey);
+  const sttLanguageRef = useRef(sttLanguage);
+  // Set if the user taps stop before the mic stream has finished opening —
+  // the pending acquisition discards its handle instead of publishing it.
+  const cancelPendingRef = useRef(false);
 
   useEffect(() => {
     replyProviderRef.current = replyProvider;
@@ -65,12 +80,31 @@ export function useDrivingLoop(opts: {
   }, [ttsOptions]);
 
   useEffect(() => {
+    getSttApiKeyRef.current = getSttApiKey;
+  }, [getSttApiKey]);
+
+  useEffect(() => {
+    sttLanguageRef.current = sttLanguage;
+  }, [sttLanguage]);
+
+  useEffect(() => {
     liveTextRef.current = liveText;
   }, [liveText]);
 
-  // Wave animation: the idle screen already drifts its own bars; while the
-  // loop is active we drive them from a synthetic pattern that visibly
-  // differs between recording (wide swings) and thinking (narrow swings).
+  // Keep hasApiKey in sync with whatever the getter reports. Cheap to poll
+  // while idle; gives the UI a reactive blocker hint without needing to
+  // observe localStorage changes across tabs.
+  useEffect(() => {
+    if (state !== 'idle') return;
+    const id = window.setInterval(() => {
+      const next = !!getSttApiKeyRef.current().trim();
+      setHasApiKey((prev) => (prev === next ? prev : next));
+    }, 500);
+    return () => window.clearInterval(id);
+  }, [state]);
+
+  // Wave animation — synthetic pattern that visibly differs between
+  // recording (wide swings) and thinking (narrow swings).
   useEffect(() => {
     if (state === 'idle') {
       setIntensities([...IDLE_INTENSITIES]);
@@ -94,7 +128,6 @@ export function useDrivingLoop(opts: {
     return () => cancelAnimationFrame(raf);
   }, [state]);
 
-  // Safety net: on unmount, tear down any in-flight recognizer/utterance.
   useEffect(() => {
     return () => {
       sttRef.current?.cancel();
@@ -103,7 +136,6 @@ export function useDrivingLoop(opts: {
   }, []);
 
   const runReplyAndSpeak = useCallback(async (userText: string) => {
-    setState('thinking');
     setReplySource(null);
 
     let result: ReplyResult;
@@ -135,56 +167,102 @@ export function useDrivingLoop(opts: {
 
   const tap = useCallback(() => {
     if (state === 'idle') {
-      if (!isSTTSupported()) {
-        setError('stt_unsupported');
+      const apiKey = getSttApiKeyRef.current().trim();
+      if (!apiKey) {
+        setError('missing_xai_api_key');
+        setHasApiKey(false);
         return;
       }
+
       setError(null);
       setLiveText('');
       setReplySource(null);
       setLastTurn(null);
+      cancelPendingRef.current = false;
       setState('recording');
-      sttRef.current = startBrowserSTT({
-        onPartial: (text) => setLiveText(text),
-        // We ignore onFinal after stop — the tap-stop path reads liveText
-        // directly so the audible reply fires without waiting on the
-        // recognizer's internal end-of-stream handshake.
-        onFinal: () => {},
-        onError: (reason) => {
+
+      void (async () => {
+        try {
+          const handle = await startXaiSTT({
+            apiKey,
+            language: sttLanguageRef.current,
+          });
+          if (cancelPendingRef.current) {
+            cancelPendingRef.current = false;
+            handle.cancel();
+            return;
+          }
+          sttRef.current = handle;
+        } catch (err) {
+          const reason =
+            err instanceof MissingApiKeyError
+              ? 'missing_xai_api_key'
+              : err instanceof MicPermissionError
+                ? 'mic_denied'
+                : err instanceof Error
+                  ? err.message
+                  : 'stt_start_failed';
           setError(reason);
-          sttRef.current = null;
           setState('idle');
-        },
-      });
+          sttRef.current = null;
+        }
+      })();
       return;
     }
 
     if (state === 'recording') {
-      const finalText = liveTextRef.current.trim();
-      // Cancel without waiting for the recognizer's async finalize path so
-      // the THINK→AI transition starts immediately.
-      sttRef.current?.cancel();
+      if (!sttRef.current) {
+        // Still acquiring mic — bail out of the acquisition path and
+        // return to idle. The in-flight start() will discard its handle.
+        cancelPendingRef.current = true;
+        setState('idle');
+        return;
+      }
+      const handle = sttRef.current;
       sttRef.current = null;
-      setLastTurn({ who: 'user', text: finalText });
-      setLiveText('');
-      void runReplyAndSpeak(finalText);
+      setLiveText('Transcribing…');
+      setState('thinking');
+
+      void (async () => {
+        let transcript = '';
+        try {
+          transcript = await handle.stop();
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : 'stt_failed';
+          setError(reason);
+          setLiveText('');
+          setState('idle');
+          return;
+        }
+        if (!transcript) {
+          setError('empty_transcript');
+          setLiveText('');
+          setState('idle');
+          return;
+        }
+        setLastTurn({ who: 'user', text: transcript });
+        setLiveText('');
+        await runReplyAndSpeak(transcript);
+      })();
       return;
     }
 
     if (state === 'ai') {
-      // Tap during AI = silence: kill playback, return to idle but keep
-      // the turn record so the caption can still show what was said.
+      // Silence: kill playback, return to idle. Keep the AI turn record so
+      // the caption can still show what was said.
       ttsRef.current?.stop();
       ttsRef.current = null;
       setLastTurn((prev) =>
-        prev && prev.who === 'ai' ? prev : { who: 'ai', text: liveTextRef.current, source: replySource ?? undefined },
+        prev && prev.who === 'ai'
+          ? prev
+          : { who: 'ai', text: liveTextRef.current, source: replySource ?? undefined },
       );
       setLiveText('');
       setState('idle');
       return;
     }
 
-    // THINK state: no-op; user can't cancel mid-request in this slice.
+    // THINK state: no-op; user can't interrupt xAI mid-request in this slice.
   }, [state, replySource, runReplyAndSpeak]);
 
   const silence = useCallback(() => {
@@ -202,7 +280,7 @@ export function useDrivingLoop(opts: {
     replySource,
     intensities,
     error,
-    sttSupported: isSTTSupported(),
+    hasApiKey,
     tap,
     silence,
   };
