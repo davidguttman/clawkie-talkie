@@ -32,9 +32,8 @@ const ERROR_KINDS: ErrorKind[] = [
 function parseInitial(): {
   screen: ScreenId;
   errorKind: ErrorKind;
-  joinToken?: string;
+  hostPeerId?: string;
   sessionId?: string;
-  rendezvousUrl?: string;
 } {
   const params = new URLSearchParams(window.location.search);
   const rawScreen = params.get('screen');
@@ -45,13 +44,12 @@ function parseInitial(): {
   const errorKind: ErrorKind = (ERROR_KINDS as string[]).includes(rawKind || '')
     ? (rawKind as ErrorKind)
     : 'bad_session';
-  const joinToken = params.get('join') || undefined;
+  // LobsterLink convention: the daemon registered with the PeerJS
+  // broker and published its assigned peer ID as `host=<id>`. The phone
+  // dials that peer directly; no separate rendezvous URL.
+  const hostPeerId = params.get('host') || undefined;
   const sessionId = params.get('session') || undefined;
-  // The daemon embeds the rendezvous it registered with directly in the
-  // join URL so the phone client can reach the same room without any
-  // additional build-time config. env var remains a fallback.
-  const rendezvousUrl = params.get('rendezvous') || undefined;
-  return { screen, errorKind, joinToken, sessionId, rendezvousUrl };
+  return { screen, errorKind, hostPeerId, sessionId };
 }
 
 function setUrlParam(key: string, value: string | null) {
@@ -103,7 +101,7 @@ export function App() {
         <HandoffScreen
           onEnter={() => go('driving')}
           onBack={() => go('driving')}
-          joinToken={initial.joinToken}
+          joinToken={initial.hostPeerId}
           sessionId={initial.sessionId}
           compact={compact}
         />
@@ -167,7 +165,7 @@ export function App() {
   );
 
   return (
-    <RtcProvider joinToken={initial.joinToken} rendezvousUrl={initial.rendezvousUrl}>
+    <RtcProvider hostPeerId={initial.hostPeerId}>
       {rendered}
     </RtcProvider>
   );

@@ -1,9 +1,11 @@
 # Clawkie-Talkie V1 Design Kickoff
 
 Date: 2026-04-21
-Status: validated brainstorming artifact
+Status: validated brainstorming artifact — **partially superseded (2026-04-23)**
 Project path: `/mnt/data/play/web/clawkie-talkie`
 Primary design reference: `docs/design/Clawkie-Talkie Hi-Fi.html`
+
+> **Superseded on 2026-04-23:** the "custom rendezvous service" bullet below is no longer the path forward. LobsterLink does not run a rendezvous server — it uses the public **PeerJS** broker and embeds the assigned peer ID directly in the join URL (`?host=<uuid>`). Clawkie-Talkie is being migrated to the same convention. Treat every mention of a dedicated rendezvous server in this document as historical context, not current intent.
 
 ## One-line product definition
 
@@ -52,7 +54,7 @@ Build the fastest real playable slice that lets an OpenClaw user:
 - Front-end to daemon communication uses WebRTC.
 - Running a user-managed public HTTP(S) server is a non-starter.
 - Installation/run flow must be easy for normal OpenClaw users.
-- Use a LobsterLink-style rendezvous/handoff pattern.
+- Use a LobsterLink-style handoff pattern — i.e. PeerJS broker + `?host=<peerId>` join URL. No custom rendezvous/signaling server.
 - Rambly/OpenClaw plugin work is a valid precedent for daemon + realtime transport patterns.
 
 ### Product boundary constraints
@@ -300,7 +302,7 @@ If this doc is used as the implementation kickoff artifact, the prompt must expl
 - WebRTC front-end to daemon transport
 - xAI-owned browser STT/TTS
 - no user-managed public HTTP(S) server requirement
-- LobsterLink-style join/rendezvous pattern
+- LobsterLink-style join pattern via PeerJS broker (no custom rendezvous service)
 - existing hi-fi layout preserved
 - disabled/grayed-out unbuilt surfaces instead of removals
 - quoted user turn posting into the canonical Discord/OpenClaw thread

@@ -1,4 +1,4 @@
-// One RtcClient per join token, hoisted so both Handoff and Driving
+// One RtcClient per host peer ID, hoisted so both Handoff and Driving
 // screens can consume the same connection + control message stream.
 
 import {
@@ -13,17 +13,13 @@ import {
 } from 'react';
 import { RtcClient, type ControlMessage, type RtcStatus } from './client';
 
-const DEFAULT_RENDEZVOUS_URL =
-  (import.meta as unknown as { env?: Record<string, string | undefined> }).env
-    ?.VITE_CT_RENDEZVOUS_URL || '';
-
 export interface RtcContextValue {
   status: RtcStatus;
   detail?: string;
   sendControl: (msg: ControlMessage) => void;
   sendBinary: (bytes: ArrayBuffer | Uint8Array) => void;
   addControlListener: (fn: (msg: ControlMessage) => void) => () => void;
-  // Null when no join token was provided on the URL — the voice loop
+  // Null when no host peer ID was provided on the URL — the voice loop
   // uses this to surface a "daemon not connected" blocker.
   hasClient: boolean;
 }
@@ -40,12 +36,10 @@ const Ctx = createContext<RtcContextValue>({
 });
 
 export function RtcProvider({
-  joinToken,
-  rendezvousUrl,
+  hostPeerId,
   children,
 }: {
-  joinToken?: string;
-  rendezvousUrl?: string;
+  hostPeerId?: string;
   children: ReactNode;
 }) {
   const [status, setStatus] = useState<RtcStatus>('idle');
@@ -53,19 +47,11 @@ export function RtcProvider({
   const clientRef = useRef<RtcClient | null>(null);
   const listenersRef = useRef<Set<(msg: ControlMessage) => void>>(new Set());
 
-  const effectiveRendezvous = rendezvousUrl || DEFAULT_RENDEZVOUS_URL;
-
   useEffect(() => {
-    if (!joinToken) return;
-    if (!effectiveRendezvous) {
-      setStatus('error');
-      setDetail('missing_rendezvous_url');
-      return;
-    }
+    if (!hostPeerId) return;
 
     const client = new RtcClient({
-      rendezvousUrl: effectiveRendezvous,
-      token: joinToken,
+      hostPeerId,
       onStatusChange: (s, d) => {
         setStatus(s);
         setDetail(d);
@@ -81,7 +67,7 @@ export function RtcProvider({
       client.close();
       clientRef.current = null;
     };
-  }, [joinToken, effectiveRendezvous]);
+  }, [hostPeerId]);
 
   const sendControl = useCallback((msg: ControlMessage) => {
     clientRef.current?.sendControl(msg);
@@ -105,9 +91,9 @@ export function RtcProvider({
       sendControl,
       sendBinary,
       addControlListener,
-      hasClient: !!joinToken,
+      hasClient: !!hostPeerId,
     }),
-    [status, detail, sendControl, sendBinary, addControlListener, joinToken],
+    [status, detail, sendControl, sendBinary, addControlListener, hostPeerId],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

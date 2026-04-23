@@ -1,10 +1,12 @@
 # Clawkie-Talkie V1 Implementation Plan
 
 Date: 2026-04-21
-Status: implementation-ready (derived from validated kickoff)
+Status: **superseded (2026-04-23) on the signaling axis** — rest still usable as context
 Kickoff artifact: `docs/plans/2026-04-21-clawkie-talkie-v1-design.md`
 Canonical shell: `docs/design/Clawkie-Talkie Hi-Fi.html`
 Project path: `/mnt/data/play/web/clawkie-talkie`
+
+> **Superseded on 2026-04-23.** The "custom rendezvous service" path described here (the `rendezvous/` workspace, `--rendezvous-url`, SSE-based `/rooms/:token/subscribe`, `VITE_CT_RENDEZVOUS_URL`) has been abandoned. Clawkie-Talkie is migrating to **PeerJS** against its public broker (LobsterLink's actual convention), with `?host=<peerId>` join URLs. Ignore Phase 1 as written, the rendezvous dir in the target layout, and every mention of "rendezvous server" / "signaling service" in this file. The rest of the plan (UX, STT/TTS, OpenClaw integration, phasing intent) remains useful.
 
 This plan is optimized for the **fastest real playable loop**, not completeness. Anything not required to land acceptance criteria 1–13 in the kickoff is explicitly deferred.
 

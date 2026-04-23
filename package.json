@@ -1,18 +1,32 @@
 {
   "name": "clawkie-talkie",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "Walkie-talkie voice surface for an OpenClaw session",
-  "workspaces": [
-    "client",
-    "rendezvous",
-    "daemon"
-  ],
   "scripts": {
-    "dev": "npm run dev --workspace client",
-    "build": "npm run build --workspace client",
-    "typecheck": "npm run typecheck --workspace client",
-    "rendezvous": "npm run start --workspace=rendezvous --",
-    "daemon": "npm run start --workspace=daemon --"
+    "dev": "node scripts/dev.mjs",
+    "dev:client": "vite client",
+    "dev:daemon": "tsx --env-file=.env daemon/src/index.ts --session-id dev-local --client-origin http://localhost:5173",
+    "build": "tsc --noEmit -p client && vite build client",
+    "typecheck": "tsc --noEmit -p client && tsc --noEmit -p daemon",
+    "daemon": "tsx --env-file=.env daemon/src/index.ts"
+  },
+  "dependencies": {
+    "@roamhq/wrtc": "^0.8.0",
+    "peerjs": "^1.5.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/ws": "^8.5.12",
+    "@vitejs/plugin-react": "^4.3.3",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
   }
 }
