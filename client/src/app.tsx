@@ -7,6 +7,7 @@ import { HistoryScreen } from './screens/History';
 import { TranscriptScreen } from './screens/Transcript';
 import { SettingsScreen } from './screens/Settings';
 import { ErrorScreen, type ErrorKind } from './screens/ErrorScreen';
+import { RtcProvider } from './rtc/RtcContext';
 import { loadSettings, saveSettings, type Settings } from './storage';
 
 type ScreenId = 'handoff' | 'driving' | 'history' | 'transcript' | 'settings' | 'error';
@@ -33,6 +34,7 @@ function parseInitial(): {
   errorKind: ErrorKind;
   joinToken?: string;
   sessionId?: string;
+  rendezvousUrl?: string;
 } {
   const params = new URLSearchParams(window.location.search);
   const rawScreen = params.get('screen');
@@ -45,7 +47,11 @@ function parseInitial(): {
     : 'bad_session';
   const joinToken = params.get('join') || undefined;
   const sessionId = params.get('session') || undefined;
-  return { screen, errorKind, joinToken, sessionId };
+  // The daemon embeds the rendezvous it registered with directly in the
+  // join URL so the phone client can reach the same room without any
+  // additional build-time config. env var remains a fallback.
+  const rendezvousUrl = params.get('rendezvous') || undefined;
+  return { screen, errorKind, joinToken, sessionId, rendezvousUrl };
 }
 
 function setUrlParam(key: string, value: string | null) {
@@ -146,11 +152,9 @@ export function App() {
     </>
   );
 
-  if (isNarrow) {
-    return <MobileShell>{screenContent}</MobileShell>;
-  }
-
-  return (
+  const rendered = isNarrow ? (
+    <MobileShell>{screenContent}</MobileShell>
+  ) : (
     <div style={{ display: 'flex', gap: 32, alignItems: 'flex-start' }}>
       <SideNav
         screen={screen}
@@ -160,6 +164,12 @@ export function App() {
       />
       <HiFiPhone>{screenContent}</HiFiPhone>
     </div>
+  );
+
+  return (
+    <RtcProvider joinToken={initial.joinToken} rendezvousUrl={initial.rendezvousUrl}>
+      {rendered}
+    </RtcProvider>
   );
 }
 

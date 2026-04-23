@@ -2,6 +2,7 @@ import type { CSSProperties } from 'react';
 import { HIFI } from '../tokens';
 import { ScrollBody } from '../components/ScreenChrome';
 import { HIFI_APPS, parseSession } from '../sample-data';
+import { useRtc } from '../rtc/RtcContext';
 
 // Ported from docs/design/hifi-screens.jsx. Accepts an optional sessionId
 // (if the phone arrived with ?session= or ?join= on the URL) and renders
@@ -26,6 +27,7 @@ export function HandoffScreen({
   channelHint?: string;
   compact?: boolean;
 }) {
+  const rtc = useRtc();
   const effectiveSession = sessionId || DEFAULT_SESSION;
   const sess = parseSession(effectiveSession);
   const app = HIFI_APPS[sess.app] || HIFI_APPS.discord;
@@ -259,6 +261,26 @@ export function HandoffScreen({
                   }}
                 >
                   TOKEN · {joinToken.slice(0, 8)}…{joinToken.slice(-4)}
+                </div>
+              )}
+              {joinToken && (
+                <div
+                  style={{
+                    marginTop: 6,
+                    fontFamily: HIFI.fonts.mono,
+                    fontSize: 9,
+                    letterSpacing: 1.2,
+                    color:
+                      rtc.status === 'open'
+                        ? '#4ed29a'
+                        : rtc.status === 'error'
+                          ? '#ef6155'
+                          : HIFI.ink3,
+                    fontWeight: 700,
+                  }}
+                >
+                  DAEMON · {rtc.status.toUpperCase()}
+                  {rtc.detail ? ` · ${rtc.detail}` : ''}
                 </div>
               )}
             </div>

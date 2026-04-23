@@ -1,23 +1,23 @@
 // Driving state machine.
 //
-// IDLE → REC → THINK → AI → IDLE, ported from docs/design/hifi-driving.jsx.
-// REC captures mic audio via MediaRecorder; tap-stop uploads the blob to
-// xAI STT (the only transcription path — no browser-side fallback). THINK
-// covers both transcription and reply generation; AI is TTS playback.
-//
-// The daemon/WebRTC transport phase will replace `replyProvider` and the
-// STT call with DataChannel-backed variants; the hook contract stays the
-// same.
+// IDLE → REC → THINK → AI → IDLE. STT now streams through the local
+// daemon (phone mic PCM → WebRTC DataChannel → daemon → xAI STT WS →
+// transcript events → DataChannel → phone). Reply stays REST-xAI via
+// the local provider. TTS is still the browser-direct xAI WebSocket
+// path — under the unresolved auth blocker — and will move to the same
+// daemon-bridge shape in a follow-up slice.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  startXaiSTT,
-  MissingApiKeyError,
+  startDaemonSTT,
+  DaemonNotConnectedError,
   MicPermissionError,
   type STTHandle,
-} from './stt';
+} from './sttDaemon';
 import { speakWithXaiTTS, type TTSHandle, type TTSOptions } from './tts';
 import type { ReplyProvider, ReplyResult } from './reply';
+import type { ControlMessage } from '../rtc/client';
+import type { RtcStatus } from '../rtc/client';
 
 export type DrivingState = 'idle' | 'recording' | 'thinking' | 'ai';
 
@@ -38,19 +38,35 @@ export interface DrivingLoop {
   intensities: number[];
   error: string | null;
   hasApiKey: boolean;
+  daemonConnected: boolean;
   tap: () => void;
   silence: () => void;
 }
 
-export function useDrivingLoop(opts: {
+export interface DrivingLoopOptions {
   replyProvider: ReplyProvider;
   ttsOptions?: TTSOptions;
-  // Read fresh at call time so Settings edits take effect on the next turn
-  // without re-mounting the hook. The same xAI key is used for STT + TTS.
   getXaiApiKey: () => string;
   sttLanguage?: string;
-}): DrivingLoop {
-  const { replyProvider, ttsOptions, getXaiApiKey, sttLanguage } = opts;
+  // Daemon bridge — required for STT. If absent, tap-to-talk surfaces a
+  // `daemon_not_connected` error instead of attempting browser-direct
+  // xAI WS (which is blocked — see xaiSocket.ts).
+  rtc: {
+    status: RtcStatus;
+    hasClient: boolean;
+    sendControl: (msg: ControlMessage) => void;
+    sendBinary: (bytes: ArrayBuffer | Uint8Array) => void;
+    addControlListener: (fn: (msg: ControlMessage) => void) => () => void;
+  };
+}
+
+export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
+  const {
+    replyProvider,
+    ttsOptions,
+    getXaiApiKey,
+    rtc,
+  } = opts;
 
   const [state, setState] = useState<DrivingState>('idle');
   const [liveText, setLiveText] = useState('');
@@ -60,16 +76,16 @@ export function useDrivingLoop(opts: {
   const [error, setError] = useState<string | null>(null);
   const [hasApiKey, setHasApiKey] = useState<boolean>(() => !!getXaiApiKey().trim());
 
+  const daemonConnected = rtc.hasClient && rtc.status === 'open';
+
   const sttRef = useRef<STTHandle | null>(null);
   const ttsRef = useRef<TTSHandle | null>(null);
   const liveTextRef = useRef('');
   const replyProviderRef = useRef(replyProvider);
   const ttsOptionsRef = useRef(ttsOptions);
   const getXaiApiKeyRef = useRef(getXaiApiKey);
-  const sttLanguageRef = useRef(sttLanguage);
-  // Set if the user taps stop before the mic stream has finished opening —
-  // the pending acquisition discards its handle instead of publishing it.
   const cancelPendingRef = useRef(false);
+  const rtcRef = useRef(rtc);
 
   useEffect(() => {
     replyProviderRef.current = replyProvider;
@@ -84,16 +100,13 @@ export function useDrivingLoop(opts: {
   }, [getXaiApiKey]);
 
   useEffect(() => {
-    sttLanguageRef.current = sttLanguage;
-  }, [sttLanguage]);
+    rtcRef.current = rtc;
+  }, [rtc]);
 
   useEffect(() => {
     liveTextRef.current = liveText;
   }, [liveText]);
 
-  // Keep hasApiKey in sync with whatever the getter reports. Cheap to poll
-  // while idle; gives the UI a reactive blocker hint without needing to
-  // observe localStorage changes across tabs.
   useEffect(() => {
     if (state !== 'idle') return;
     const id = window.setInterval(() => {
@@ -103,8 +116,6 @@ export function useDrivingLoop(opts: {
     return () => window.clearInterval(id);
   }, [state]);
 
-  // Wave animation — synthetic pattern that visibly differs between
-  // recording (wide swings) and thinking (narrow swings).
   useEffect(() => {
     if (state === 'idle') {
       setIntensities([...IDLE_INTENSITIES]);
@@ -172,10 +183,12 @@ export function useDrivingLoop(opts: {
 
   const tap = useCallback(() => {
     if (state === 'idle') {
-      const apiKey = getXaiApiKeyRef.current().trim();
-      if (!apiKey) {
-        setError('missing_xai_api_key');
-        setHasApiKey(false);
+      if (!rtcRef.current.hasClient) {
+        setError('daemon_not_connected');
+        return;
+      }
+      if (rtcRef.current.status !== 'open') {
+        setError('daemon_not_connected');
         return;
       }
 
@@ -188,9 +201,20 @@ export function useDrivingLoop(opts: {
 
       void (async () => {
         try {
-          const handle = await startXaiSTT({
-            apiKey,
-            language: sttLanguageRef.current,
+          const handle = await startDaemonSTT({
+            sendControl: rtcRef.current.sendControl,
+            sendBinary: rtcRef.current.sendBinary,
+            addControlListener: rtcRef.current.addControlListener,
+            isConnected: () => rtcRef.current.status === 'open',
+            onPartial: (text, isFinal) => {
+              // xAI can emit empty `transcript.partial`s during a
+              // silence tail; treat those as non-events so they don't
+              // wipe the on-screen live transcript text. A truly final
+              // empty result will still surface through transcript.done.
+              if (!text && !isFinal) return;
+              setLiveText(text);
+            },
+            onError: (reason) => setError(reason),
           });
           if (cancelPendingRef.current) {
             cancelPendingRef.current = false;
@@ -200,8 +224,8 @@ export function useDrivingLoop(opts: {
           sttRef.current = handle;
         } catch (err) {
           const reason =
-            err instanceof MissingApiKeyError
-              ? 'missing_xai_api_key'
+            err instanceof DaemonNotConnectedError
+              ? 'daemon_not_connected'
               : err instanceof MicPermissionError
                 ? 'mic_denied'
                 : err instanceof Error
@@ -217,8 +241,6 @@ export function useDrivingLoop(opts: {
 
     if (state === 'recording') {
       if (!sttRef.current) {
-        // Still acquiring mic — bail out of the acquisition path and
-        // return to idle. The in-flight start() will discard its handle.
         cancelPendingRef.current = true;
         setState('idle');
         return;
@@ -253,8 +275,6 @@ export function useDrivingLoop(opts: {
     }
 
     if (state === 'ai') {
-      // Silence: kill playback, return to idle. Keep the AI turn record so
-      // the caption can still show what was said.
       ttsRef.current?.stop();
       ttsRef.current = null;
       setLastTurn((prev) =>
@@ -266,8 +286,6 @@ export function useDrivingLoop(opts: {
       setState('idle');
       return;
     }
-
-    // THINK state: no-op; user can't interrupt xAI mid-request in this slice.
   }, [state, replySource, runReplyAndSpeak]);
 
   const silence = useCallback(() => {
@@ -286,6 +304,7 @@ export function useDrivingLoop(opts: {
     intensities,
     error,
     hasApiKey,
+    daemonConnected,
     tap,
     silence,
   };
