@@ -1,35 +1,29 @@
-// xAI-backed text-to-speech.
+// Client-side xAI streaming TTS.
 //
-// David requires xAI for audio synthesis — SpeechSynthesis fallback is
-// gone. This module POSTs the reply text to xAI's TTS endpoint, receives
-// MP3 bytes, and plays them via an HTMLAudioElement. The state machine
-// consumes the same TTSHandle shape (done promise + stop()) so the
-// daemon/WebRTC transport phase can replace this path without touching
-// the driving loop.
-//
-// Endpoint (docs.x.ai/developers/model-capabilities/audio/text-to-speech):
-//   POST https://api.x.ai/v1/tts
-//   Authorization: Bearer <key>
-//   Content-Type: application/json
-//   Body: { text, language, voice_id?, output_format? }
-//   Response: raw audio bytes — default codec is MP3 @ 24 kHz / 128 kbps.
-//
-// Voice defaults to `eve` (xAI docs default). Settings.voice is currently
-// a browser-voice label ("Samantha (en-US)") left over from the prior
-// SpeechSynthesis path; surfacing xAI voice pick to the UI is out of
-// scope for this slice.
+// Protocol (query params, text.delta/text.done send, audio.delta/
+// audio.done receive, pcm codec decoding) is verified against the
+// official xAI streaming TTS docs. The handshake-auth side is blocked:
+// xAI does not document a browser-compatible auth mechanism for
+// `wss://api.x.ai/v1/tts` with a raw API key. Socket creation is routed
+// through `openXaiVoiceSocket` which throws
+// `BrowserAuthNotSupportedError` by default, so this file surfaces the
+// blocker in one clearly-contained seam. Flow below is kept intact.
 
-const XAI_TTS_ENDPOINT = 'https://api.x.ai/v1/tts';
+import {
+  openXaiVoiceSocket,
+  BrowserAuthNotSupportedError,
+} from './xaiSocket';
+
+export { BrowserAuthNotSupportedError };
+
+const XAI_TTS_WS = 'wss://api.x.ai/v1/tts';
 const DEFAULT_VOICE_ID = 'eve';
 const DEFAULT_LANGUAGE = 'en';
+const TTS_SAMPLE_RATE = 24000;
 
 export interface TTSHandle {
-  // Resolves when playback finishes, fails, or is stopped. On error the
-  // `error` property is populated before the promise resolves so callers
-  // can route the driving loop to the error surface.
   done: Promise<void>;
   stop(): void;
-  // Read after `done` resolves. Undefined on clean completion.
   readonly error?: string;
 }
 
@@ -49,41 +43,60 @@ export function speakWithXaiTTS(text: string, opts: TTSStartOptions): TTSHandle 
     resolveDone = resolve;
   });
 
-  const state: {
-    stopped: boolean;
-    error?: string;
-    audioEl: HTMLAudioElement | null;
-    objectUrl: string | null;
-  } = {
+  const state = {
     stopped: false,
-    audioEl: null,
-    objectUrl: null,
-  };
-
-  const cleanup = () => {
-    if (state.audioEl) {
-      try {
-        state.audioEl.pause();
-      } catch {
-        // already paused
-      }
-      state.audioEl.src = '';
-      state.audioEl = null;
-    }
-    if (state.objectUrl) {
-      try {
-        URL.revokeObjectURL(state.objectUrl);
-      } catch {
-        // ignore
-      }
-      state.objectUrl = null;
-    }
+    error: undefined as string | undefined,
+    finished: false,
+    ws: null as WebSocket | null,
+    audioCtx: null as AudioContext | null,
+    gain: null as GainNode | null,
+    sources: [] as AudioBufferSourceNode[],
+    nextStartTime: 0,
+    audioDoneSeen: false,
+    drainTimer: null as ReturnType<typeof setTimeout> | null,
+    rate: opts.rate && Number.isFinite(opts.rate) ? Math.max(0.5, Math.min(2, opts.rate)) : 1,
   };
 
   const finish = (err?: string) => {
+    if (state.finished) return;
+    state.finished = true;
     if (err && !state.error) state.error = err;
-    cleanup();
+    if (state.drainTimer) {
+      clearTimeout(state.drainTimer);
+      state.drainTimer = null;
+    }
+    try {
+      state.ws?.close();
+    } catch {
+      // ignore
+    }
+    for (const s of state.sources) {
+      try {
+        s.stop();
+      } catch {
+        // already stopped
+      }
+    }
+    state.sources = [];
+    try {
+      void state.audioCtx?.close();
+    } catch {
+      // ignore
+    }
     resolveDone();
+  };
+
+  const scheduleDrainFinish = () => {
+    if (state.finished || !state.audioCtx) {
+      finish();
+      return;
+    }
+    const now = state.audioCtx.currentTime;
+    const remainingMs = Math.max(0, (state.nextStartTime - now) * 1000);
+    if (state.drainTimer) clearTimeout(state.drainTimer);
+    state.drainTimer = setTimeout(() => {
+      finish();
+    }, remainingMs + 50);
   };
 
   const handle: TTSHandle = {
@@ -91,7 +104,6 @@ export function speakWithXaiTTS(text: string, opts: TTSStartOptions): TTSHandle 
     stop() {
       if (state.stopped) return;
       state.stopped = true;
-      controller.abort();
       finish();
     },
     get error() {
@@ -101,73 +113,158 @@ export function speakWithXaiTTS(text: string, opts: TTSStartOptions): TTSHandle 
 
   if (!opts.apiKey?.trim()) {
     state.error = 'missing_xai_api_key';
+    state.finished = true;
     resolveDone();
     return handle;
   }
   if (!text.trim()) {
+    state.finished = true;
     resolveDone();
     return handle;
   }
 
-  const controller = new AbortController();
+  const AudioCtor =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  if (!AudioCtor) {
+    state.error = 'audio_unsupported';
+    state.finished = true;
+    resolveDone();
+    return handle;
+  }
 
-  (async () => {
-    let res: Response;
+  const audioCtx = new AudioCtor({ sampleRate: TTS_SAMPLE_RATE });
+  state.audioCtx = audioCtx;
+  const gain = audioCtx.createGain();
+  gain.gain.value = 1;
+  gain.connect(audioCtx.destination);
+  state.gain = gain;
+
+  const qs = new URLSearchParams({
+    language: opts.language || DEFAULT_LANGUAGE,
+    voice: opts.voiceId || DEFAULT_VOICE_ID,
+    codec: 'pcm',
+    sample_rate: String(TTS_SAMPLE_RATE),
+  });
+  let ws: WebSocket;
+  try {
+    // Routed through the centralized helper. By default this throws
+    // BrowserAuthNotSupportedError — see xaiSocket.ts for the blocker.
+    ws = openXaiVoiceSocket({ endpoint: XAI_TTS_WS, query: qs, apiKey: opts.apiKey });
+  } catch (err) {
+    state.error =
+      err instanceof BrowserAuthNotSupportedError
+        ? 'xai_browser_auth_blocked'
+        : err instanceof Error
+          ? err.message
+          : 'xai_tts_open_failed';
+    state.finished = true;
+    resolveDone();
+    return handle;
+  }
+  state.ws = ws;
+
+  ws.addEventListener('open', () => {
+    if (state.stopped) return;
     try {
-      res = await fetch(XAI_TTS_ENDPOINT, {
-        method: 'POST',
-        signal: controller.signal,
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${opts.apiKey}`,
-        },
-        body: JSON.stringify({
-          text,
-          language: opts.language || DEFAULT_LANGUAGE,
-          voice_id: opts.voiceId || DEFAULT_VOICE_ID,
-        }),
-      });
+      ws.send(JSON.stringify({ type: 'text.delta', delta: text }));
+      ws.send(JSON.stringify({ type: 'text.done' }));
     } catch (err) {
-      if (controller.signal.aborted) return finish();
-      return finish(err instanceof Error ? err.message : 'xai_tts_fetch_failed');
+      finish(err instanceof Error ? err.message : 'xai_tts_send_failed');
     }
+  });
 
-    if (state.stopped) return finish();
-    if (!res.ok) {
-      const detail = (await res.text().catch(() => '')).slice(0, 200);
-      return finish(`xai_tts_http_${res.status}${detail ? ': ' + detail : ''}`);
-    }
-
-    let blob: Blob;
+  ws.addEventListener('message', (ev) => {
+    if (state.stopped || typeof ev.data !== 'string') return;
+    let msg: { type?: string; delta?: string; message?: string };
     try {
-      blob = await res.blob();
-    } catch (err) {
-      return finish(err instanceof Error ? err.message : 'xai_tts_blob_failed');
+      msg = JSON.parse(ev.data) as typeof msg;
+    } catch {
+      return;
     }
-    if (state.stopped) return finish();
-    if (!blob.size) return finish('xai_tts_empty_audio');
 
-    const mime = blob.type || 'audio/mpeg';
-    const typed = blob.type ? blob : new Blob([blob], { type: mime });
-    state.objectUrl = URL.createObjectURL(typed);
-
-    const audio = new Audio(state.objectUrl);
-    state.audioEl = audio;
-    if (opts.rate && Number.isFinite(opts.rate)) audio.playbackRate = opts.rate;
-
-    audio.addEventListener('ended', () => finish());
-    audio.addEventListener('error', () => {
-      const code = audio.error?.code;
-      finish(`audio_playback_failed${code ? '_' + code : ''}`);
-    });
-
-    try {
-      await audio.play();
-    } catch (err) {
-      if (state.stopped) return finish();
-      return finish(err instanceof Error ? `audio_play_rejected:${err.message}` : 'audio_play_rejected');
+    if (msg.type === 'audio.delta' && typeof msg.delta === 'string') {
+      schedulePcmChunk(state, msg.delta);
+      return;
     }
-  })();
+    if (msg.type === 'audio.done') {
+      state.audioDoneSeen = true;
+      scheduleDrainFinish();
+      return;
+    }
+    if (msg.type === 'error') {
+      finish(`xai_tts_error: ${msg.message || 'unknown'}`);
+    }
+  });
+
+  ws.addEventListener('close', (ev) => {
+    if (state.stopped || state.finished) return;
+    if (state.audioDoneSeen) {
+      // Already scheduled drain finish — just let it fire.
+      return;
+    }
+    finish(`xai_tts_ws_closed_${ev.code}`);
+  });
+
+  ws.addEventListener('error', () => {
+    if (state.stopped || state.finished) return;
+    finish('xai_tts_ws_error');
+  });
 
   return handle;
+}
+
+function schedulePcmChunk(
+  state: {
+    stopped: boolean;
+    audioCtx: AudioContext | null;
+    gain: GainNode | null;
+    sources: AudioBufferSourceNode[];
+    nextStartTime: number;
+    rate: number;
+  },
+  base64: string,
+): void {
+  if (state.stopped || !state.audioCtx || !state.gain) return;
+
+  let bytes: Uint8Array;
+  try {
+    bytes = decodeBase64(base64);
+  } catch {
+    return;
+  }
+  if (bytes.byteLength < 2) return;
+
+  const sampleCount = bytes.byteLength >> 1;
+  const samples = new Float32Array(sampleCount);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  for (let i = 0; i < sampleCount; i++) {
+    const s = view.getInt16(i * 2, true);
+    samples[i] = s < 0 ? s / 0x8000 : s / 0x7fff;
+  }
+
+  const buffer = state.audioCtx.createBuffer(1, sampleCount, state.audioCtx.sampleRate);
+  buffer.getChannelData(0).set(samples);
+
+  const source = state.audioCtx.createBufferSource();
+  source.buffer = buffer;
+  if (state.rate !== 1) source.playbackRate.value = state.rate;
+  source.connect(state.gain);
+
+  const now = state.audioCtx.currentTime;
+  const startAt = Math.max(now, state.nextStartTime);
+  state.nextStartTime = startAt + buffer.duration / (source.playbackRate.value || 1);
+
+  state.sources.push(source);
+  source.onended = () => {
+    state.sources = state.sources.filter((s) => s !== source);
+  };
+  source.start(startAt);
+}
+
+function decodeBase64(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }

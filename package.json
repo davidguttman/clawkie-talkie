@@ -4,11 +4,15 @@
   "private": true,
   "description": "Walkie-talkie voice surface for an OpenClaw session",
   "workspaces": [
-    "client"
+    "client",
+    "rendezvous",
+    "daemon"
   ],
   "scripts": {
     "dev": "npm run dev --workspace client",
     "build": "npm run build --workspace client",
-    "typecheck": "npm run typecheck --workspace client"
+    "typecheck": "npm run typecheck --workspace client",
+    "rendezvous": "npm run start --workspace=rendezvous --",
+    "daemon": "npm run start --workspace=daemon --"
   }
 }

@@ -3,6 +3,7 @@ import { HIFI, type AccentKey } from '../tokens';
 import { ButtonAura, LiveWave } from '../components/Phone';
 import { useDrivingLoop, type DrivingState } from '../voice/drivingLoop';
 import { createLocalReplyProvider, type ReplyResult } from '../voice/reply';
+import { useRtc } from '../rtc/RtcContext';
 import type { Settings } from '../storage';
 
 // Visual layout ported from docs/design/hifi-driving.jsx, now driven by a
@@ -55,13 +56,31 @@ export function DrivingScreen({
     [settings?.speed],
   );
 
+  const rtc = useRtc();
+
   const loop = useDrivingLoop({
     replyProvider,
     ttsOptions,
     getXaiApiKey: () => settingsRef.current?.apiKeys?.xai || '',
+    rtc: {
+      status: rtc.status,
+      hasClient: rtc.hasClient,
+      sendControl: rtc.sendControl,
+      sendBinary: rtc.sendBinary,
+      addControlListener: rtc.addControlListener,
+    },
   });
 
-  const { state, liveText, lastTurn, replySource, intensities, error, hasApiKey, tap } = loop;
+  const {
+    state,
+    liveText,
+    lastTurn,
+    replySource,
+    intensities,
+    error,
+    daemonConnected,
+    tap,
+  } = loop;
 
   // Ambient idle waveform drift — keeps the panel feeling alive when no
   // turn is in flight. The driving loop owns intensities for non-idle
@@ -266,8 +285,9 @@ export function DrivingScreen({
           baseFont={baseFont}
           replySource={replySource}
           error={error}
-          hasApiKey={hasApiKey}
-          onSettings={onSettings}
+          daemonConnected={daemonConnected}
+          hasRtcClient={rtc.hasClient}
+          rtcStatus={rtc.status}
           compact={compact}
         />
         <div
@@ -361,11 +381,11 @@ function pickCaption({
 }): CaptionData {
   if (state === 'recording') {
     return {
-      label: 'YOU · RECORDING',
+      label: 'YOU · LIVE',
       color: accentRec,
-      // xAI STT is chunked-on-stop, not streaming — no partial transcript
-      // to show here. The waveform + mic dot carry the activity signal.
-      text: 'Listening… tap again to finish and transcribe with xAI.',
+      // liveText is populated from xAI's streaming `transcript.partial`
+      // events — real words as they're spoken.
+      text: liveText || 'Listening…',
       live: true,
     };
   }
@@ -402,21 +422,29 @@ function Caption({
   baseFont,
   replySource,
   error,
-  hasApiKey,
-  onSettings,
-  compact = false,
+  daemonConnected,
+  hasRtcClient,
+  rtcStatus,
+  compact: _compact = false,
 }: {
   caption: CaptionData;
   baseFont: string;
   replySource: ReplyResult['source'] | null;
   error: string | null;
-  hasApiKey: boolean;
-  onSettings?: () => void;
+  daemonConnected: boolean;
+  hasRtcClient: boolean;
+  rtcStatus: string;
   compact?: boolean;
 }) {
-  const isMissingKey = !hasApiKey || error === 'missing_xai_api_key';
-  const errorMessage = isMissingKey
-    ? 'XAI API KEY REQUIRED FOR TRANSCRIPTION'
+  // Transcription runs via the daemon over WebRTC — the browser xAI key
+  // is NOT required for STT on this path. Only surface the daemon
+  // connection state, then whatever runtime error the loop reports.
+  const isDaemonBlocker =
+    !daemonConnected && (error === 'daemon_not_connected' || !hasRtcClient || rtcStatus !== 'open');
+  const errorMessage = isDaemonBlocker
+    ? hasRtcClient
+      ? `CONNECTING TO DAEMON · ${rtcStatus.toUpperCase()}`
+      : 'NO DAEMON — OPEN A DAEMON JOIN URL TO ENABLE TRANSCRIPTION'
     : error
       ? errorLabelFor(error)
       : null;
@@ -489,47 +517,13 @@ function Caption({
             letterSpacing: 1,
             color: '#ef6155',
             fontWeight: 600,
-            display: 'flex',
-            // Stack on compact so the OPEN SETTINGS CTA never has to fit on
-            // the same row as the long "XAI API KEY REQUIRED" label.
-            flexDirection: compact ? 'column' : 'row',
-            alignItems: compact ? 'stretch' : 'center',
-            gap: 8,
-            flexWrap: 'wrap',
             minWidth: 0,
             maxWidth: '100%',
+            overflowWrap: 'anywhere',
+            wordBreak: 'break-word',
           }}
         >
-          <span
-            style={{
-              minWidth: 0,
-              overflowWrap: 'anywhere',
-              wordBreak: 'break-word',
-            }}
-          >
-            {errorMessage}
-          </span>
-          {isMissingKey && onSettings && (
-            <button
-              onClick={onSettings}
-              style={{
-                background: 'transparent',
-                border: `1px solid #ef6155`,
-                color: '#ef6155',
-                borderRadius: 6,
-                padding: compact ? '6px 10px' : '3px 8px',
-                fontFamily: HIFI.fonts.mono,
-                fontSize: 10,
-                fontWeight: 700,
-                letterSpacing: 1.2,
-                cursor: 'pointer',
-                alignSelf: compact ? 'flex-start' : 'auto',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              OPEN SETTINGS
-            </button>
-          )}
+          {errorMessage}
         </div>
       )}
     </div>
@@ -537,6 +531,10 @@ function Caption({
 }
 
 function errorLabelFor(code: string): string {
+  if (code === 'daemon_not_connected') return 'DAEMON NOT CONNECTED';
+  if (code === 'missing_xai_api_key') return 'XAI API KEY MISSING IN SETTINGS · AFFECTS TTS / REPLY ONLY';
+  if (code === 'xai_browser_auth_blocked')
+    return 'XAI VOICE WEBSOCKET AUTH UNDOCUMENTED FOR BROWSERS · BLOCKED';
   if (code === 'mic_denied') return 'MIC PERMISSION DENIED';
   if (code === 'empty_transcript') return 'NO SPEECH DETECTED — TRY AGAIN';
   if (code === 'empty_audio') return 'NO AUDIO CAPTURED — TRY AGAIN';
