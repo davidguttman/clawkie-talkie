@@ -1,8 +1,9 @@
 // Browser WebRTC client via PeerJS. The daemon is the host — it
 // registered with the public PeerJS broker and published its assigned
 // peer ID in the join URL. The phone dials that peer ID to open a
-// reliable raw DataConnection carrying both JSON control frames and
-// binary PCM16 audio for STT streaming.
+// reliable raw DataConnection carrying JSON control frames, binary
+// PCM16 mic audio (phone → daemon), and binary PCM16 TTS audio
+// (daemon → phone).
 
 import { Peer, type DataConnection } from 'peerjs';
 
@@ -17,6 +18,7 @@ export interface RtcClientOptions {
   hostPeerId: string;
   onStatusChange?: (status: RtcStatus, detail?: string) => void;
   onControlMessage?: (msg: ControlMessage) => void;
+  onBinaryMessage?: (bytes: ArrayBuffer) => void;
 }
 
 export class RtcClient {
@@ -29,7 +31,6 @@ export class RtcClient {
     this.peer = new Peer({ debug: 1 });
 
     this.peer.on('open', () => {
-      // Broker assigned us an ID; now we can dial the host.
       this.dial();
     });
 
@@ -40,12 +41,11 @@ export class RtcClient {
     });
 
     this.peer.on('disconnected', () => {
-      // Broker dropped us. PeerJS can reconnect without a new ID.
       if (this.closed) return;
       try {
         this.peer.reconnect();
       } catch {
-        // ignore — `error` will fire
+        // ignore — 'error' will fire
       }
     });
   }
@@ -53,7 +53,6 @@ export class RtcClient {
   connect(): void {
     if (this.closed) return;
     this.setStatus('connecting');
-    // Actual connect happens in `peer.on('open')` once we have our own id.
   }
 
   sendControl(msg: ControlMessage): void {
@@ -68,12 +67,13 @@ export class RtcClient {
   sendBinary(bytes: ArrayBuffer | Uint8Array): void {
     if (!this.conn || !this.conn.open) return;
     try {
-      this.conn.send(bytes instanceof ArrayBuffer ? bytes : bytes.buffer.slice(
-        bytes.byteOffset,
-        bytes.byteOffset + bytes.byteLength,
-      ));
+      this.conn.send(
+        bytes instanceof ArrayBuffer
+          ? bytes
+          : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+      );
     } catch {
-      // ignore — peer may have just closed
+      // ignore
     }
   }
 
@@ -102,8 +102,6 @@ export class RtcClient {
     if (this.closed) return;
     const conn = this.peer.connect(this.opts.hostPeerId, {
       reliable: true,
-      // 'raw' — pass through strings + ArrayBuffers untouched; match
-      // the daemon's JSON-control + PCM16-binary wire format.
       serialization: 'raw',
     });
     this.conn = conn;
@@ -120,14 +118,18 @@ export class RtcClient {
     });
 
     conn.on('data', (data: unknown) => {
-      if (typeof data !== 'string') return;
-      let msg: ControlMessage;
-      try {
-        msg = JSON.parse(data) as ControlMessage;
-      } catch {
+      if (typeof data === 'string') {
+        let msg: ControlMessage;
+        try {
+          msg = JSON.parse(data) as ControlMessage;
+        } catch {
+          return;
+        }
+        this.opts.onControlMessage?.(msg);
         return;
       }
-      this.opts.onControlMessage?.(msg);
+      const ab = toArrayBuffer(data);
+      if (ab) this.opts.onBinaryMessage?.(ab);
     });
   }
 
@@ -136,4 +138,19 @@ export class RtcClient {
     this.status = status;
     this.opts.onStatusChange?.(status, detail);
   }
+}
+
+function toArrayBuffer(data: unknown): ArrayBuffer | null {
+  if (data instanceof ArrayBuffer) return data;
+  if (ArrayBuffer.isView(data)) {
+    const view = data as ArrayBufferView;
+    // Copy into a fresh ArrayBuffer so we're not handing out a view
+    // over a SharedArrayBuffer (peerjs may surface either).
+    const out = new ArrayBuffer(view.byteLength);
+    new Uint8Array(out).set(
+      new Uint8Array(view.buffer as ArrayBuffer, view.byteOffset, view.byteLength),
+    );
+    return out;
+  }
+  return null;
 }

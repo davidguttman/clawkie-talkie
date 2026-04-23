@@ -10,14 +10,15 @@
 // The daemon registers with the public PeerJS broker (peerjs.com),
 // receives an assigned peer ID, and prints a join URL the phone can
 // open. Once the phone calls `peer.connect(<id>)`, a DataConnection
-// opens and the daemon proxies `ct-control` traffic into xAI streaming
-// STT sessions.
+// opens and the daemon drives the full turn server-side: xAI STT on
+// inbound mic PCM, xAI chat on the final transcript, xAI TTS on the
+// reply, with resulting PCM16 audio streamed back to the phone.
 //
 // Signaling is PeerJS — no custom rendezvous service.
+// The browser never holds an xAI API key.
 
 import { parseArgs } from 'node:util';
 import { DaemonPeer } from './peer.js';
-import { XaiSttSession } from './sttSession.js';
 
 interface CliOptions {
   sessionId: string;
@@ -56,20 +57,8 @@ async function main(): Promise<void> {
   const cli = parseCli();
 
   const peer = new DaemonPeer({
-    openSttSession: (send) => {
-      console.error('[daemon] opening xAI STT session');
-      return new XaiSttSession(
-        { apiKey: cli.xaiApiKey, language: cli.sttLanguage },
-        {
-          onReady: () => send(JSON.stringify({ t: 'stt.ready' })),
-          onPartial: (text, isFinal) =>
-            send(JSON.stringify({ t: 'stt.partial', text, is_final: isFinal })),
-          onDone: (text) => send(JSON.stringify({ t: 'stt.done', text })),
-          onError: (message) => send(JSON.stringify({ t: 'stt.error', message })),
-          onClosed: () => send(JSON.stringify({ t: 'stt.closed' })),
-        },
-      );
-    },
+    apiKey: cli.xaiApiKey,
+    sttLanguage: cli.sttLanguage,
     onReady: (peerId) => {
       const joinQuery = new URLSearchParams({ screen: 'handoff', host: peerId });
       const joinUrl = `${cli.clientOrigin.replace(/\/$/, '')}/?${joinQuery.toString()}`;

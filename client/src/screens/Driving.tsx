@@ -1,17 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { HIFI, type AccentKey } from '../tokens';
 import { ButtonAura, LiveWave } from '../components/Phone';
 import { useDrivingLoop, type DrivingState } from '../voice/drivingLoop';
-import { createLocalReplyProvider, type ReplyResult } from '../voice/reply';
 import { useRtc } from '../rtc/RtcContext';
 import type { Settings } from '../storage';
 
-// Visual layout ported from docs/design/hifi-driving.jsx, now driven by a
-// real state machine: MediaRecorder capture plus xAI STT for the user
-// turn, xAI chat (or stub) for the reply, and SpeechSynthesis for audible
-// playback. The daemon/WebRTC transport will later replace the
-// ReplyProvider + STT transport behind this same UI without further
-// layout changes.
+// Visual layout ported from docs/design/hifi-driving.jsx, driven by the
+// daemon-owned state machine in ../voice/drivingLoop.ts. The phone only
+// captures mic PCM and plays daemon-streamed TTS audio; STT, reply
+// generation, and TTS all terminate on the daemon side.
 
 const WAVE_BARS = 28;
 
@@ -34,40 +31,17 @@ export function DrivingScreen({
 }) {
   const accentCfg = HIFI.accents[accent] || HIFI.accents.amber;
 
-  // Read the xAI key freshly at call time so the Settings screen edits
-  // take effect on the very next turn without a remount.
-  const settingsRef = useRef(settings);
-  useEffect(() => {
-    settingsRef.current = settings;
-  }, [settings]);
-
-  const replyProvider = useMemo(
-    () =>
-      createLocalReplyProvider({
-        getApiKey: () => settingsRef.current?.apiKeys?.xai || '',
-      }),
-    [],
-  );
-
-  const ttsOptions = useMemo(
-    () => ({
-      rate: settings?.speed ?? 1.05,
-    }),
-    [settings?.speed],
-  );
-
   const rtc = useRtc();
 
   const loop = useDrivingLoop({
-    replyProvider,
-    ttsOptions,
-    getXaiApiKey: () => settingsRef.current?.apiKeys?.xai || '',
+    ttsRate: settings?.speed ?? 1.05,
     rtc: {
       status: rtc.status,
       hasClient: rtc.hasClient,
       sendControl: rtc.sendControl,
       sendBinary: rtc.sendBinary,
       addControlListener: rtc.addControlListener,
+      addBinaryListener: rtc.addBinaryListener,
     },
   });
 
@@ -75,7 +49,6 @@ export function DrivingScreen({
     state,
     liveText,
     lastTurn,
-    replySource,
     intensities,
     error,
     daemonConnected,
@@ -283,7 +256,6 @@ export function DrivingScreen({
         <Caption
           caption={caption}
           baseFont={baseFont}
-          replySource={replySource}
           error={error}
           daemonConnected={daemonConnected}
           hasRtcClient={rtc.hasClient}
@@ -420,7 +392,6 @@ function pickCaption({
 function Caption({
   caption,
   baseFont,
-  replySource,
   error,
   daemonConnected,
   hasRtcClient,
@@ -429,16 +400,15 @@ function Caption({
 }: {
   caption: CaptionData;
   baseFont: string;
-  replySource: ReplyResult['source'] | null;
   error: string | null;
   daemonConnected: boolean;
   hasRtcClient: boolean;
   rtcStatus: string;
   compact?: boolean;
 }) {
-  // Transcription runs via the daemon over WebRTC — the browser xAI key
-  // is NOT required for STT on this path. Only surface the daemon
-  // connection state, then whatever runtime error the loop reports.
+  // Everything (STT, chat, TTS) terminates on the daemon. Surface the
+  // daemon connection state first, then whatever runtime error the loop
+  // reports.
   const isDaemonBlocker =
     !daemonConnected && (error === 'daemon_not_connected' || !hasRtcClient || rtcStatus !== 'open');
   const errorMessage = isDaemonBlocker
@@ -448,7 +418,6 @@ function Caption({
     : error
       ? errorLabelFor(error)
       : null;
-  const showStubBadge = caption.label === 'AI · READING ALOUD' && replySource === 'stub';
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: 96 }}>
       <div
@@ -477,11 +446,6 @@ function Caption({
           />
         )}
         <span style={{ flex: 1 }}>{caption.label}</span>
-        {showStubBadge && (
-          <span style={{ color: HIFI.ink3, fontSize: 9, letterSpacing: 1.2, fontWeight: 600 }}>
-            STUB
-          </span>
-        )}
       </div>
       <div
         style={{
@@ -532,24 +496,17 @@ function Caption({
 
 function errorLabelFor(code: string): string {
   if (code === 'daemon_not_connected') return 'DAEMON NOT CONNECTED';
-  if (code === 'missing_xai_api_key') return 'XAI API KEY MISSING IN SETTINGS · AFFECTS TTS / REPLY ONLY';
-  if (code === 'xai_browser_auth_blocked')
-    return 'XAI VOICE WEBSOCKET AUTH UNDOCUMENTED FOR BROWSERS · BLOCKED';
   if (code === 'mic_denied') return 'MIC PERMISSION DENIED';
   if (code === 'empty_transcript') return 'NO SPEECH DETECTED — TRY AGAIN';
   if (code === 'empty_audio') return 'NO AUDIO CAPTURED — TRY AGAIN';
   if (code === 'media_recorder_unsupported')
     return 'AUDIO CAPTURE UNSUPPORTED ON THIS BROWSER';
-  if (code.startsWith('xai_stt_http_'))
-    return `XAI STT · ${code.replace('xai_stt_http_', 'HTTP ')}`;
-  if (code.startsWith('xai_tts_http_'))
-    return `XAI TTS · ${code.replace('xai_tts_http_', 'HTTP ')}`;
-  if (code === 'xai_tts_fetch_failed') return 'XAI TTS · NETWORK FAILED';
-  if (code === 'xai_tts_blob_failed') return 'XAI TTS · AUDIO DECODE FAILED';
-  if (code === 'xai_tts_empty_audio') return 'XAI TTS · EMPTY AUDIO';
-  if (code.startsWith('audio_play_rejected'))
-    return 'XAI TTS · PLAYBACK BLOCKED BY BROWSER';
-  if (code.startsWith('audio_playback_failed')) return 'XAI TTS · PLAYBACK FAILED';
+  if (code === 'audio_unsupported') return 'AUDIO PLAYBACK UNSUPPORTED ON THIS BROWSER';
+  // Daemon-originated codes from xAI STT / chat / TTS upstreams.
+  if (code.startsWith('xai_http_')) return `DAEMON · XAI ${code.replace('xai_http_', 'HTTP ')}`;
+  if (code.startsWith('xai_stt_')) return `DAEMON · XAI STT · ${code.replace('xai_stt_', '')}`;
+  if (code.startsWith('xai_tts_')) return `DAEMON · XAI TTS · ${code.replace('xai_tts_', '')}`;
+  if (code === 'xai_empty_reply') return 'DAEMON · XAI EMPTY REPLY';
   return `VOICE ERROR · ${code}`;
 }
 

@@ -1,30 +1,35 @@
-// Driving state machine.
+// Driving state machine — thin adapter that drives the pure reducer
+// in `./drivingReducer.ts` from UI taps + daemon control messages, and
+// translates the reducer's side-effect intents into concrete DataChannel
+// traffic and audio-player control.
 //
-// IDLE → REC → THINK → AI → IDLE. STT now streams through the local
-// daemon (phone mic PCM → WebRTC DataChannel → daemon → xAI STT WS →
-// transcript events → DataChannel → phone). Reply stays REST-xAI via
-// the local provider. TTS is still the browser-direct xAI WebSocket
-// path — under the unresolved auth blocker — and will move to the same
-// daemon-bridge shape in a follow-up slice.
+// STT, reply generation, and TTS are all owned by the daemon now; the
+// browser only ships mic PCM in and plays PCM audio back out. No xAI
+// key on this side.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import {
   startDaemonSTT,
   DaemonNotConnectedError,
   MicPermissionError,
   type STTHandle,
 } from './sttDaemon';
-import { speakWithXaiTTS, type TTSHandle, type TTSOptions } from './tts';
-import type { ReplyProvider, ReplyResult } from './reply';
-import type { ControlMessage } from '../rtc/client';
-import type { RtcStatus } from '../rtc/client';
+import { playDaemonTts, type TTSHandle } from './tts';
+import {
+  initialContext,
+  reduce,
+  type DrivingContext,
+  type DrivingEvent,
+  type DrivingSideEffect,
+  type DrivingState,
+} from './drivingReducer';
+import type { ControlMessage, RtcStatus } from '../rtc/client';
 
-export type DrivingState = 'idle' | 'recording' | 'thinking' | 'ai';
+export type { DrivingState } from './drivingReducer';
 
 export interface Turn {
   who: 'user' | 'ai';
   text: string;
-  source?: ReplyResult['source'];
 }
 
 const WAVE_BARS = 28;
@@ -34,97 +39,128 @@ export interface DrivingLoop {
   state: DrivingState;
   liveText: string;
   lastTurn: Turn | null;
-  replySource: ReplyResult['source'] | null;
   intensities: number[];
   error: string | null;
-  hasApiKey: boolean;
   daemonConnected: boolean;
   tap: () => void;
   silence: () => void;
 }
 
 export interface DrivingLoopOptions {
-  replyProvider: ReplyProvider;
-  ttsOptions?: TTSOptions;
-  getXaiApiKey: () => string;
+  ttsRate?: number;
   sttLanguage?: string;
-  // Daemon bridge — required for STT. If absent, tap-to-talk surfaces a
-  // `daemon_not_connected` error instead of attempting browser-direct
-  // xAI WS (which is blocked — see xaiSocket.ts).
   rtc: {
     status: RtcStatus;
     hasClient: boolean;
     sendControl: (msg: ControlMessage) => void;
     sendBinary: (bytes: ArrayBuffer | Uint8Array) => void;
     addControlListener: (fn: (msg: ControlMessage) => void) => () => void;
+    addBinaryListener: (fn: (bytes: ArrayBuffer) => void) => () => void;
   };
 }
 
+function dispatchPair(
+  prev: { ctx: DrivingContext; side: DrivingSideEffect[] },
+  event: DrivingEvent,
+): { ctx: DrivingContext; side: DrivingSideEffect[] } {
+  const { next, side } = reduce(prev.ctx, event);
+  return { ctx: next, side };
+}
+
 export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
-  const {
-    replyProvider,
-    ttsOptions,
-    getXaiApiKey,
-    rtc,
-  } = opts;
+  const { rtc, ttsRate } = opts;
 
-  const [state, setState] = useState<DrivingState>('idle');
+  const [{ ctx, side }, dispatch] = useReducer(dispatchPair, {
+    ctx: initialContext,
+    side: [] as DrivingSideEffect[],
+  });
+
   const [liveText, setLiveText] = useState('');
-  const [lastTurn, setLastTurn] = useState<Turn | null>(null);
-  const [replySource, setReplySource] = useState<ReplyResult['source'] | null>(null);
   const [intensities, setIntensities] = useState<number[]>(() => [...IDLE_INTENSITIES]);
-  const [error, setError] = useState<string | null>(null);
-  const [hasApiKey, setHasApiKey] = useState<boolean>(() => !!getXaiApiKey().trim());
-
-  const daemonConnected = rtc.hasClient && rtc.status === 'open';
 
   const sttRef = useRef<STTHandle | null>(null);
   const ttsRef = useRef<TTSHandle | null>(null);
-  const liveTextRef = useRef('');
-  const replyProviderRef = useRef(replyProvider);
-  const ttsOptionsRef = useRef(ttsOptions);
-  const getXaiApiKeyRef = useRef(getXaiApiKey);
-  const cancelPendingRef = useRef(false);
   const rtcRef = useRef(rtc);
-
-  useEffect(() => {
-    replyProviderRef.current = replyProvider;
-  }, [replyProvider]);
-
-  useEffect(() => {
-    ttsOptionsRef.current = ttsOptions;
-  }, [ttsOptions]);
-
-  useEffect(() => {
-    getXaiApiKeyRef.current = getXaiApiKey;
-  }, [getXaiApiKey]);
-
   useEffect(() => {
     rtcRef.current = rtc;
   }, [rtc]);
 
-  useEffect(() => {
-    liveTextRef.current = liveText;
-  }, [liveText]);
+  const daemonConnected = rtc.hasClient && rtc.status === 'open';
 
+  // Listen for daemon control messages that drive state transitions.
   useEffect(() => {
-    if (state !== 'idle') return;
-    const id = window.setInterval(() => {
-      const next = !!getXaiApiKeyRef.current().trim();
-      setHasApiKey((prev) => (prev === next ? prev : next));
-    }, 500);
-    return () => window.clearInterval(id);
-  }, [state]);
+    const detach = rtc.addControlListener((msg) => {
+      if (msg.t === 'stt.partial') {
+        const text = typeof msg.text === 'string' ? msg.text : '';
+        const isFinal = !!(msg as { is_final?: boolean }).is_final;
+        // xAI can emit empty partials during silence tails; ignore those
+        // so they don't wipe the on-screen text mid-utterance.
+        if (!text && !isFinal) return;
+        setLiveText(text);
+        return;
+      }
+      if (msg.t === 'stt.done') {
+        const text = typeof msg.text === 'string' ? msg.text.trim() : '';
+        if (!text) {
+          dispatch({ type: 'stt.error', reason: 'empty_transcript' });
+          return;
+        }
+        setLiveText('');
+        dispatch({ type: 'stt.done', text });
+        return;
+      }
+      if (msg.t === 'stt.error') {
+        const reason = typeof msg.message === 'string' ? msg.message : 'stt_error';
+        dispatch({ type: 'stt.error', reason });
+        return;
+      }
+      if (msg.t === 'reply.done') {
+        const text = typeof msg.text === 'string' ? msg.text : '';
+        dispatch({ type: 'reply.done', text });
+        return;
+      }
+      if (msg.t === 'reply.error') {
+        const reason = typeof msg.message === 'string' ? msg.message : 'reply_error';
+        dispatch({ type: 'reply.error', reason });
+        return;
+      }
+      if (msg.t === 'tts.done') {
+        dispatch({ type: 'tts.done' });
+        return;
+      }
+      if (msg.t === 'tts.error') {
+        const reason = typeof msg.message === 'string' ? msg.message : 'tts_error';
+        dispatch({ type: 'tts.error', reason });
+        return;
+      }
+    });
+    return detach;
+  }, [rtc]);
 
+  // Perform side-effects produced by the most recent reducer step.
   useEffect(() => {
-    if (state === 'idle') {
+    if (!side.length) return;
+    for (const s of side) {
+      if (s.kind === 'startMic') runStartMic(rtcRef, sttRef, opts.sttLanguage, setLiveText, dispatch);
+      else if (s.kind === 'stopMic') runStopMic(sttRef);
+      else if (s.kind === 'cancelMic') runCancelMic(sttRef);
+      else if (s.kind === 'armTts') runArmTts(rtcRef, ttsRef, ttsRate, dispatch);
+      else if (s.kind === 'stopTts') runStopTts(ttsRef);
+      else if (s.kind === 'cancelReply') runCancelReply(rtcRef, ttsRef);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [side]);
+
+  // Waveform animation — behavior preserved from the previous hook.
+  useEffect(() => {
+    if (ctx.state === 'idle') {
       setIntensities([...IDLE_INTENSITIES]);
       return;
     }
     let raf = 0;
     const tick = (t: number) => {
-      const base = state === 'thinking' ? 0.22 : 0.55;
-      const variance = state === 'thinking' ? 0.07 : 0.4;
+      const base = ctx.state === 'thinking' ? 0.22 : 0.55;
+      const variance = ctx.state === 'thinking' ? 0.07 : 0.4;
       const next = Array.from({ length: WAVE_BARS }, (_, i) => {
         const v =
           base +
@@ -137,8 +173,9 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [state]);
+  }, [ctx.state]);
 
+  // Tear down active handles on unmount.
   useEffect(() => {
     return () => {
       sttRef.current?.cancel();
@@ -146,166 +183,136 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     };
   }, []);
 
-  const runReplyAndSpeak = useCallback(async (userText: string) => {
-    setReplySource(null);
-
-    let result: ReplyResult;
-    try {
-      result = await replyProviderRef.current(userText);
-    } catch (err) {
-      result = {
-        text: "Something went wrong reaching the reply provider. Let's try that again.",
-        source: 'stub',
-        reason: err instanceof Error ? err.message : 'reply_failed',
-      };
-    }
-
-    setReplySource(result.source);
-    setLiveText(result.text);
-    setState('ai');
-
-    const apiKey = getXaiApiKeyRef.current().trim();
-    const tts = speakWithXaiTTS(result.text, {
-      ...(ttsOptionsRef.current || {}),
-      apiKey,
-    });
-    ttsRef.current = tts;
-    try {
-      await tts.done;
-    } finally {
-      ttsRef.current = null;
-      if (tts.error) setError(tts.error);
-      setLastTurn({ who: 'ai', text: result.text, source: result.source });
-      setLiveText('');
-      setState('idle');
-    }
-  }, []);
-
   const tap = useCallback(() => {
-    if (state === 'idle') {
-      if (!rtcRef.current.hasClient) {
-        setError('daemon_not_connected');
+    if (ctx.state === 'idle') {
+      if (!rtcRef.current.hasClient || rtcRef.current.status !== 'open') {
+        // Surface a connection-error without spinning up a turn.
+        dispatch({ type: 'stt.error', reason: 'daemon_not_connected' });
         return;
       }
-      if (rtcRef.current.status !== 'open') {
-        setError('daemon_not_connected');
-        return;
-      }
-
-      setError(null);
-      setLiveText('');
-      setReplySource(null);
-      setLastTurn(null);
-      cancelPendingRef.current = false;
-      setState('recording');
-
-      void (async () => {
-        try {
-          const handle = await startDaemonSTT({
-            sendControl: rtcRef.current.sendControl,
-            sendBinary: rtcRef.current.sendBinary,
-            addControlListener: rtcRef.current.addControlListener,
-            isConnected: () => rtcRef.current.status === 'open',
-            onPartial: (text, isFinal) => {
-              // xAI can emit empty `transcript.partial`s during a
-              // silence tail; treat those as non-events so they don't
-              // wipe the on-screen live transcript text. A truly final
-              // empty result will still surface through transcript.done.
-              if (!text && !isFinal) return;
-              setLiveText(text);
-            },
-            onError: (reason) => setError(reason),
-          });
-          if (cancelPendingRef.current) {
-            cancelPendingRef.current = false;
-            handle.cancel();
-            return;
-          }
-          sttRef.current = handle;
-        } catch (err) {
-          const reason =
-            err instanceof DaemonNotConnectedError
-              ? 'daemon_not_connected'
-              : err instanceof MicPermissionError
-                ? 'mic_denied'
-                : err instanceof Error
-                  ? err.message
-                  : 'stt_start_failed';
-          setError(reason);
-          setState('idle');
-          sttRef.current = null;
-        }
-      })();
-      return;
     }
-
-    if (state === 'recording') {
-      if (!sttRef.current) {
-        cancelPendingRef.current = true;
-        setState('idle');
-        return;
-      }
-      const handle = sttRef.current;
-      sttRef.current = null;
-      setLiveText('Transcribing…');
-      setState('thinking');
-
-      void (async () => {
-        let transcript = '';
-        try {
-          transcript = await handle.stop();
-        } catch (err) {
-          const reason = err instanceof Error ? err.message : 'stt_failed';
-          setError(reason);
-          setLiveText('');
-          setState('idle');
-          return;
-        }
-        if (!transcript) {
-          setError('empty_transcript');
-          setLiveText('');
-          setState('idle');
-          return;
-        }
-        setLastTurn({ who: 'user', text: transcript });
-        setLiveText('');
-        await runReplyAndSpeak(transcript);
-      })();
-      return;
-    }
-
-    if (state === 'ai') {
-      ttsRef.current?.stop();
-      ttsRef.current = null;
-      setLastTurn((prev) =>
-        prev && prev.who === 'ai'
-          ? prev
-          : { who: 'ai', text: liveTextRef.current, source: replySource ?? undefined },
-      );
-      setLiveText('');
-      setState('idle');
-      return;
-    }
-  }, [state, replySource, runReplyAndSpeak]);
+    dispatch({ type: 'tap' });
+  }, [ctx.state]);
 
   const silence = useCallback(() => {
-    if (ttsRef.current) {
-      ttsRef.current.stop();
-      ttsRef.current = null;
-    }
-    if (state === 'ai') setState('idle');
-  }, [state]);
+    dispatch({ type: 'silence' });
+  }, []);
+
+  const lastTurn: Turn | null =
+    ctx.state === 'idle' && ctx.lastReplyText
+      ? { who: 'ai', text: ctx.lastReplyText }
+      : ctx.state === 'idle' && ctx.lastUserText
+        ? { who: 'user', text: ctx.lastUserText }
+        : null;
+
+  const liveCaption =
+    ctx.state === 'ai' ? ctx.liveReplyText : ctx.state === 'thinking' ? '' : liveText;
 
   return {
-    state,
-    liveText,
+    state: ctx.state,
+    liveText: liveCaption,
     lastTurn,
-    replySource,
     intensities,
-    error,
-    hasApiKey,
+    error: ctx.error,
     daemonConnected,
     tap,
     silence,
   };
+}
+
+// --- side-effect runners -----------------------------------------------------
+
+type Dispatch = (e: DrivingEvent) => void;
+
+function runStartMic(
+  rtcRef: React.MutableRefObject<DrivingLoopOptions['rtc']>,
+  sttRef: React.MutableRefObject<STTHandle | null>,
+  _lang: string | undefined,
+  setLiveText: (t: string) => void,
+  dispatch: Dispatch,
+): void {
+  void (async () => {
+    try {
+      const handle = await startDaemonSTT({
+        sendControl: rtcRef.current.sendControl,
+        sendBinary: rtcRef.current.sendBinary,
+        addControlListener: rtcRef.current.addControlListener,
+        isConnected: () => rtcRef.current.status === 'open',
+        onPartial: (text, isFinal) => {
+          if (!text && !isFinal) return;
+          setLiveText(text);
+        },
+        onError: (reason) => dispatch({ type: 'stt.error', reason }),
+      });
+      sttRef.current = handle;
+    } catch (err) {
+      const reason =
+        err instanceof DaemonNotConnectedError
+          ? 'daemon_not_connected'
+          : err instanceof MicPermissionError
+            ? 'mic_denied'
+            : err instanceof Error
+              ? err.message
+              : 'stt_start_failed';
+      dispatch({ type: 'stt.error', reason });
+    }
+  })();
+}
+
+function runStopMic(sttRef: React.MutableRefObject<STTHandle | null>): void {
+  const handle = sttRef.current;
+  sttRef.current = null;
+  if (!handle) return;
+  // stop() resolves with the final transcript. We don't need the value
+  // here — the daemon will emit `stt.done` on the control channel, and
+  // the listener above will turn that into an `stt.done` reducer event.
+  handle.stop().catch(() => {
+    // swallow — any real error will surface via stt.error on the wire
+  });
+}
+
+function runCancelMic(sttRef: React.MutableRefObject<STTHandle | null>): void {
+  const handle = sttRef.current;
+  sttRef.current = null;
+  handle?.cancel();
+}
+
+function runArmTts(
+  rtcRef: React.MutableRefObject<DrivingLoopOptions['rtc']>,
+  ttsRef: React.MutableRefObject<TTSHandle | null>,
+  rate: number | undefined,
+  dispatch: Dispatch,
+): void {
+  const tts = playDaemonTts({
+    addControlListener: rtcRef.current.addControlListener,
+    addBinaryListener: rtcRef.current.addBinaryListener,
+    sendControl: rtcRef.current.sendControl,
+    rate,
+  });
+  ttsRef.current = tts;
+  void tts.done.then(() => {
+    if (ttsRef.current !== tts) return;
+    ttsRef.current = null;
+    if (tts.error) dispatch({ type: 'tts.error', reason: tts.error });
+  });
+}
+
+function runStopTts(ttsRef: React.MutableRefObject<TTSHandle | null>): void {
+  const tts = ttsRef.current;
+  ttsRef.current = null;
+  tts?.stop();
+}
+
+function runCancelReply(
+  rtcRef: React.MutableRefObject<DrivingLoopOptions['rtc']>,
+  ttsRef: React.MutableRefObject<TTSHandle | null>,
+): void {
+  try {
+    rtcRef.current.sendControl({ t: 'reply.cancel' });
+  } catch {
+    // ignore
+  }
+  const tts = ttsRef.current;
+  ttsRef.current = null;
+  tts?.stop();
 }

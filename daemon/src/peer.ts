@@ -3,13 +3,23 @@
 // LobsterLink's convention: the printed join URL carries the assigned
 // peer ID and the phone client calls `peer.connect(<hostId>)`.
 //
+// Orchestration: this module owns the full turn. Phone streams mic PCM
+// in; daemon runs xAI STT, then xAI chat on the final transcript, then
+// xAI TTS on the reply text, and streams the resulting PCM16 audio
+// back to the phone on the same DataConnection. The browser never
+// holds an xAI key.
+//
 // PeerJS is authored browser-first but its runtime works in Node when
 // the expected WebRTC + WebSocket globals are present. We install those
-// before importing peerjs so its module-level capability checks see them.
+// before importing peerjs so its module-level capability checks see
+// them.
 
 import ws from 'ws';
 import wrtc from '@roamhq/wrtc';
-import type { XaiSttSession } from './sttSession.js';
+import { runChat, ChatError } from './chatSession.js';
+import { XaiTtsSession, TTS_SAMPLE_RATE } from './ttsSession.js';
+import { daemonToPhone, type PhoneToDaemon } from './protocol.js';
+import { XaiSttSession } from './sttSession.js';
 
 type Mutable = Record<string, unknown>;
 const g = globalThis as unknown as Mutable;
@@ -25,18 +35,13 @@ if (!g.RTCIceCandidate) g.RTCIceCandidate = w.RTCIceCandidate;
 
 const { Peer } = await import('peerjs');
 type PeerType = InstanceType<typeof Peer>;
-type DataConnection = Parameters<Parameters<PeerType['on']>[1] extends (conn: infer C) => unknown ? never : never>[0];
 
 export interface DaemonPeerOptions {
-  openSttSession: (send: (msg: string | Uint8Array) => void) => XaiSttSession;
+  apiKey: string;
+  sttLanguage?: string;
   onReady: (peerId: string) => void;
   onFatalError?: (err: Error) => void;
 }
-
-type ControlMessageIn =
-  | { t: 'stt.start' }
-  | { t: 'stt.audio.done' }
-  | { t: 'stt.cancel' };
 
 interface PeerDataConnection {
   peer: string;
@@ -52,7 +57,12 @@ interface PeerDataConnection {
 export class DaemonPeer {
   private readonly peer: PeerType;
   private active: PeerDataConnection | null = null;
-  private sttSession: XaiSttSession | null = null;
+  private stt: XaiSttSession | null = null;
+  private tts: XaiTtsSession | null = null;
+  private chatAbort: AbortController | null = null;
+  // Once we have a final transcript we pipeline chat → TTS. This flag
+  // lets `reply.cancel` short-circuit whichever stage is live.
+  private turnInFlight = false;
 
   constructor(private readonly opts: DaemonPeerOptions) {
     this.peer = new Peer({ debug: 1 });
@@ -64,9 +74,6 @@ export class DaemonPeer {
 
     this.peer.on('error', (err: Error) => {
       console.error(`[peer] error: ${err.message}`);
-      // PeerJS's `error` event fires for both recoverable + fatal; the
-      // fatal ones ('peer-unavailable', 'network', 'browser-incompatible')
-      // leave the peer unusable. Let the caller decide what to do.
       opts.onFatalError?.(err);
     });
 
@@ -85,8 +92,7 @@ export class DaemonPeer {
   }
 
   close(): void {
-    this.sttSession?.close();
-    this.sttSession = null;
+    this.resetTurn('daemon_shutdown');
     try {
       this.active?.close();
     } catch {
@@ -113,32 +119,13 @@ export class DaemonPeer {
     this.active = conn;
     console.error(`[peer] incoming connection from ${conn.peer} label=${conn.label}`);
 
-    const send = (msg: string | Uint8Array) => {
-      if (!this.active) return;
-      try {
-        if (typeof msg === 'string') {
-          this.active.send(msg);
-        } else {
-          // Copy into a fresh ArrayBuffer-backed view so peerjs sees a
-          // clean, exclusively-owned buffer (not a view over a larger
-          // or shared one).
-          const backing = new ArrayBuffer(msg.byteLength);
-          new Uint8Array(backing).set(msg);
-          this.active.send(backing);
-        }
-      } catch (err) {
-        console.error(`[peer] send failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    };
-
     conn.on('open', () => {
       console.error('[peer] data connection open');
     });
 
     conn.on('close', () => {
       console.error('[peer] data connection closed');
-      this.sttSession?.close();
-      this.sttSession = null;
+      this.resetTurn('peer_closed');
       this.active = null;
     });
 
@@ -148,33 +135,170 @@ export class DaemonPeer {
 
     conn.on('data', (data: unknown) => {
       if (typeof data === 'string') {
-        let msg: ControlMessageIn;
+        let msg: PhoneToDaemon;
         try {
-          msg = JSON.parse(data) as ControlMessageIn;
+          msg = JSON.parse(data) as PhoneToDaemon;
         } catch {
           return;
         }
-        if (msg.t === 'stt.start') {
-          this.sttSession?.close();
-          this.sttSession = this.opts.openSttSession(send);
-          return;
-        }
-        if (msg.t === 'stt.audio.done') {
-          this.sttSession?.signalAudioDone();
-          return;
-        }
-        if (msg.t === 'stt.cancel') {
-          this.sttSession?.close();
-          this.sttSession = null;
-          return;
-        }
+        this.handleControl(msg);
         return;
       }
-
-      if (!this.sttSession) return;
+      if (!this.stt) return;
       const bytes = toBytes(data);
-      if (bytes) this.sttSession.sendAudio(bytes);
+      if (bytes) this.stt.sendAudio(bytes);
     });
+  }
+
+  private handleControl(msg: PhoneToDaemon): void {
+    if (msg.t === 'stt.start') {
+      this.resetTurn('stt_restart');
+      this.turnInFlight = true;
+      this.openStt();
+      return;
+    }
+    if (msg.t === 'stt.audio.done') {
+      this.stt?.signalAudioDone();
+      return;
+    }
+    if (msg.t === 'stt.cancel') {
+      this.resetTurn('stt_cancelled');
+      return;
+    }
+    if (msg.t === 'reply.cancel') {
+      this.resetTurn('reply_cancelled');
+      return;
+    }
+  }
+
+  private openStt(): void {
+    console.error('[daemon] opening xAI STT session');
+    this.stt = new XaiSttSession(
+      { apiKey: this.opts.apiKey, language: this.opts.sttLanguage },
+      {
+        onReady: () => this.send(daemonToPhone.sttReady()),
+        onPartial: (text, isFinal) =>
+          this.send(daemonToPhone.sttPartial(text, isFinal)),
+        onDone: (text) => {
+          this.send(daemonToPhone.sttDone(text));
+          this.stt = null;
+          void this.runReplyTurn(text);
+        },
+        onError: (message) => {
+          this.send(daemonToPhone.sttError(message));
+          this.stt = null;
+          this.turnInFlight = false;
+        },
+        onClosed: () => this.send(daemonToPhone.sttClosed()),
+      },
+    );
+  }
+
+  private async runReplyTurn(transcript: string): Promise<void> {
+    if (!this.turnInFlight) return;
+    const trimmed = transcript.trim();
+    if (!trimmed) {
+      this.send(daemonToPhone.replyError('empty_transcript'));
+      this.turnInFlight = false;
+      return;
+    }
+    this.send(daemonToPhone.replyStart(trimmed));
+
+    this.chatAbort = new AbortController();
+    let replyText: string;
+    try {
+      const result = await runChat(trimmed, {
+        apiKey: this.opts.apiKey,
+        signal: this.chatAbort.signal,
+      });
+      replyText = result.text;
+    } catch (err) {
+      this.chatAbort = null;
+      if (!this.turnInFlight) return;
+      const code = err instanceof ChatError ? err.code : 'reply_failed';
+      this.send(daemonToPhone.replyError(code));
+      this.turnInFlight = false;
+      return;
+    }
+    this.chatAbort = null;
+    if (!this.turnInFlight) return;
+    this.send(daemonToPhone.replyDone(replyText));
+
+    this.openTts(replyText);
+  }
+
+  private openTts(text: string): void {
+    try {
+      this.tts = new XaiTtsSession(
+        { apiKey: this.opts.apiKey, text },
+        {
+          onOpen: () => {
+            this.send(daemonToPhone.ttsStart(TTS_SAMPLE_RATE));
+          },
+          onAudio: (pcm) => {
+            this.sendBinary(pcm);
+          },
+          onDone: () => {
+            this.send(daemonToPhone.ttsDone());
+            this.tts = null;
+            this.turnInFlight = false;
+          },
+          onError: (message) => {
+            this.send(daemonToPhone.ttsError(message));
+            this.tts = null;
+            this.turnInFlight = false;
+          },
+        },
+      );
+    } catch (err) {
+      this.send(
+        daemonToPhone.ttsError(err instanceof Error ? err.message : 'xai_tts_open_failed'),
+      );
+      this.turnInFlight = false;
+    }
+  }
+
+  private resetTurn(reason: string): void {
+    this.turnInFlight = false;
+    try {
+      this.stt?.close();
+    } catch {
+      // ignore
+    }
+    this.stt = null;
+    try {
+      this.tts?.cancel();
+    } catch {
+      // ignore
+    }
+    this.tts = null;
+    this.chatAbort?.abort();
+    this.chatAbort = null;
+    if (reason !== 'stt_restart') {
+      // Swallow — log only at debug verbosity so normal cancels aren't noisy.
+    }
+  }
+
+  private send(msg: unknown): void {
+    if (!this.active || !this.active.open) return;
+    try {
+      this.active.send(JSON.stringify(msg));
+    } catch (err) {
+      console.error(`[peer] send failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private sendBinary(pcm: Uint8Array): void {
+    if (!this.active || !this.active.open) return;
+    try {
+      // Copy into a fresh ArrayBuffer-backed view so peerjs sees an
+      // exclusively-owned buffer (not a view over a larger or shared one).
+      const backing = new ArrayBuffer(pcm.byteLength);
+      new Uint8Array(backing).set(pcm);
+      this.active.send(backing);
+    } catch (err) {
+      console.error(`[peer] binary send failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 }
 

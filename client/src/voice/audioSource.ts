@@ -193,7 +193,7 @@ export function isFixtureModeActive(): boolean {
 // mono 16 kHz fixture — no resampling, no format validation beyond
 // locating the data chunk. If the input doesn't start with RIFF we
 // treat it as raw PCM16LE already.
-function parseFixture(buffer: ArrayBuffer): ArrayBuffer {
+export function parseFixture(buffer: ArrayBuffer): ArrayBuffer {
   if (buffer.byteLength < 12) return buffer;
   const view = new DataView(buffer);
   const isRiff =
@@ -212,7 +212,7 @@ function parseFixture(buffer: ArrayBuffer): ArrayBuffer {
   throw new Error('no_data_chunk_in_wav');
 }
 
-function floatTo16BitPcm(input: Float32Array): ArrayBuffer {
+export function floatTo16BitPcm(input: Float32Array): ArrayBuffer {
   const buffer = new ArrayBuffer(input.length * 2);
   const view = new DataView(buffer);
   for (let i = 0; i < input.length; i++) {

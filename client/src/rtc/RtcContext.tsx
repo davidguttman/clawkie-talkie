@@ -19,8 +19,7 @@ export interface RtcContextValue {
   sendControl: (msg: ControlMessage) => void;
   sendBinary: (bytes: ArrayBuffer | Uint8Array) => void;
   addControlListener: (fn: (msg: ControlMessage) => void) => () => void;
-  // Null when no host peer ID was provided on the URL — the voice loop
-  // uses this to surface a "daemon not connected" blocker.
+  addBinaryListener: (fn: (bytes: ArrayBuffer) => void) => () => void;
   hasClient: boolean;
 }
 
@@ -32,6 +31,7 @@ const Ctx = createContext<RtcContextValue>({
   sendControl: noop,
   sendBinary: noop,
   addControlListener: () => noop,
+  addBinaryListener: () => noop,
   hasClient: false,
 });
 
@@ -45,7 +45,8 @@ export function RtcProvider({
   const [status, setStatus] = useState<RtcStatus>('idle');
   const [detail, setDetail] = useState<string | undefined>(undefined);
   const clientRef = useRef<RtcClient | null>(null);
-  const listenersRef = useRef<Set<(msg: ControlMessage) => void>>(new Set());
+  const controlListenersRef = useRef<Set<(msg: ControlMessage) => void>>(new Set());
+  const binaryListenersRef = useRef<Set<(bytes: ArrayBuffer) => void>>(new Set());
 
   useEffect(() => {
     if (!hostPeerId) return;
@@ -57,7 +58,10 @@ export function RtcProvider({
         setDetail(d);
       },
       onControlMessage: (msg) => {
-        for (const fn of listenersRef.current) fn(msg);
+        for (const fn of controlListenersRef.current) fn(msg);
+      },
+      onBinaryMessage: (bytes) => {
+        for (const fn of binaryListenersRef.current) fn(bytes);
       },
     });
     clientRef.current = client;
@@ -78,9 +82,16 @@ export function RtcProvider({
   }, []);
 
   const addControlListener = useCallback((fn: (msg: ControlMessage) => void) => {
-    listenersRef.current.add(fn);
+    controlListenersRef.current.add(fn);
     return () => {
-      listenersRef.current.delete(fn);
+      controlListenersRef.current.delete(fn);
+    };
+  }, []);
+
+  const addBinaryListener = useCallback((fn: (bytes: ArrayBuffer) => void) => {
+    binaryListenersRef.current.add(fn);
+    return () => {
+      binaryListenersRef.current.delete(fn);
     };
   }, []);
 
@@ -91,9 +102,10 @@ export function RtcProvider({
       sendControl,
       sendBinary,
       addControlListener,
+      addBinaryListener,
       hasClient: !!hostPeerId,
     }),
-    [status, detail, sendControl, sendBinary, addControlListener, hostPeerId],
+    [status, detail, sendControl, sendBinary, addControlListener, addBinaryListener, hostPeerId],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

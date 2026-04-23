@@ -1,25 +1,20 @@
-// Client-side xAI streaming TTS.
+// Daemon-backed TTS playback.
 //
-// Protocol (query params, text.delta/text.done send, audio.delta/
-// audio.done receive, pcm codec decoding) is verified against the
-// official xAI streaming TTS docs. The handshake-auth side is blocked:
-// xAI does not document a browser-compatible auth mechanism for
-// `wss://api.x.ai/v1/tts` with a raw API key. Socket creation is routed
-// through `openXaiVoiceSocket` which throws
-// `BrowserAuthNotSupportedError` by default, so this file surfaces the
-// blocker in one clearly-contained seam. Flow below is kept intact.
+// The daemon terminates xAI TTS server-side and streams PCM16LE mono
+// audio back over the PeerJS DataConnection as binary frames, framed by:
+//
+//   daemon → phone:
+//     { t: "tts.start", sample_rate: number }
+//     <binary>  // PCM16LE samples
+//     ...
+//     { t: "tts.done" | "tts.error", message? }
+//
+// The phone never touches an xAI API key or WebSocket. This file wires
+// incoming binary frames into the Web Audio graph at the sample rate
+// the daemon announces; playback paces itself via `nextStartTime` so
+// small fragments are stitched into a continuous stream.
 
-import {
-  openXaiVoiceSocket,
-  BrowserAuthNotSupportedError,
-} from './xaiSocket';
-
-export { BrowserAuthNotSupportedError };
-
-const XAI_TTS_WS = 'wss://api.x.ai/v1/tts';
-const DEFAULT_VOICE_ID = 'eve';
-const DEFAULT_LANGUAGE = 'en';
-const TTS_SAMPLE_RATE = 24000;
+const DEFAULT_SAMPLE_RATE = 24000;
 
 export interface TTSHandle {
   done: Promise<void>;
@@ -27,32 +22,34 @@ export interface TTSHandle {
   readonly error?: string;
 }
 
-export interface TTSOptions {
+export interface TTSPlayerOptions {
+  addControlListener: (fn: (msg: { t: string; [k: string]: unknown }) => void) => () => void;
+  addBinaryListener: (fn: (bytes: ArrayBuffer) => void) => () => void;
+  sendControl: (msg: { t: string; [k: string]: unknown }) => void;
   rate?: number;
-  voiceId?: string;
-  language?: string;
 }
 
-export interface TTSStartOptions extends TTSOptions {
-  apiKey: string;
-}
-
-export function speakWithXaiTTS(text: string, opts: TTSStartOptions): TTSHandle {
+// Start listening for a single TTS turn from the daemon. Resolves when
+// the daemon emits `tts.done` (or on `tts.error`, settling with an
+// error code on the handle). Caller should invoke this after it sees
+// `reply.done` so the player is armed before the daemon emits
+// `tts.start`.
+export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
   let resolveDone!: () => void;
   const done = new Promise<void>((resolve) => {
     resolveDone = resolve;
   });
 
   const state = {
+    finished: false,
     stopped: false,
     error: undefined as string | undefined,
-    finished: false,
-    ws: null as WebSocket | null,
     audioCtx: null as AudioContext | null,
     gain: null as GainNode | null,
     sources: [] as AudioBufferSourceNode[],
     nextStartTime: 0,
-    audioDoneSeen: false,
+    sampleRate: DEFAULT_SAMPLE_RATE,
+    started: false,
     drainTimer: null as ReturnType<typeof setTimeout> | null,
     rate: opts.rate && Number.isFinite(opts.rate) ? Math.max(0.5, Math.min(2, opts.rate)) : 1,
   };
@@ -64,11 +61,6 @@ export function speakWithXaiTTS(text: string, opts: TTSStartOptions): TTSHandle 
     if (state.drainTimer) {
       clearTimeout(state.drainTimer);
       state.drainTimer = null;
-    }
-    try {
-      state.ws?.close();
-    } catch {
-      // ignore
     }
     for (const s of state.sources) {
       try {
@@ -83,6 +75,8 @@ export function speakWithXaiTTS(text: string, opts: TTSStartOptions): TTSHandle 
     } catch {
       // ignore
     }
+    detachControl();
+    detachBinary();
     resolveDone();
   };
 
@@ -94,124 +88,68 @@ export function speakWithXaiTTS(text: string, opts: TTSStartOptions): TTSHandle 
     const now = state.audioCtx.currentTime;
     const remainingMs = Math.max(0, (state.nextStartTime - now) * 1000);
     if (state.drainTimer) clearTimeout(state.drainTimer);
-    state.drainTimer = setTimeout(() => {
-      finish();
-    }, remainingMs + 50);
+    state.drainTimer = setTimeout(() => finish(), remainingMs + 50);
   };
 
-  const handle: TTSHandle = {
+  const initAudio = (sampleRate: number) => {
+    if (state.audioCtx) return;
+    state.sampleRate = sampleRate;
+    const AudioCtor =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtor) {
+      finish('audio_unsupported');
+      return;
+    }
+    const audioCtx = new AudioCtor({ sampleRate });
+    const gain = audioCtx.createGain();
+    gain.gain.value = 1;
+    gain.connect(audioCtx.destination);
+    state.audioCtx = audioCtx;
+    state.gain = gain;
+  };
+
+  const detachControl = opts.addControlListener((msg) => {
+    if (state.finished || state.stopped) return;
+    if (msg.t === 'tts.start') {
+      state.started = true;
+      const sr = typeof msg.sample_rate === 'number' ? msg.sample_rate : DEFAULT_SAMPLE_RATE;
+      initAudio(sr);
+      return;
+    }
+    if (msg.t === 'tts.done') {
+      scheduleDrainFinish();
+      return;
+    }
+    if (msg.t === 'tts.error') {
+      const message = typeof msg.message === 'string' ? msg.message : 'xai_tts_error';
+      finish(message);
+    }
+  });
+
+  const detachBinary = opts.addBinaryListener((bytes) => {
+    if (state.finished || state.stopped) return;
+    if (!state.audioCtx) initAudio(state.sampleRate);
+    if (!state.audioCtx || !state.gain) return;
+    schedulePcmChunk(state, bytes);
+  });
+
+  return {
     done,
     stop() {
       if (state.stopped) return;
       state.stopped = true;
+      try {
+        opts.sendControl({ t: 'reply.cancel' });
+      } catch {
+        // ignore — connection may already be gone
+      }
       finish();
     },
     get error() {
       return state.error;
     },
   };
-
-  if (!opts.apiKey?.trim()) {
-    state.error = 'missing_xai_api_key';
-    state.finished = true;
-    resolveDone();
-    return handle;
-  }
-  if (!text.trim()) {
-    state.finished = true;
-    resolveDone();
-    return handle;
-  }
-
-  const AudioCtor =
-    window.AudioContext ||
-    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-  if (!AudioCtor) {
-    state.error = 'audio_unsupported';
-    state.finished = true;
-    resolveDone();
-    return handle;
-  }
-
-  const audioCtx = new AudioCtor({ sampleRate: TTS_SAMPLE_RATE });
-  state.audioCtx = audioCtx;
-  const gain = audioCtx.createGain();
-  gain.gain.value = 1;
-  gain.connect(audioCtx.destination);
-  state.gain = gain;
-
-  const qs = new URLSearchParams({
-    language: opts.language || DEFAULT_LANGUAGE,
-    voice: opts.voiceId || DEFAULT_VOICE_ID,
-    codec: 'pcm',
-    sample_rate: String(TTS_SAMPLE_RATE),
-  });
-  let ws: WebSocket;
-  try {
-    // Routed through the centralized helper. By default this throws
-    // BrowserAuthNotSupportedError — see xaiSocket.ts for the blocker.
-    ws = openXaiVoiceSocket({ endpoint: XAI_TTS_WS, query: qs, apiKey: opts.apiKey });
-  } catch (err) {
-    state.error =
-      err instanceof BrowserAuthNotSupportedError
-        ? 'xai_browser_auth_blocked'
-        : err instanceof Error
-          ? err.message
-          : 'xai_tts_open_failed';
-    state.finished = true;
-    resolveDone();
-    return handle;
-  }
-  state.ws = ws;
-
-  ws.addEventListener('open', () => {
-    if (state.stopped) return;
-    try {
-      ws.send(JSON.stringify({ type: 'text.delta', delta: text }));
-      ws.send(JSON.stringify({ type: 'text.done' }));
-    } catch (err) {
-      finish(err instanceof Error ? err.message : 'xai_tts_send_failed');
-    }
-  });
-
-  ws.addEventListener('message', (ev) => {
-    if (state.stopped || typeof ev.data !== 'string') return;
-    let msg: { type?: string; delta?: string; message?: string };
-    try {
-      msg = JSON.parse(ev.data) as typeof msg;
-    } catch {
-      return;
-    }
-
-    if (msg.type === 'audio.delta' && typeof msg.delta === 'string') {
-      schedulePcmChunk(state, msg.delta);
-      return;
-    }
-    if (msg.type === 'audio.done') {
-      state.audioDoneSeen = true;
-      scheduleDrainFinish();
-      return;
-    }
-    if (msg.type === 'error') {
-      finish(`xai_tts_error: ${msg.message || 'unknown'}`);
-    }
-  });
-
-  ws.addEventListener('close', (ev) => {
-    if (state.stopped || state.finished) return;
-    if (state.audioDoneSeen) {
-      // Already scheduled drain finish — just let it fire.
-      return;
-    }
-    finish(`xai_tts_ws_closed_${ev.code}`);
-  });
-
-  ws.addEventListener('error', () => {
-    if (state.stopped || state.finished) return;
-    finish('xai_tts_ws_error');
-  });
-
-  return handle;
 }
 
 function schedulePcmChunk(
@@ -223,21 +161,14 @@ function schedulePcmChunk(
     nextStartTime: number;
     rate: number;
   },
-  base64: string,
+  bytes: ArrayBuffer,
 ): void {
   if (state.stopped || !state.audioCtx || !state.gain) return;
-
-  let bytes: Uint8Array;
-  try {
-    bytes = decodeBase64(base64);
-  } catch {
-    return;
-  }
   if (bytes.byteLength < 2) return;
 
   const sampleCount = bytes.byteLength >> 1;
   const samples = new Float32Array(sampleCount);
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const view = new DataView(bytes);
   for (let i = 0; i < sampleCount; i++) {
     const s = view.getInt16(i * 2, true);
     samples[i] = s < 0 ? s / 0x8000 : s / 0x7fff;
@@ -260,11 +191,4 @@ function schedulePcmChunk(
     state.sources = state.sources.filter((s) => s !== source);
   };
   source.start(startAt);
-}
-
-function decodeBase64(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
 }
