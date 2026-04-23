@@ -12,6 +12,9 @@ import { loadSettings, saveSettings, type Settings } from './storage';
 
 type ScreenId = 'handoff' | 'driving' | 'history' | 'transcript' | 'settings' | 'error';
 
+// Keep in sync with daemon/src/index.ts :: DAEMON_PEER_ID.
+const DEFAULT_DAEMON_PEER_ID = 'ct-daemon';
+
 const SCREEN_IDS: ScreenId[] = [
   'handoff',
   'driving',
@@ -44,10 +47,10 @@ function parseInitial(): {
   const errorKind: ErrorKind = (ERROR_KINDS as string[]).includes(rawKind || '')
     ? (rawKind as ErrorKind)
     : 'bad_session';
-  // LobsterLink convention: the daemon registered with the PeerJS
-  // broker and published its assigned peer ID as `host=<id>`. The phone
-  // dials that peer directly; no separate rendezvous URL.
-  const hostPeerId = params.get('host') || undefined;
+  // Self-hosted signaling: one daemon per deployment registers under a
+  // deterministic peer ID (`ct-daemon`), so the base URL alone is
+  // enough to dial in. `?host=<id>` still overrides for ad-hoc setups.
+  const hostPeerId = params.get('host') || DEFAULT_DAEMON_PEER_ID;
   const sessionId = params.get('session') || undefined;
   return { screen, errorKind, hostPeerId, sessionId };
 }

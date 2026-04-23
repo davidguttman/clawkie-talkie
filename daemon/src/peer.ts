@@ -1,7 +1,7 @@
-// PeerJS host-side peer for Clawkie-Talkie. Registers with the public
-// PeerJS broker (peerjs.com) and waits for incoming DataConnections.
-// LobsterLink's convention: the printed join URL carries the assigned
-// peer ID and the phone client calls `peer.connect(<hostId>)`.
+// PeerJS host-side peer for Clawkie-Talkie. Registers with the
+// self-hosted signaling server running in the same daemon process (see
+// signaling.ts) under a deterministic peer ID so the phone can dial
+// into the app from its base URL without any printed join token.
 //
 // Orchestration: this module owns the full turn. Phone streams mic PCM
 // in; daemon runs xAI STT, then xAI chat on the final transcript, then
@@ -39,6 +39,10 @@ type PeerType = InstanceType<typeof Peer>;
 export interface DaemonPeerOptions {
   apiKey: string;
   sttLanguage?: string;
+  peerId: string;
+  signalingHost: string;
+  signalingPort: number;
+  signalingPath: string;
   onReady: (peerId: string) => void;
   onFatalError?: (err: Error) => void;
 }
@@ -65,7 +69,13 @@ export class DaemonPeer {
   private turnInFlight = false;
 
   constructor(private readonly opts: DaemonPeerOptions) {
-    this.peer = new Peer({ debug: 1 });
+    this.peer = new Peer(opts.peerId, {
+      host: opts.signalingHost,
+      port: opts.signalingPort,
+      path: opts.signalingPath,
+      secure: false,
+      debug: 1,
+    });
 
     this.peer.on('open', (id: string) => {
       console.error(`[peer] registered with broker as ${id}`);

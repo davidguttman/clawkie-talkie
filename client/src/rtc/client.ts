@@ -1,11 +1,32 @@
-// Browser WebRTC client via PeerJS. The daemon is the host — it
-// registered with the public PeerJS broker and published its assigned
-// peer ID in the join URL. The phone dials that peer ID to open a
-// reliable raw DataConnection carrying JSON control frames, binary
+// Browser WebRTC client via PeerJS. The daemon is the host — it runs a
+// self-hosted PeerJS signaling server (see daemon/src/signaling.ts) and
+// registers under a deterministic peer ID (`ct-daemon`). The phone
+// reaches that server via same-origin `/peerjs` — in dev the Vite proxy
+// forwards it to the daemon, in deployment (e.g. jump.sh) the hosting
+// proxy does. This removes the hard dependency on the public PeerJS
+// broker (peerjs.com), which is not reachable from jump.sh containers.
+// The DataConnection itself still carries JSON control frames, binary
 // PCM16 mic audio (phone → daemon), and binary PCM16 TTS audio
 // (daemon → phone).
 
-import { Peer, type DataConnection } from 'peerjs';
+import { Peer, type DataConnection, type PeerOptions } from 'peerjs';
+
+const SIGNALING_PATH = '/peerjs';
+
+function sameOriginPeerOptions(): PeerOptions {
+  const loc = window.location;
+  const secure = loc.protocol === 'https:';
+  // Prefer the explicit port from location; fall back to the standard
+  // 443/80 when the browser omits it (typical on jump.sh / prod).
+  const port = loc.port ? Number(loc.port) : secure ? 443 : 80;
+  return {
+    host: loc.hostname,
+    port,
+    path: SIGNALING_PATH,
+    secure,
+    debug: 1,
+  };
+}
 
 export type RtcStatus = 'idle' | 'connecting' | 'open' | 'error' | 'closed';
 
@@ -28,7 +49,7 @@ export class RtcClient {
   private closed = false;
 
   constructor(private readonly opts: RtcClientOptions) {
-    this.peer = new Peer({ debug: 1 });
+    this.peer = new Peer(sameOriginPeerOptions());
 
     this.peer.on('open', () => {
       this.dial();
