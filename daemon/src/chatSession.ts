@@ -1,9 +1,12 @@
-// OpenClaw-integrated chat completions — replaces direct xAI calls.
+// OpenClaw-integrated chat completions — uses OpenClaw CLI for all
+// LLM interaction and Discord delivery.
 //
-// This module sends user turns into the Discord/OpenClaw thread and delivers
-// assistant replies back into the same canonical thread, following the
-// patterns from scripts/daily-focus/scripts/receiving-code-review.ts.
-// The daemon *never* calls xAI directly; it uses `openclaw agent` CLI.
+// Patterns from wake-thread.sh:
+//   Debug notifications:  openclaw message send --channel discord --target "channel:ID" --message "..."
+//   Full turn:          openclaw agent --session-id ... --message ... --deliver --reply-channel discord --reply-to "channel:ID"
+//
+// The daemon never calls xAI directly. Debug activity notifications are
+// sent before/after key events (STT start/stop, TTS start/stop, etc.)
 
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -11,70 +14,69 @@ import type { ChatOptions, ChatResult } from './types.js';
 
 const execAsync = promisify(exec);
 
-// Helper to run OpenClaw agent commands
-type OpenClawOptions = {
-  apiKey: string;
-  signal?: AbortSignal;
-  sessionId: string;
-  threadId?: string;
-  deliver?: boolean;
-};
-
-async function runOpenClawAgent({
-  apiKey,
-  signal,
-  sessionId,
-  threadId,
-  deliver = true,
-  message,
-  toolAllow = [],
-  thinking = 'default',
-  timeoutSeconds = 0,
-}: OpenClawOptions & { message: string; toolAllow?: string[]; thinking?: string; timeoutSeconds?: number }): Promise<ChatResult> {
-  const args = ['agent', '--message', message];
-
-  if (sessionId) {
-    args.push('--session-id', sessionId);
-  }
-  if (threadId) {
-    args.push('--thread-id', threadId);
-  }
-  if (deliver) {
-    args.push('--deliver');
-  }
-  if (thinking && thinking !== 'default') {
-    args.push('--thinking', thinking);
-  }
-  if (timeoutSeconds > 0) {
-    args.push('--timeout-seconds', String(timeoutSeconds));
-  }
-  if (toolAllow.length > 0) {
-    args.push('--tools-allow', toolAllow.join(','));
-  }
-
-  // NOTE: the OpenClaw agent CLI reads the xAI key from environment variables
-  // (or configuration). We pass it via env here so the CLI can use it.
-  const env = { XAI_API_KEY: apiKey, ...process.env };
-
-  try {
-    const { stdout, stderr } = await execAsync('openclaw', args, { env, signal });
-    // The CLI delivers its reply into the canonical thread; we may optionally
-    // parse stdout for metadata. For now, capture it as the source text.
-    return { text: stdout.trim(), source: 'xai_via_openclaw' };
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'openclaw_failed';
-    throw new ChatError(message, 'openclaw_failed');
-  }
-}
-
 const SYSTEM_PROMPT =
   'You are Clawkie, a walky-talky voice assistant. Reply in one or two ' +
   'short spoken sentences — no markdown, no lists, no code blocks.';
 
+// Helper: send a debug/activity notification to the Discord thread
+async function sendDebugNotification(
+  apiKey: string,
+  threadId: string | undefined,
+  message: string,
+): Promise<void> {
+  if (!threadId) return; // no thread to notify
+  try {
+    const args = [
+      'message', 'send',
+      '--channel', 'discord',
+      '--target', `channel:${threadId}`,
+      '--message', `> _clawkie ${message}`,
+    ];
+    const env = { XAI_API_KEY: apiKey, ...process.env };
+    await execAsync(`openclaw ${args.map(a => JSON.stringify(a)).join(' ')}`, { env });
+  } catch {
+    // debug notifications are best-effort — don't fail the turn
+  }
+}
+
+// Helper: post user turn as quoted block + get assistant reply
+async function runOpenClawTurn(opts: {
+  apiKey: string;
+  sessionId: string;
+  threadId?: string;
+  userText: string;
+  signal?: AbortSignal;
+}): Promise<string> {
+  const message = `User said: "${opts.userText}"\n\nReply as Clawkie: ${SYSTEM_PROMPT}`;
+  const args = [
+    'agent',
+    '--session-id', opts.sessionId,
+    '--message', message,
+    '--deliver',
+    '--reply-channel', 'discord',
+  ];
+  if (opts.threadId) {
+    args.push('--reply-to', `channel:${opts.threadId}`);
+  }
+
+  const env = { XAI_API_KEY: opts.apiKey, ...process.env };
+
+  try {
+    const { stdout } = await execAsync(
+      `openclaw ${args.map(a => JSON.stringify(a)).join(' ')}`,
+      { env, signal: opts.signal },
+    );
+    return stdout.trim();
+  } catch (err: unknown) {
+    if (opts.signal?.aborted) throw new ChatError('aborted', 'aborted');
+    const msg = err instanceof Error ? err.message : 'openclaw_failed';
+    throw new ChatError(msg, 'openclaw_failed');
+  }
+}
+
 export interface ChatOptionsWithSession extends ChatOptions {
   sessionId: string;
   threadId?: string;
-  deliver?: boolean;
 }
 
 export async function runChat(userText: string, opts: ChatOptionsWithSession): Promise<ChatResult> {
@@ -82,29 +84,39 @@ export async function runChat(userText: string, opts: ChatOptionsWithSession): P
   const trimmed = userText.trim();
   if (!trimmed) throw new ChatError('empty_transcript', 'empty_transcript');
 
-  // Post user turn into the canonical Discord thread via OpenClaw
-  await runOpenClawAgent({
-    apiKey: opts.apiKey,
-    signal: opts.signal,
-    sessionId: opts.sessionId,
-    threadId: opts.threadId,
-    deliver: opts.deliver ?? true,
-    message: `User: ${trimmed}`,
-    thinking: 'concise',
-  });
+  // Debug: notify that we received the user's speech
+  await sendDebugNotification(
+    opts.apiKey,
+    opts.threadId,
+    `heard: "${trimmed.slice(0, 80)}${trimmed.length > 80 ? '...' : ''}"`,
+  );
 
-  // Request assistant reply via OpenClaw, delivered into the same thread
-  const result = await runOpenClawAgent({
-    apiKey: opts.apiKey,
-    signal: opts.signal,
-    sessionId: opts.sessionId,
-    threadId: opts.threadId,
-    deliver: true,
-    message: `Assistant: respond to the user following ${SYSTEM_PROMPT}`,
-    thinking: 'default',
-  });
+  try {
+    const reply = await runOpenClawTurn({
+      apiKey: opts.apiKey,
+      sessionId: opts.sessionId,
+      threadId: opts.threadId,
+      userText: trimmed,
+      signal: opts.signal,
+    });
 
-  return result;
+    // Debug: notify that reply was delivered
+    await sendDebugNotification(
+      opts.apiKey,
+      opts.threadId,
+      'reply delivered',
+    );
+
+    return { text: reply, source: 'xai_via_openclaw' };
+  } catch (err) {
+    // Debug: notify on error
+    await sendDebugNotification(
+      opts.apiKey,
+      opts.threadId,
+      `error: ${err instanceof Error ? err.message : 'unknown'}`,
+    );
+    throw err;
+  }
 }
 
 export class ChatError extends Error {
