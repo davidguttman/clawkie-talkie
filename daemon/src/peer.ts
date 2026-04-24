@@ -132,6 +132,25 @@ export class DaemonPeer {
     }
   }
 
+  // Send a debug/activity notification to the configured thread/Discord channel
+  private async sendDebugNotification(tag: string, detail: string): Promise<void> {
+    const threadId = this.activeThreadId ?? this.opts.threadId;
+    if (!threadId) return; // no thread to notify
+    try {
+      const message = `> _clawkie ${tag}: ${detail}`;
+      const args = [
+        'message', 'send',
+        '--channel', 'discord',
+        '--target', `channel:${threadId}`,
+        '--message', message,
+      ];
+      const env = { XAI_API_KEY: this.opts.apiKey, ...process.env };
+      await execAsync(`openclaw ${args.map(a => JSON.stringify(a)).join(' ')}`, { env });
+    } catch {
+      // debug notifications are best-effort — don't fail the turn
+    }
+  }
+
   private bindConnection(
     conn: PeerDataConnection,
     sessionId: string,
