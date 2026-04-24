@@ -13,9 +13,6 @@
 
 ## Priority: HIGH
 
-### [HIGH] #1 & #2 - Browser-Side STT/TTS via xAI ❌
-**Status:** NOT STARTED — This is a correction from prior docs. STT and TTS are intentionally kept daemon-side for security; the browser never holds an xAI API key. The daemon terminates xAI streaming STT and TTS and relays audio via WebRTC datachannel. No changes needed.
-
 ### [HIGH] #5 - Add Activity Notifications for OpenClaw Integration ✅
 **Status:** DONE — `daemon/src/peer.ts` now sends debug activity notifications via `openclaw message send --channel discord --target "channel:<id>"` for all key events:
 - `stt_start` / `stt_ready` / `stt_done` / `stt_error` / `stt_connection_closed`
@@ -31,8 +28,6 @@
 - sessionId/threadId flow through connection labels working end-to-end.
 
 ### [HIGH] #8 (continued) - Remove Client-Side TTS
-**Issue:** Client-side TTS code exists but should be handled by daemon.
-**Location:** `client/src/voice/tts.ts`
 **Status:** NOT APPLICABLE — client TTS is only PCM playback from daemon. Architecture is correct.
 
 ## Priority: MEDIUM
@@ -47,10 +42,8 @@
 
 ### [LOW] General Cleanup
 - Remove unused xAI API key handling from frontend
-- Clean up any server-side TTS/STT session code that's no longer needed
 - Verify all error handling follows OpenClaw patterns
 - Update documentation to match implementation
-- Remove Rambly-specific code if not needed
 **Status:** NOT STARTED
 
 ## Implementation Status Summary
@@ -65,5 +58,4 @@
 | 8 | Remove client-side TTS | HIGH | NOT APPLICABLE |
 | 8 | OpenClaw session context | MEDIUM | ✅ DONE |
 | MED | Settings xAI key removal | MEDIUM | ✅ DONE |
-| 1/2 | Move STT/TTS to browser | HIGH | NOT STARTED (intentional) |
-| LOW | General cleanup | LOW | NOT STARTED
+| LOW | General cleanup | LOW | NOT STARTED |
