@@ -1,65 +1,89 @@
 # Clawkie-Talkie daemon
 
-Single-session walking skeleton. Registers with the public PeerJS broker
-(peerjs.com), prints a join URL carrying the assigned peer ID, and waits
-for the phone to dial in. On connect, it pipes mic PCM16 frames received
-on the raw DataConnection into xAI's streaming STT WebSocket
-(Authorization header auth on the daemon side), and relays
-`transcript.partial` / `transcript.done` events back to the phone.
+Single-session daemon for Clawkie-Talkie.
 
-Signaling: PeerJS broker — no self-hosted rendezvous service.
+It registers with the default public PeerJS signaling server, prints a join URL
+carrying the assigned peer ID, accepts one phone WebRTC DataConnection at a
+time, streams PCM16 mic audio to xAI STT, runs the reply loop, and streams TTS
+audio back to the phone. The daemon does not run a local HTTP signaling server.
 
 ## One-time install
 
 From the repo root:
 
-    npm install --workspaces
+    npm install
 
-Runtime deps: `peerjs`, `@roamhq/wrtc` (native prebuilds for macOS /
-Linux / Windows), `ws`. `peerjs` is Node-compatible when the WebRTC +
-WebSocket globals are installed, which the daemon does before importing
-it (see `daemon/src/peer.ts`).
+Runtime deps: `peerjs`, `@roamhq/wrtc`, `ws`.
 
-## Run
+## Local dev
 
-    XAI_API_KEY=xai-... npm run daemon -- \
+The easiest path is one command from the repo root:
+
+    npm run dev
+
+That starts:
+
+- the daemon
+- the Vite client on `http://localhost:5173`
+
+The daemon loads `XAI_API_KEY` from the repo-root `.env` via the root
+`dev:daemon` / `daemon` scripts, so local dev does not need a manual `export`.
+Copy `.env.example` to `.env` and fill in your key.
+
+## Run the daemon directly
+
+    npm run daemon -- \
       --session-id agent:main:discord:<channelId>:<threadId> \
-      --client-origin  https://clawkie-talkie--featbrowser-voice-loop.jump.sh
+      --client-origin https://clawkie-talkie.davidguttman.jump.sh
 
-The daemon prints a self-contained join URL — no extra signaling config
-on the phone side:
+Optional flags:
 
-    Join URL: https://<client-origin>/?screen=handoff&host=<peerId>
+- `--peer-id <id>`
+- `--stt-language <lang>`
 
-Open that URL on the phone. The Handoff screen will show
-`DAEMON · CONNECTING` → `DAEMON · OPEN` once the DataConnection opens.
+On startup the daemon prints:
+
+- `Session:`
+- `Peer ID:`
+- `Join URL:`
+
+The join URL is a handoff link like:
+
+    https://<client-origin>/?screen=handoff&host=<peerId>&session=<sessionId>
+
+## Signaling
+
+Both the daemon and browser use PeerJS defaults, which means the public PeerJS
+broker is used only for signaling. There is no local PeerServer, no `/peerjs`
+proxy, and no daemon HTTP listener. Application traffic between the phone and
+daemon goes over the WebRTC DataConnection.
 
 ## Control protocol on the raw DataConnection
 
 Phone → daemon:
 
-- `{"t":"stt.start"}` — open a fresh xAI STT WS upstream
+- `{"t":"stt.start"}` — open a fresh xAI STT upstream
 - binary PCM16LE mono @ 16 kHz — forwarded directly to xAI
-- `{"t":"stt.audio.done"}` — ends capture; triggers xAI `transcript.done`
+- `{"t":"stt.audio.done"}` — end capture and wait for final transcript
 - `{"t":"stt.cancel"}` — abort session
+- `{"t":"reply.cancel"}` — cancel chat/TTS for the active turn
 
 Daemon → phone:
 
-- `{"t":"stt.ready"}` — xAI emitted `transcript.created`
+- `{"t":"stt.ready"}`
 - `{"t":"stt.partial","text":"…","is_final":bool}`
 - `{"t":"stt.done","text":"…"}`
 - `{"t":"stt.error","message":"…"}`
 - `{"t":"stt.closed"}`
+- `{"t":"reply.start","transcript":"…"}`
+- `{"t":"reply.done","text":"…"}`
+- `{"t":"reply.error","message":"…"}`
+- `{"t":"tts.start","sampleRate":24000}`
+- binary PCM16LE mono TTS audio
+- `{"t":"tts.done"}`
+- `{"t":"tts.error","message":"…"}`
 
-The DataConnection is opened with `serialization: 'raw'` on the phone
-side, so strings arrive as strings and `ArrayBuffer`s arrive as
-`ArrayBuffer`s without PeerJS BinaryPack framing.
+## Known gaps
 
-## Known gaps (intentional for this slice)
-
-- TTS is still browser-direct-blocked in `xaiSocket.ts` — follow-up
-  slice mirrors this STT transport shape for TTS.
-- No TURN beyond what the PeerJS broker's STUN config provides. Home
-  NATs may still need a TURN server to connect cellular ↔ home network.
-- One daemon, one session, no multi-phone — the daemon rejects a second
-  incoming DataConnection while the first is open.
+- one daemon, one phone — a second phone is rejected while one session is open
+- no TURN server yet
