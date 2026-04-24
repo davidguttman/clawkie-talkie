@@ -7,7 +7,12 @@
 import type { Server as HttpServer } from 'node:http';
 import { PeerServer } from 'peer';
 
-export const SIGNALING_PATH = '/peerjs';
+// The `peer` server mounts its HTTP router at `path` and its WebSocket at
+// `{path}/peerjs`. The PeerJS *client* already appends `peerjs` to its own
+// configured `path` when building both the HTTP ID lookup and the WS URL.
+// So to make the public endpoint exactly `/peerjs/*` (not `/peerjs/peerjs/*`),
+// the configured path on both ends must be '/'.
+export const SIGNALING_PATH = '/';
 export const DEFAULT_SIGNALING_PORT = 9000;
 
 export interface SignalingServer {

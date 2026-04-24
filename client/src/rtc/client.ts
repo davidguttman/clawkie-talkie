@@ -11,7 +11,11 @@
 
 import { Peer, type DataConnection, type PeerOptions } from 'peerjs';
 
-const SIGNALING_PATH = '/peerjs';
+// PeerJS appends `peerjs` to this path when it builds the signaling URLs
+// (HTTP `{path}{key}/id` and WebSocket `{path}peerjs?key=…`). The public
+// endpoint we actually serve is `/peerjs/*`, so the configured path must be
+// '/' — anything else (e.g. '/peerjs') would produce `/peerjs/peerjs/*`.
+const SIGNALING_PATH = '/';
 
 function sameOriginPeerOptions(): PeerOptions {
   const loc = window.location;
