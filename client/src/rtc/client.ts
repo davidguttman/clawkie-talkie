@@ -1,36 +1,12 @@
-// Browser WebRTC client via PeerJS. The daemon is the host — it runs a
-// self-hosted PeerJS signaling server (see daemon/src/signaling.ts) and
-// registers under a deterministic peer ID (`ct-daemon`). The phone
-// reaches that server via same-origin `/peerjs` — in dev the Vite proxy
-// forwards it to the daemon, in deployment (e.g. jump.sh) the hosting
-// proxy does. This removes the hard dependency on the public PeerJS
-// broker (peerjs.com), which is not reachable from jump.sh containers.
-// The DataConnection itself still carries JSON control frames, binary
+// Browser WebRTC client via PeerJS. The daemon registers with the
+// public PeerJS broker under a UUID token. The phone discovers the
+// daemon via `?host=<uuid>` URL parameter.
+//
+// The DataConnection carries JSON control frames, binary
 // PCM16 mic audio (phone → daemon), and binary PCM16 TTS audio
 // (daemon → phone).
 
 import { Peer, type DataConnection, type PeerOptions } from 'peerjs';
-
-// PeerJS appends `peerjs` to this path when it builds the signaling URLs
-// (HTTP `{path}{key}/id` and WebSocket `{path}peerjs?key=…`). The public
-// endpoint we actually serve is `/peerjs/*`, so the configured path must be
-// '/' — anything else (e.g. '/peerjs') would produce `/peerjs/peerjs/*`.
-const SIGNALING_PATH = '/';
-
-function sameOriginPeerOptions(): PeerOptions {
-  const loc = window.location;
-  const secure = loc.protocol === 'https:';
-  // Prefer the explicit port from location; fall back to the standard
-  // 443/80 when the browser omits it (typical on jump.sh / prod).
-  const port = loc.port ? Number(loc.port) : secure ? 443 : 80;
-  return {
-    host: loc.hostname,
-    port,
-    path: SIGNALING_PATH,
-    secure,
-    debug: 1,
-  };
-}
 
 export type RtcStatus = 'idle' | 'connecting' | 'open' | 'error' | 'closed';
 
@@ -53,7 +29,10 @@ export class RtcClient {
   private closed = false;
 
   constructor(private readonly opts: RtcClientOptions) {
-    this.peer = new Peer(sameOriginPeerOptions());
+    // Connect to public PeerJS broker (not same-origin)
+    this.peer = new Peer({
+      debug: 1,
+    });
 
     this.peer.on('open', () => {
       this.dial();
@@ -178,4 +157,10 @@ function toArrayBuffer(data: unknown): ArrayBuffer | null {
     return out;
   }
   return null;
+}
+
+// Helper to read the host peer ID from URL query parameter
+export function getHostPeerIdFromUrl(): string | null {
+  const params = new URLSearchParams(window.location.search);
+  return params.get('host');
 }
