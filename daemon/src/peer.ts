@@ -40,6 +40,8 @@ export interface DaemonPeerOptions {
   apiKey: string;
   sttLanguage?: string;
   peerId: string;
+  sessionId: string;
+  threadId?: string;
   onReady: (peerId: string) => void;
   onFatalError?: (err: Error) => void;
 }
@@ -58,6 +60,8 @@ interface PeerDataConnection {
 export class DaemonPeer {
   private readonly peer: PeerType;
   private active: PeerDataConnection | null = null;
+  private activeSessionId: string | null = null;
+  private activeThreadId: string | null = null;
   private stt: XaiSttSession | null = null;
   private tts: XaiTtsSession | null = null;
   private chatAbort: AbortController | null = null;
@@ -82,8 +86,25 @@ export class DaemonPeer {
       opts.onFatalError?.(err);
     });
 
-    this.peer.on('connection', (conn: unknown) => {
-      this.bindConnection(conn as PeerDataConnection);
+    this.peer.on('connection', (rawConn: unknown) => {
+      const conn = rawConn as PeerDataConnection;
+      // Parse sessionId and threadId from the connection label, if present.
+      // The phone establishes the connection; we only accept connections
+      // that match expected patterns so we don't accidentally bind to
+      // random/unknown peers.
+      const labelMatch = conn.label?.match(
+        /^daemon:(?<sessionId>[a-f0-9\-]+)(?:\+(?<threadId>[a-f0-9\-]+))?$/
+      );
+      if (!labelMatch?.groups?.sessionId) {
+        console.error(`[peer] rejecting connection with unexpected label "${conn.label}"`);
+        try { conn.close(); } catch {} // silently drop
+        return;
+      }
+      this.bindConnection(
+        conn,
+        labelMatch.groups.sessionId,
+        labelMatch.groups.threadId ?? undefined
+      );
     });
 
     this.peer.on('disconnected', () => {
@@ -111,7 +132,11 @@ export class DaemonPeer {
     }
   }
 
-  private bindConnection(conn: PeerDataConnection): void {
+  private bindConnection(
+    conn: PeerDataConnection,
+    sessionId: string,
+    threadId?: string,
+  ): void {
     if (this.active) {
       console.error(`[peer] rejecting second phone ${conn.peer} — one at a time`);
       try {
@@ -122,7 +147,12 @@ export class DaemonPeer {
       return;
     }
     this.active = conn;
-    console.error(`[peer] incoming connection from ${conn.peer} label=${conn.label}`);
+    this.activeSessionId = sessionId;
+    this.activeThreadId = threadId ?? null;
+    console.error(
+      `[peer] incoming connection from ${conn.peer} label=${conn.label} ` +
+      `session=${sessionId} thread=${threadId ?? '(none)'}`
+    );
 
     conn.on('open', () => {
       console.error('[peer] data connection open');
@@ -132,6 +162,8 @@ export class DaemonPeer {
       console.error('[peer] data connection closed');
       this.resetTurn('peer_closed');
       this.active = null;
+      this.activeSessionId = null;
+      this.activeThreadId = null;
     });
 
     conn.on('error', (err: Error) => {
@@ -215,6 +247,9 @@ export class DaemonPeer {
       const result = await runChat(trimmed, {
         apiKey: this.opts.apiKey,
         signal: this.chatAbort.signal,
+        sessionId: this.activeSessionId ?? this.opts.sessionId,
+        threadId: this.activeThreadId ?? this.opts.threadId,
+        deliver: true,
       });
       replyText = result.text;
     } catch (err) {

@@ -30,9 +30,14 @@ async function main(): Promise<void> {
     apiKey: cli.xaiApiKey,
     sttLanguage: cli.sttLanguage,
     peerId: cli.peerId,
+    sessionId: cli.sessionId,
+    threadId: cli.threadId,
     onReady: (peerId) => {
       const joinUrl = cli.clientOrigin.replace(/\/$/, '') + '/?host=' + peerId;
       console.log(`Session:  ${cli.sessionId}`);
+      if (cli.threadId) {
+        console.log(`Thread:   ${cli.threadId}`);
+      }
       console.log(`Peer ID:  ${peerId}`);
       console.log(`Join URL: ${joinUrl}`);
       console.log('Waiting for phone…');
@@ -64,6 +69,7 @@ function parseCli(): CliOptions {
       'session-id': { type: 'string' },
       'client-origin': { type: 'string' },
       'stt-language': { type: 'string' },
+      'thread-id': { type: 'string' },
     },
   });
 
@@ -78,6 +84,7 @@ function parseCli(): CliOptions {
 
   return {
     sessionId: values['session-id'] || 'dev-local',
+    threadId: values['thread-id'] || process.env.CT_THREAD_ID,
     clientOrigin:
       values['client-origin'] ||
       process.env.CT_CLIENT_ORIGIN ||
@@ -90,6 +97,7 @@ function parseCli(): CliOptions {
 
 interface CliOptions {
   sessionId: string;
+  threadId?: string;
   clientOrigin: string;
   xaiApiKey: string;
   sttLanguage?: string;
