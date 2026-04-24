@@ -32,6 +32,10 @@ export class RtcClient {
     // Connect to public PeerJS broker (not same-origin)
     this.peer = new Peer({
       debug: 1,
+      host: window.location.hostname,
+      port: window.location.port ? Number(window.location.port) : undefined,
+      path: '/peerjs',
+      secure: window.location.protocol === 'https:',
     });
 
     this.peer.on('open', () => {
@@ -161,6 +165,7 @@ function toArrayBuffer(data: unknown): ArrayBuffer | null {
 
 // Helper to read the host peer ID from URL query parameter
 export function getHostPeerIdFromUrl(): string | null {
+  // Also check for thread-specific host parameter (daemon supports ?host=<uuid>&threadId=...)
   const params = new URLSearchParams(window.location.search);
-  return params.get('host');
+  return params.get('host') || null;
 }
