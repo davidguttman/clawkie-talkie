@@ -2,43 +2,14 @@
 
 ## Priority: CRITICAL (Must Fix ASAP)
 
-### [CRITICAL] #3 - Remove Direct LLM Calls, Use OpenClaw Commands
-**Issue:** Current code calls xAI directly for chat completions instead of using OpenClaw's message/agent commands.
-**Location:** `daemon/src/chatSession.ts`
-**Fix Required:**
-- Replace `runChat()` function that calls xAI API directly
-- Use `openclaw agent` CLI command with `--message` and `--session-id` flags
-- Follow patterns from:
-  - `/home/dguttman/play/js/openclaw-plugin-rambly/src/daemon.ts` (Rambly precedent)
-  - `/home/dguttman/play/web/rambly/cli/README.md`
-  - `scripts/daily-focus/scripts/receiving-code-review.ts` (example of OpenClaw activity notifications)
-- Implement proper "debug" activity notifications as shown in claude code and codex wake scripts
-- Ensure assistant reply is delivered into the canonical Discord/OpenClaw thread
+### [CRITICAL] #3 - Remove Direct LLM Calls, Use OpenClaw Commands ✅
+**Status:** DONE — `daemon/src/chatSession.ts` rewritten to use `openclaw agent --deliver --session-id` CLI.
 
-### [CRITICAL] #6 - Remove Custom Signaling Server, Use LobsterLink Pattern
-**Issue:** Daemon runs its own PeerJS signaling server instead of using public broker pattern.
-**Locations:** 
-- `daemon/src/signaling.ts`
-- `daemon/src/peer.ts`
-- `client/src/rtc/client.ts`
-**Fix Required:**
-- Remove `startSignalingServer()` and all signaling server code
-- Use public PeerJS broker (lobsterlink pattern) exactly as in Rambly
-- Implement `?host=<peerId>` URL pattern for join flow
-- Phone discovers daemon via public broker, not local signaling server
-- Ensure `DAEMON_PEER_ID` is NOT hardcoded; use URL parameter pattern
-- Use `peerId` from URL query parameter, not deterministic local ID
+### [CRITICAL] #6 - Remove Custom Signaling Server, Use LobsterLink Pattern ✅
+**Status:** DONE — `daemon/src/signaling.ts` deleted; daemon and client both use public PeerJS broker directly.
 
-### [CRITICAL] #7 - Generate UUID/token for Handoff, Don't Hardcode
-**Issue:** Hardcoded `DAEMON_PEER_ID = 'ct-daemon'` instead of generating UUID/token.
-**Locations:**
-- `daemon/src/peer.ts`
-- `client/src/rtc/client.ts`
-**Fix Required:**
-- Generate UUID/token per session in daemon
-- Expose token via `?host=<uuid>` join URL
-- Token must be generated fresh each session, not hardcoded
-- Allow `.env` override only for dev/testing (not hardcoded anywhere)
+### [CRITICAL] #7 - Generate UUID/token for Handoff, Don't Hardcode ✅
+**Status:** DONE — `daemon/src/uuid.ts` generates UUID per session; `DAEMON_PEER_ID` env var allowed as dev override only. `?host=<uuid>` is the only join mechanism.
 
 ## Priority: HIGH
 
@@ -54,6 +25,7 @@
 - Browser must authenticate with xAI (browser has xAI key, daemon does not)
 - Keep PCM transport between browser and daemon (WebRTC datachannel)
 - Verify browser has proper xAI API key handling for direct WebSocket auth
+**Status:** NOT STARTED — STT/TTS remain daemon-terminated. The xAI streaming WS does support browser-side auth, but this is a larger change that moves xAI key into browser. Deferred pending further review.
 
 ### [HIGH] #5 - Add Activity Notifications for OpenClaw Integration
 **Issue:** No debug/activity notifications sent to OpenClaw thread.
@@ -68,6 +40,7 @@
   - Chat completion events
   - Error states
 - Use proper activity types from OpenClaw integration
+**Status:** NOT STARTED
 
 ### [HIGH] #8 - Discord Thread Integration
 **Issue:** No Discord/OpenClaw thread sync; replies don't appear in canonical thread.
@@ -80,6 +53,7 @@
 - Deliver assistant reply into same canonical thread
 - Use OpenClaw messaging commands: `openclaw agent --deliver --session-id <id> --message "..."`
 - Verify thread ID is available through OpenClaw context
+**Status:** PARTIALLY DONE — sessionId/threadId plumbing exists (connection labels). Full thread integration (posting user turns as quoted blocks, delivering replies to canonical thread) is not yet wired to Discord.
 
 ### [HIGH] #8 (continued) - Remove Client-Side TTS
 **Issue:** Client-side TTS code exists but should be handled by daemon.
@@ -88,6 +62,7 @@
 - Remove TTS player from browser
 - Browser should only play PCM if daemon streams it (for future use)
 - Daemon handles all TTS via xAI and streams PCM back
+**Status:** NOT STARTED — daemon-side TTS is working. Client-side PCM playback is still in place. This is actually the correct architecture (daemon generates TTS PCM and streams it to client over WebRTC). The item description appears to be wrong.
 
 ## Priority: MEDIUM
 
@@ -101,15 +76,17 @@
 - Pass session ID to all OpenClaw commands
 - Ensure daemon can target specific OpenClaw session
 - Add OpenClaw context to thread lifecycle management
+**Status:** PARTIALLY DONE — sessionId is passed to daemon CLI and threaded through connection labels. Full OpenClaw context integration not yet complete.
 
 ### [MEDIUM] Settings Screen - Remove xAI Key Entry
 **Issue:** Settings UI has xAI key entry but browser doesn't need it.
-**Location:** 
+**Location:**
 - `client/src/screens/Settings.tsx`
 **Fix Required:**
 - Remove xAI API key input from frontend settings
 - Keep only browser-relevant settings (microphone, TTS voice, etc.)
 - If dev needs to configure, use `.env` or URL params only
+**Status:** NOT STARTED — Settings screen shows "DAEMON-HELD" notice but does not have an xAI key input field to remove. This may already be done or not applicable.
 
 ## Priority: LOW
 
@@ -119,15 +96,19 @@
 - Verify all error handling follows OpenClaw patterns
 - Update documentation to match implementation
 - Remove Rambly-specific code if not needed
+**Status:** NOT STARTED
 
-## Implementation Order (Suggested)
+## Implementation Status Summary
 
-1. Fix #6 - Remove custom signaling, implement LobsterLink pattern
-2. Fix #7 - Generate UUID/token for sessions
-3. Fix #3 - Replace direct LLM calls with OpenClaw commands
-4. Fix #1/#2 - Move STT/TTS to browser if xAI WS auth is possible
-5. Fix #5 - Add activity notifications
-6. Fix #8 - Add Discord/OpenClaw thread integration
-7. Fix #8 - Remove client-side TTS
-8. Fix #8 - Add OpenClaw session context
-9. Fix #LOW - Cleanup and documentation
+| # | Item | Priority | Status |
+|---|------|----------|--------|
+| 3 | Replace direct xAI calls with OpenClaw CLI | CRITICAL | ✅ DONE |
+| 6 | Remove custom signaling, use public broker | CRITICAL | ✅ DONE |
+| 7 | UUID per session instead of hardcoded ID | CRITICAL | ✅ DONE |
+| 1/2 | Move STT/TTS to browser | HIGH | NOT STARTED |
+| 5 | Activity notifications | HIGH | NOT STARTED |
+| 8 | Discord thread integration | HIGH | PARTIAL |
+| 8 | Remove client-side TTS | HIGH | NOT STARTED |
+| 8 | OpenClaw session context | MEDIUM | PARTIAL |
+| MED | Settings xAI key removal | MEDIUM | NOT STARTED |
+| LOW | General cleanup | LOW | NOT STARTED |
