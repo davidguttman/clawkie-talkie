@@ -7,16 +7,14 @@
 //   XAI_API_KEY=... npm run daemon -- --session-id <sid> \
 //     --client-origin <url>
 //
-// The daemon registers with the public PeerJS broker under a UUID
-// token generated each session (or overridden via DAEMON_PEER_ID env).
-// The phone discovers the daemon via `?host=<uuid>` URL parameter.
-// Once the phone calls `peer.connect(<id>)`, a DataConnection opens and
-// the daemon drives the full turn server-side: xAI STT on inbound mic
-// PCM, xAI chat on the final transcript, xAI TTS on the reply, with
-// resulting PCM16 audio streamed back to the phone.
-//
-// Signaling uses the public PeerJS broker (no self-hosted server).
-// The browser never holds an xAI API key.
+// The daemon subscribes to a rambly-style signaling server (SSE +
+// HTTP POST) under a UUID token generated each session (or overridden
+// via DAEMON_PEER_ID env). The phone discovers the daemon via
+// `?host=<uuid>` and joins the same room. simple-peer + @roamhq/wrtc
+// drive the WebRTC DataChannel; the daemon owns the full turn:
+// xAI STT on inbound mic PCM, xAI chat on the final transcript, xAI
+// TTS on the reply, with resulting PCM16 audio streamed back to the
+// phone. The browser never holds an xAI key.
 
 import { parseArgs } from 'node:util';
 import { DaemonPeer } from './peer.js';
@@ -43,15 +41,9 @@ async function main(): Promise<void> {
       console.log('Waiting for phone…');
     },
     onFatalError: (err) => {
-      if (
-        err.message.includes('network') ||
-        err.message.includes('browser-incompatible') ||
-        err.message.includes('server-error')
-      ) {
-        console.error('[daemon] fatal PeerJS error — shutting down');
-        peer.close();
-        process.exit(1);
-      }
+      console.error(`[daemon] fatal signaling error — shutting down: ${err.message}`);
+      peer.close();
+      process.exit(1);
     },
   });
 

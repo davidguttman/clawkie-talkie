@@ -2,10 +2,11 @@
 
 Single-session daemon for Clawkie-Talkie.
 
-It registers with the default public PeerJS signaling server, prints a join URL
-carrying the assigned peer ID, accepts one phone WebRTC DataConnection at a
-time, streams PCM16 mic audio to xAI STT, runs the reply loop, and streams TTS
-audio back to the phone. The daemon does not run a local HTTP signaling server.
+It subscribes to a rambly-style signaling server (SSE subscribe + HTTP POST
+signal) under a UUID token, prints a join URL carrying that token, accepts one
+phone WebRTC DataChannel at a time (over `simple-peer` + `@roamhq/wrtc`),
+streams PCM16 mic audio to xAI STT, runs the reply loop, and streams TTS audio
+back to the phone.
 
 ## One-time install
 
@@ -13,7 +14,7 @@ From the repo root:
 
     npm install
 
-Runtime deps: `peerjs`, `@roamhq/wrtc`, `ws`.
+Runtime deps: `simple-peer`, `@roamhq/wrtc`, `ws`.
 
 ## Local dev
 
@@ -53,10 +54,13 @@ The join URL is a handoff link like:
 
 ## Signaling
 
-Both the daemon and browser use PeerJS defaults, which means the public PeerJS
-broker is used only for signaling. There is no local PeerServer, no `/peerjs`
-proxy, and no daemon HTTP listener. Application traffic between the phone and
-daemon goes over the WebRTC DataConnection.
+Daemon and browser share a rambly-style signaling server. Default is
+`https://api.rambly.app`; override with `SIGNAL_SERVER` (daemon) and
+`VITE_SIGNAL_SERVER` (client). For fully-local dev, run `npm run signal`
+(starts `server/src/index.ts` on `:8787`) and point both vars at it.
+
+The signaling server only carries SDP/ICE — application traffic flows over
+the WebRTC DataChannel directly between phone and daemon.
 
 ## Control protocol on the raw DataConnection
 

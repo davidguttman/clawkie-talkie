@@ -8,24 +8,26 @@
     "dev": "node scripts/dev.mjs",
     "dev:client": "vite client",
     "dev:daemon": "tsx --env-file=.env daemon/src/index.ts --session-id dev-local --client-origin http://localhost:5173",
+    "dev:signal": "tsx server/src/index.ts",
     "build": "tsc --noEmit -p client && vite build client",
-    "typecheck": "tsc --noEmit -p client && tsc --noEmit -p daemon",
+    "typecheck": "tsc --noEmit -p client && tsc --noEmit -p daemon && tsc --noEmit -p server",
     "test": "vitest run",
     "test:watch": "vitest",
-    "daemon": "tsx --env-file=.env daemon/src/index.ts"
+    "daemon": "tsx --env-file=.env daemon/src/index.ts",
+    "signal": "tsx server/src/index.ts"
   },
   "dependencies": {
     "@roamhq/wrtc": "^0.8.0",
-    "peer": "^1.0.2",
-    "peerjs": "^1.5.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "simple-peer": "^9.11.1",
     "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
+    "@types/simple-peer": "^9.11.8",
     "@types/ws": "^8.5.12",
     "@vitejs/plugin-react": "^4.3.3",
     "tsx": "^4.19.1",

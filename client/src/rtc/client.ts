@@ -1,12 +1,15 @@
-// Browser WebRTC client via PeerJS. The daemon registers with the
-// public PeerJS broker under a UUID token. The phone discovers the
-// daemon via `?host=<uuid>` URL parameter.
+// Browser WebRTC client. Uses a rambly-style signaling server (SSE
+// subscribe + HTTP POST signal) to discover the daemon, then connects
+// over WebRTC via simple-peer.
 //
-// The DataConnection carries JSON control frames, binary
-// PCM16 mic audio (phone → daemon), and binary PCM16 TTS audio
-// (daemon → phone).
+// The phone joins a "room" named after the daemon's UUID (passed as the
+// `?host=<uuid>` URL param). The daemon is already in that room; when
+// the phone announces itself, the daemon initiates a simple-peer
+// connection. The DataChannel carries JSON control frames + binary
+// PCM16 audio.
 
-import { Peer, type DataConnection, type PeerOptions } from 'peerjs';
+import SimplePeer from 'simple-peer';
+import { SignalClient, type SignalData, type SignalEvent } from './signal';
 
 export type RtcStatus = 'idle' | 'connecting' | 'open' | 'error' | 'closed';
 
@@ -17,69 +20,91 @@ export interface ControlMessage {
 
 export interface RtcClientOptions {
   hostPeerId: string;
+  signalServer?: string;
+  iceServers?: RTCIceServer[];
   onStatusChange?: (status: RtcStatus, detail?: string) => void;
   onControlMessage?: (msg: ControlMessage) => void;
   onBinaryMessage?: (bytes: ArrayBuffer) => void;
 }
 
+const DEFAULT_SIGNAL_SERVER =
+  ((import.meta as unknown as { env?: { VITE_SIGNAL_SERVER?: string } }).env?.VITE_SIGNAL_SERVER) ??
+  'https://api.rambly.app';
+
+const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+];
+
+function randomPeerId(): string {
+  // Short, opaque, URL-safe id for this browser session.
+  const arr = new Uint8Array(12);
+  crypto.getRandomValues(arr);
+  let s = '';
+  for (const b of arr) s += b.toString(16).padStart(2, '0');
+  return `phone-${s}`;
+}
+
 export class RtcClient {
-  private readonly peer: Peer;
-  private conn: DataConnection | null = null;
+  private readonly signalClient: SignalClient;
+  private readonly peerId: string;
+  private peer: SimplePeer.Instance | null = null;
+  private remotePeerId: string | null = null;
   private status: RtcStatus = 'idle';
   private closed = false;
+  private readonly iceServers: RTCIceServer[];
 
   constructor(private readonly opts: RtcClientOptions) {
-    // Connect to public PeerJS broker (not same-origin)
-    this.peer = new Peer({
-      debug: 1,
-      host: window.location.hostname,
-      port: window.location.port ? Number(window.location.port) : undefined,
-      path: '/peerjs',
-      secure: window.location.protocol === 'https:',
+    this.peerId = randomPeerId();
+    this.iceServers = opts.iceServers ?? DEFAULT_ICE_SERVERS;
+
+    this.signalClient = new SignalClient({
+      signalServer: opts.signalServer ?? DEFAULT_SIGNAL_SERVER,
+      peerId: this.peerId,
+      roomName: opts.hostPeerId,
     });
 
-    this.peer.on('open', () => {
-      this.dial();
+    this.signalClient.on('open', () => {
+      // Subscribed; the server will announce us to the daemon.
     });
-
-    this.peer.on('error', (err) => {
-      console.error('[rtc] peer error', err);
+    this.signalClient.on('error', (err) => {
       if (this.closed) return;
-      this.setStatus('error', `peer:${err.type ?? err.message}`);
+      this.setStatus('error', `signal:${err.message}`);
     });
-
-    this.peer.on('disconnected', () => {
-      if (this.closed) return;
-      try {
-        this.peer.reconnect();
-      } catch {
-        // ignore — 'error' will fire
-      }
+    this.signalClient.on('announce', ({ peerId }) => {
+      // The daemon (already in the room) is the one that initiates per
+      // the rambly convention. The phone shouldn't initiate from announce
+      // — the daemon will signal us first. We just remember who it is so
+      // we can route signals.
+      if (this.remotePeerId && this.remotePeerId !== peerId) return;
+      this.remotePeerId = peerId;
+    });
+    this.signalClient.on('signal', (event: SignalEvent) => {
+      this.handleSignal(event);
     });
   }
 
   connect(): void {
     if (this.closed) return;
     this.setStatus('connecting');
+    this.signalClient.subscribe();
   }
 
   sendControl(msg: ControlMessage): void {
-    if (!this.conn || !this.conn.open) return;
+    const peer = this.peer;
+    if (!peer || !peer.connected) return;
     try {
-      this.conn.send(JSON.stringify(msg));
+      peer.send(JSON.stringify(msg));
     } catch (err) {
       console.error('[rtc] sendControl failed', err);
     }
   }
 
   sendBinary(bytes: ArrayBuffer | Uint8Array): void {
-    if (!this.conn || !this.conn.open) return;
+    const peer = this.peer;
+    if (!peer || !peer.connected) return;
     try {
-      this.conn.send(
-        bytes instanceof ArrayBuffer
-          ? bytes
-          : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
-      );
+      const view = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes;
+      peer.send(view);
     } catch {
       // ignore
     }
@@ -93,52 +118,91 @@ export class RtcClient {
     if (this.closed) return;
     this.closed = true;
     try {
-      this.conn?.close();
+      this.peer?.destroy();
     } catch {
       // ignore
     }
-    this.conn = null;
+    this.peer = null;
     try {
-      this.peer.destroy();
+      this.signalClient.close();
     } catch {
       // ignore
     }
     this.setStatus('closed');
   }
 
-  private dial(): void {
+  private handleSignal(event: SignalEvent): void {
     if (this.closed) return;
-    const conn = this.peer.connect(this.opts.hostPeerId, {
-      reliable: true,
-      serialization: 'raw',
+    if (this.peer && !this.peer.destroyed) {
+      try {
+        this.peer.signal(event.data as SignalPayload);
+      } catch (err) {
+        console.error('[rtc] peer.signal failed', err);
+      }
+      return;
+    }
+    this.remotePeerId = event.from;
+    this.setupPeer(false, event.data as SignalPayload);
+  }
+
+  private setupPeer(initiator: boolean, initialSignal?: SignalPayload): void {
+    if (this.closed) return;
+    const peer = new SimplePeer({
+      initiator,
+      trickle: true,
+      config: { iceServers: this.iceServers },
     });
-    this.conn = conn;
+    this.peer = peer;
 
-    conn.on('open', () => this.setStatus('open'));
+    peer.on('signal', (data) => {
+      const target = this.remotePeerId;
+      if (!target) return;
+      void this.signalClient
+        .sendSignal(target, data as unknown as SignalData)
+        .catch((err) => {
+          console.error('[rtc] sendSignal failed', err);
+        });
+    });
 
-    conn.on('close', () => {
+    peer.on('connect', () => {
+      this.setStatus('open');
+    });
+
+    peer.on('data', (data: unknown) => {
+      // simple-peer surfaces strings as Uint8Array; sniff for JSON text
+      // by attempting decode, fall back to binary delivery.
+      const ab = toArrayBuffer(data);
+      if (!ab) return;
+      const text = tryDecodeJsonText(ab);
+      if (text !== null) {
+        try {
+          const msg = JSON.parse(text) as ControlMessage;
+          this.opts.onControlMessage?.(msg);
+          return;
+        } catch {
+          // not JSON — fall through to binary
+        }
+      }
+      this.opts.onBinaryMessage?.(ab);
+    });
+
+    peer.on('close', () => {
+      if (this.peer === peer) this.peer = null;
       if (!this.closed) this.setStatus('closed');
     });
 
-    conn.on('error', (err: Error) => {
+    peer.on('error', (err: Error) => {
       if (this.closed) return;
-      this.setStatus('error', `datachannel:${err.message}`);
+      this.setStatus('error', `peer:${err.message}`);
     });
 
-    conn.on('data', (data: unknown) => {
-      if (typeof data === 'string') {
-        let msg: ControlMessage;
-        try {
-          msg = JSON.parse(data) as ControlMessage;
-        } catch {
-          return;
-        }
-        this.opts.onControlMessage?.(msg);
-        return;
+    if (initialSignal) {
+      try {
+        peer.signal(initialSignal);
+      } catch (err) {
+        console.error('[rtc] peer.signal (initial) failed', err);
       }
-      const ab = toArrayBuffer(data);
-      if (ab) this.opts.onBinaryMessage?.(ab);
-    });
+    }
   }
 
   private setStatus(status: RtcStatus, detail?: string): void {
@@ -148,24 +212,40 @@ export class RtcClient {
   }
 }
 
+type SignalPayload = Parameters<SimplePeer.Instance['signal']>[0];
+
 function toArrayBuffer(data: unknown): ArrayBuffer | null {
   if (data instanceof ArrayBuffer) return data;
   if (ArrayBuffer.isView(data)) {
     const view = data as ArrayBufferView;
-    // Copy into a fresh ArrayBuffer so we're not handing out a view
-    // over a SharedArrayBuffer (peerjs may surface either).
     const out = new ArrayBuffer(view.byteLength);
     new Uint8Array(out).set(
       new Uint8Array(view.buffer as ArrayBuffer, view.byteOffset, view.byteLength),
     );
     return out;
   }
+  if (typeof data === 'string') {
+    return new TextEncoder().encode(data).buffer as ArrayBuffer;
+  }
   return null;
+}
+
+// Heuristic: control messages are JSON objects, so the first byte is
+// '{'. PCM16 audio frames almost never start with 0x7B, so this is a
+// reliable split.
+function tryDecodeJsonText(ab: ArrayBuffer): string | null {
+  if (ab.byteLength === 0) return null;
+  const first = new Uint8Array(ab, 0, 1)[0];
+  if (first !== 0x7b /* { */) return null;
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(ab);
+  } catch {
+    return null;
+  }
 }
 
 // Helper to read the host peer ID from URL query parameter
 export function getHostPeerIdFromUrl(): string | null {
-  // Also check for thread-specific host parameter (daemon supports ?host=<uuid>&threadId=...)
   const params = new URLSearchParams(window.location.search);
   return params.get('host') || null;
 }
