@@ -208,25 +208,45 @@ export class DaemonPeer {
     }
   }
 
-  private openStt(): void {
+  private async openStt(): Promise<void> {
     console.error('[daemon] opening xAI STT session');
+    // Debug: notify that STT is starting
+    await this.sendDebugNotification('stt_start', 'user speaking...');
+    
     this.stt = new XaiSttSession(
       { apiKey: this.opts.apiKey, language: this.opts.sttLanguage },
       {
-        onReady: () => this.send(daemonToPhone.sttReady()),
-        onPartial: (text, isFinal) =>
-          this.send(daemonToPhone.sttPartial(text, isFinal)),
+        onReady: () => {
+          this.send(daemonToPhone.sttReady());
+          // Debug: notify that STT is ready
+          void this.sendDebugNotification('stt_ready', 'listening for speech');
+        },
+        onPartial: (text, isFinal) => {
+          if (isFinal) {
+            // Debug: notify that STT completed with final transcript
+            void this.sendDebugNotification('stt_done', `transcript: ${text}`);
+          }
+          this.send(daemonToPhone.sttPartial(text, isFinal));
+        },
         onDone: (text) => {
           this.send(daemonToPhone.sttDone(text));
           this.stt = null;
+          // Debug: notify that STT session is closed
+          void this.sendDebugNotification('stt_session_closed', 'transcription complete');
           void this.runReplyTurn(text);
         },
         onError: (message) => {
           this.send(daemonToPhone.sttError(message));
           this.stt = null;
           this.turnInFlight = false;
+          // Debug: notify that STT failed
+          void this.sendDebugNotification('stt_error', `error: ${message}`);
         },
-        onClosed: () => this.send(daemonToPhone.sttClosed()),
+        onClosed: () => {
+          this.send(daemonToPhone.sttClosed());
+          // Debug: notify that STT connection closed
+          void this.sendDebugNotification('stt_connection_closed', 'STT socket closed');
+        },
       },
     );
   }
@@ -240,6 +260,9 @@ export class DaemonPeer {
       return;
     }
     this.send(daemonToPhone.replyStart(trimmed));
+
+    // Debug: notify that chat completion is starting
+    await this.sendDebugNotification('chat_start', `transcript: ${trimmed.slice(0, 40)}...`);
 
     this.chatAbort = new AbortController();
     let replyText: string;
@@ -256,6 +279,8 @@ export class DaemonPeer {
       this.chatAbort = null;
       if (!this.turnInFlight) return;
       const code = err instanceof ChatError ? err.code : 'reply_failed';
+      const errorMsg = err instanceof Error ? err.message : 'unknown error';
+      await this.sendDebugNotification('chat_error', `code: ${code}, error: ${errorMsg}`);
       this.send(daemonToPhone.replyError(code));
       this.turnInFlight = false;
       return;
@@ -264,16 +289,24 @@ export class DaemonPeer {
     if (!this.turnInFlight) return;
     this.send(daemonToPhone.replyDone(replyText));
 
+    // Debug: notify that chat succeeded and TTS is starting
+    await this.sendDebugNotification('chat_done', `reply: ${replyText.slice(0, 40)}...`);
+
     this.openTts(replyText);
   }
 
-  private openTts(text: string): void {
+  private async openTts(text: string): Promise<void> {
     try {
+      // Debug: notify that TTS is starting
+      await this.sendDebugNotification('tts_start', `text: ${text.slice(0, 40)}...`);
+      
       this.tts = new XaiTtsSession(
         { apiKey: this.opts.apiKey, text },
         {
           onOpen: () => {
             this.send(daemonToPhone.ttsStart(TTS_SAMPLE_RATE));
+            // Debug: notify that TTS audio stream started
+            void this.sendDebugNotification('tts_audio_start', 'TTS streaming PCM audio');
           },
           onAudio: (pcm) => {
             this.sendBinary(pcm);
@@ -282,19 +315,24 @@ export class DaemonPeer {
             this.send(daemonToPhone.ttsDone());
             this.tts = null;
             this.turnInFlight = false;
+            // Debug: notify that TTS completed
+            void this.sendDebugNotification('tts_done', 'audio playback complete');
           },
           onError: (message) => {
             this.send(daemonToPhone.ttsError(message));
             this.tts = null;
             this.turnInFlight = false;
+            // Debug: notify that TTS failed
+            void this.sendDebugNotification('tts_error', `error: ${message}`);
           },
         },
       );
     } catch (err) {
-      this.send(
-        daemonToPhone.ttsError(err instanceof Error ? err.message : 'xai_tts_open_failed'),
-      );
+      const errorMsg = err instanceof Error ? err.message : 'xai_tts_open_failed';
+      this.send(daemonToPhone.ttsError(errorMsg));
       this.turnInFlight = false;
+      // Debug: notify that TTS session failed to open
+      await this.sendDebugNotification('tts_session_error', `failed to open: ${errorMsg}`);
     }
   }
 
