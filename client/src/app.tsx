@@ -105,9 +105,9 @@ export function App() {
         <HandoffScreen
           onEnter={() => go('driving')}
           onBack={() => go('driving')}
-          joinToken={hostPeerId}
-          sessionId={sessionId}
-          threadId={threadId}
+          joinToken={initial.hostPeerId}
+          sessionId={initial.sessionId}
+          threadId={initial.threadId}
           compact={compact}
         />
       )}
@@ -170,7 +170,7 @@ export function App() {
   );
 
   return (
-    <RtcProvider hostPeerId={initial.hostPeerId}>
+    <RtcProvider hostPeerId={initial.hostPeerId ?? undefined}>
       {rendered}
     </RtcProvider>
   );
