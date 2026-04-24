@@ -75,9 +75,17 @@ export class DaemonPeer {
 
   constructor(private readonly opts: DaemonPeerOptions) {
     // Connect to public PeerJS broker (no custom signaling server)
+    // Add connection timeout to avoid hanging indefinitely when offline
     this.peer = new Peer(opts.peerId, {
       // Uses public PeerJS broker at 0.peerjs.com by default
       debug: 1,
+      config: {
+        iceServers: [],
+        // Reduce connection timeout to avoid long hangs
+        connectionTimeout: 5000,
+        iceTransportPolicy: 'all',
+        sdpSemantics: 'unified-plan',
+      } as any,
     });
 
     this.peer.on('open', (id: string) => {
