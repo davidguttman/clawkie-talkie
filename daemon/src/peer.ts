@@ -16,6 +16,8 @@
 
 import ws from 'ws';
 import wrtc from '@roamhq/wrtc';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
 import { runChat, ChatError } from './chatSession.js';
 import { XaiTtsSession, TTS_SAMPLE_RATE } from './ttsSession.js';
 import { daemonToPhone, type PhoneToDaemon } from './protocol.js';
@@ -32,6 +34,8 @@ if (!g.WebSocket) g.WebSocket = ws;
 if (!g.RTCPeerConnection) g.RTCPeerConnection = w.RTCPeerConnection;
 if (!g.RTCSessionDescription) g.RTCSessionDescription = w.RTCSessionDescription;
 if (!g.RTCIceCandidate) g.RTCIceCandidate = w.RTCIceCandidate;
+
+const execAsync = promisify(exec);
 
 const { Peer } = await import('peerjs');
 type PeerType = InstanceType<typeof Peer>;
