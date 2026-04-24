@@ -17,13 +17,15 @@ export function HandoffScreen({
   onBack,
   sessionId,
   joinToken,
+  threadId,
   channelHint,
   compact = false,
 }: {
   onEnter: () => void;
   onBack?: () => void;
   sessionId?: string;
-  joinToken?: string;
+  joinToken?: string | null;
+  threadId?: string;
   channelHint?: string;
   compact?: boolean;
 }) {

@@ -35,8 +35,9 @@ const ERROR_KINDS: ErrorKind[] = [
 function parseInitial(): {
   screen: ScreenId;
   errorKind: ErrorKind;
-  hostPeerId?: string;
+  hostPeerId: string | null;
   sessionId?: string;
+  threadId?: string;
 } {
   const params = new URLSearchParams(window.location.search);
   const rawScreen = params.get('screen');
@@ -47,12 +48,12 @@ function parseInitial(): {
   const errorKind: ErrorKind = (ERROR_KINDS as string[]).includes(rawKind || '')
     ? (rawKind as ErrorKind)
     : 'bad_session';
-  // Self-hosted signaling: one daemon per deployment registers under a
-  // deterministic peer ID (`ct-daemon`), so the base URL alone is
-  // enough to dial in. `?host=<id>` still overrides for ad-hoc setups.
-  const hostPeerId = params.get('host') || DEFAULT_DAEMON_PEER_ID;
+  // No default peer ID — each session uses a UUID token. The URL must
+  // carry `?host=<uuid>` or there's no daemon to connect to.
+  const hostPeerId = params.get('host');
   const sessionId = params.get('session') || undefined;
-  return { screen, errorKind, hostPeerId, sessionId };
+  const threadId = params.get('threadId') || undefined;
+  return { screen, errorKind, hostPeerId, sessionId, threadId };
 }
 
 function setUrlParam(key: string, value: string | null) {
@@ -104,8 +105,9 @@ export function App() {
         <HandoffScreen
           onEnter={() => go('driving')}
           onBack={() => go('driving')}
-          joinToken={initial.hostPeerId}
-          sessionId={initial.sessionId}
+          joinToken={hostPeerId}
+          sessionId={sessionId}
+          threadId={threadId}
           compact={compact}
         />
       )}
