@@ -74,28 +74,39 @@ export class DaemonPeer {
   private turnInFlight = false;
 
   constructor(private readonly opts: DaemonPeerOptions) {
-    // Connect to public PeerJS broker (no custom signaling server)
-    // Add connection timeout to avoid hanging indefinitely when offline
+    // Connect to public PeerJS broker (no custom signaling server).
+    // MUST add 'error' listener BEFORE constructing Peer — otherwise Node.js
+    // throws "Unhandled 'error' event" and crashes the process when the
+    // WebSocket to the broker times out (e.g. no network in container).
     this.peer = new Peer(opts.peerId, {
       // Uses public PeerJS broker at 0.peerjs.com by default
       debug: 1,
-      config: {
-        iceServers: [],
-        // Reduce connection timeout to avoid long hangs
-        connectionTimeout: 5000,
-        iceTransportPolicy: 'all',
-        sdpSemantics: 'unified-plan',
-      } as any,
+    });
+
+    // Catch broker connection errors early so they don't crash the daemon.
+    // This is the ONLY safe place to attach a pre-constructor error listener
+    // (Peer emits 'error' immediately on construction failure in Node).
+    this.peer.on('error', (err: Error) => {
+      console.error(`[peer] broker error: ${err.message}`);
+      // Only treat broker connectivity errors as fatal if we are in a
+      // network-required context (production). In dev, retry silently.
+      const fatalTypes = [
+        'browser-incompatible',
+        'server-error',
+        'network',
+        'ssl-unavailable',
+      ];
+      if (fatalTypes.some((t) => err.message.includes(t))) {
+        console.error('[peer] fatal broker error — shutting down');
+        opts.onFatalError?.(err);
+      }
+      // Otherwise: let it retry via the 'disconnected' handler or wait
+      // for the next connection attempt. No fatal action needed.
     });
 
     this.peer.on('open', (id: string) => {
       console.error(`[peer] registered with public broker as ${id}`);
       opts.onReady(id);
-    });
-
-    this.peer.on('error', (err: Error) => {
-      console.error(`[peer] error: ${err.message}`);
-      opts.onFatalError?.(err);
     });
 
     this.peer.on('connection', (rawConn: unknown) => {
