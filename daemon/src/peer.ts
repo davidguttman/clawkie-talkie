@@ -31,6 +31,8 @@ const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'turn:api.rambly.app:3478', username: 'rambly', credential: 'rambly' },
 ];
 
+const CONNECT_TIMEOUT_MS = 12_000;
+
 export interface DaemonPeerOptions {
   apiKey: string;
   sttLanguage?: string;
@@ -54,6 +56,7 @@ export class DaemonPeer {
   private peer: SimplePeer.Instance | null = null;
   private remoteId: string | null = null;
   private connected = false;
+  private connectionTimeout: NodeJS.Timeout | null = null;
 
   private activeSessionId: string | null = null;
   private activeThreadId: string | null = null;
@@ -122,6 +125,7 @@ export class DaemonPeer {
     this.peer = null;
     this.remoteId = null;
     this.connected = false;
+    this.clearConnectionTimeout();
     try {
       this.signalClient.close();
     } catch {
@@ -156,7 +160,17 @@ export class DaemonPeer {
         }
         return;
       }
-      // Reject second phone — one at a time.
+      if (!this.connected) {
+        console.error(`[peer] replacing stale pending phone ${this.remoteId ?? 'unknown'} with ${remoteId}`);
+        this.tearDownPeer('replace_stale_pending_phone');
+      } else {
+        // Reject second phone — one connected phone at a time.
+        console.error(`[peer] rejecting second phone ${remoteId} — one at a time`);
+        return;
+      }
+    }
+
+    if (this.peer && !this.peer.destroyed) {
       console.error(`[peer] rejecting second phone ${remoteId} — one at a time`);
       return;
     }
@@ -174,34 +188,39 @@ export class DaemonPeer {
       config: { iceServers: this.iceServers },
     });
     this.peer = peer;
+    this.armConnectionTimeout(peer, remoteId);
 
     peer.on('signal', (data) => {
-      const target = this.remoteId;
-      if (!target) return;
+      if (this.peer !== peer || this.remoteId !== remoteId) return;
       void this.signalClient
-        .sendSignal(target, data as unknown as SignalData)
+        .sendSignal(remoteId, data as unknown as SignalData)
         .catch((err) => {
           console.error(`[peer] sendSignal failed: ${err instanceof Error ? err.message : err}`);
         });
     });
 
     peer.on('connect', () => {
+      if (this.peer !== peer) return;
+      this.clearConnectionTimeout();
       this.connected = true;
       console.error('[peer] data channel connected');
     });
 
     peer.on('data', (data: unknown) => {
+      if (this.peer !== peer) return;
       this.handlePeerData(data);
     });
 
     peer.on('close', () => {
+      if (this.peer !== peer) return;
       console.error('[peer] data channel closed');
-      this.tearDownPeer('peer_closed');
+      this.tearDownPeer('peer_closed', peer);
     });
 
     peer.on('error', (err: Error) => {
+      if (this.peer !== peer) return;
       console.error(`[peer] error: ${err.message}`);
-      this.tearDownPeer('peer_error');
+      this.tearDownPeer('peer_error', peer);
     });
 
     if (initialSignal) {
@@ -213,7 +232,25 @@ export class DaemonPeer {
     }
   }
 
-  private tearDownPeer(reason: string): void {
+  private armConnectionTimeout(peer: SimplePeer.Instance, remoteId: string): void {
+    this.clearConnectionTimeout();
+    this.connectionTimeout = setTimeout(() => {
+      if (this.peer !== peer || this.remoteId !== remoteId || this.connected || peer.destroyed) return;
+      console.error(`[peer] connection timed out with phone=${remoteId}`);
+      this.tearDownPeer('connect_timeout', peer);
+    }, CONNECT_TIMEOUT_MS);
+    this.connectionTimeout.unref?.();
+  }
+
+  private clearConnectionTimeout(): void {
+    if (!this.connectionTimeout) return;
+    clearTimeout(this.connectionTimeout);
+    this.connectionTimeout = null;
+  }
+
+  private tearDownPeer(reason: string, peer?: SimplePeer.Instance): void {
+    if (peer && this.peer !== peer) return;
+    this.clearConnectionTimeout();
     this.resetTurn(reason);
     try {
       this.peer?.destroy();
