@@ -1,12 +1,12 @@
-// OpenClaw-integrated chat completions.
+// OpenClaw-integrated chat completions — uses OpenClaw CLI for all
+// LLM interaction and Discord delivery.
 //
 // Patterns from wake-thread.sh:
 //   Debug notifications:  openclaw message send --channel discord --target "channel:ID" --message "..."
 //   Full turn:          openclaw agent --session-id ... --message ... --deliver --reply-channel discord --reply-to "channel:ID"
 //
-// OpenClaw/Discord stays the preferred path. If the local OpenClaw CLI,
-// gateway, or config is unavailable, the daemon falls back to direct xAI
-// chat completions so the phone still receives reply.done and TTS.
+// The daemon never calls xAI directly. Debug activity notifications are
+// sent before/after key events (STT start/stop, TTS start/stop, etc.)
 
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -14,8 +14,6 @@ import type { ChatOptions, ChatResult } from './types.js';
 
 const execAsync = promisify(exec);
 
-const XAI_CHAT_ENDPOINT = 'https://api.x.ai/v1/chat/completions';
-const DEFAULT_MODEL = 'grok-2-latest';
 const SYSTEM_PROMPT =
   'You are Clawkie, a walky-talky voice assistant. Reply in one or two ' +
   'short spoken sentences — no markdown, no lists, no code blocks.';
@@ -76,47 +74,6 @@ async function runOpenClawTurn(opts: {
   }
 }
 
-async function runXaiChatCompletion(opts: {
-  apiKey: string;
-  userText: string;
-  signal?: AbortSignal;
-}): Promise<string> {
-  let res: Response;
-  try {
-    res = await fetch(XAI_CHAT_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${opts.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: DEFAULT_MODEL,
-        stream: false,
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: opts.userText },
-        ],
-      }),
-      signal: opts.signal,
-    });
-  } catch (err) {
-    if (opts.signal?.aborted) throw new ChatError('aborted', 'aborted');
-    const msg = err instanceof Error ? err.message : 'xai_fetch_failed';
-    throw new ChatError(msg, 'xai_fetch_failed');
-  }
-
-  if (!res.ok) {
-    throw new ChatError(`xai_http_${res.status}`, `xai_http_${res.status}`);
-  }
-
-  const data = (await res.json()) as {
-    choices?: { message?: { content?: string } }[];
-  };
-  const text = data?.choices?.[0]?.message?.content?.trim();
-  if (!text) throw new ChatError('xai_empty_reply', 'xai_empty_reply');
-  return text;
-}
-
 export interface ChatOptionsWithSession extends ChatOptions {
   sessionId: string;
   threadId?: string;
@@ -152,23 +109,13 @@ export async function runChat(userText: string, opts: ChatOptionsWithSession): P
 
     return { text: reply, source: 'xai_via_openclaw' };
   } catch (err) {
-    if (err instanceof ChatError && err.code === 'aborted') throw err;
-
-    await sendDebugNotification(opts.apiKey, opts.threadId, 'openclaw failed; using xAI fallback');
-
-    try {
-      const reply = await runXaiChatCompletion({
-        apiKey: opts.apiKey,
-        userText: trimmed,
-        signal: opts.signal,
-      });
-      await sendDebugNotification(opts.apiKey, opts.threadId, 'xAI fallback reply generated');
-      return { text: reply, source: 'xai' };
-    } catch (fallbackErr) {
-      const code = fallbackErr instanceof ChatError ? fallbackErr.code : 'xai_fetch_failed';
-      await sendDebugNotification(opts.apiKey, opts.threadId, `xAI fallback error: ${code}`);
-      throw fallbackErr;
-    }
+    // Debug: notify on error
+    await sendDebugNotification(
+      opts.apiKey,
+      opts.threadId,
+      `error: ${err instanceof Error ? err.message : 'unknown'}`,
+    );
+    throw err;
   }
 }
 

@@ -6,5 +6,5 @@ export interface ChatOptions {
 
 export interface ChatResult {
   text: string;
-  source: 'xai_via_openclaw' | 'xai';
+  source: 'xai_via_openclaw';
 }
