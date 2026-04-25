@@ -27,9 +27,11 @@ That starts:
 - the daemon
 - the Vite client on `http://localhost:5173`
 
-The daemon loads `XAI_API_KEY` from the repo-root `.env` via the root
-`dev:daemon` / `daemon` scripts, so local dev does not need a manual `export`.
-Copy `.env.example` to `.env` and fill in your key.
+The daemon reads `XAI_API_KEY` (and other config) from the process
+environment. The root `dev:daemon` / `daemon` scripts will additionally
+load a repo-root `.env` if one exists (`--env-file-if-exists=.env`),
+so local dev can either `export XAI_API_KEY=...` or copy
+`.env.example` to `.env`. A missing `.env` is not an error.
 
 ## Run the daemon directly
 

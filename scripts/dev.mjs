@@ -1,8 +1,9 @@
 // Local dev orchestrator for Clawkie-Talkie.
 //
 // Runs the two processes the stack needs:
-//   1. daemon  — peerjs host (loads XAI_API_KEY from repo-root .env via
-//                its own start script; see daemon/package.json)
+//   1. daemon  — peerjs host (reads XAI_API_KEY and other config from the
+//                process environment; the dev:daemon script also loads a
+//                repo-root .env if one is present, but it's optional)
 //   2. client  — vite dev server on http://localhost:5173
 //
 // If either process exits, the other is killed; Ctrl-C kills both.
