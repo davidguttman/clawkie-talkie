@@ -5,6 +5,8 @@ export default defineConfig({
   plugins: [react()],
   define: {
     global: 'globalThis',
+    process: { env: {} },
+    'process.env': {},
   },
   resolve: {
     alias: {
