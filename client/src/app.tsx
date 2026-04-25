@@ -12,8 +12,9 @@ import { loadSettings, saveSettings, type Settings } from './storage';
 
 type ScreenId = 'handoff' | 'driving' | 'history' | 'transcript' | 'settings' | 'error';
 
-// Keep in sync with daemon/src/index.ts :: DAEMON_PEER_ID.
-const DEFAULT_DAEMON_PEER_ID = 'ct-daemon';
+const DEV_DAEMON_PEER_ID =
+  ((import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_DAEMON_PEER_ID ||
+    '').trim() || null;
 
 const SCREEN_IDS: ScreenId[] = [
   'handoff',
@@ -48,9 +49,9 @@ function parseInitial(): {
   const errorKind: ErrorKind = (ERROR_KINDS as string[]).includes(rawKind || '')
     ? (rawKind as ErrorKind)
     : 'bad_session';
-  // No default peer ID — each session uses a UUID token. The URL must
-  // carry `?host=<uuid>` or there's no daemon to connect to.
-  const hostPeerId = params.get('host');
+  // In jump.sh dev the daemon peer ID is injected into the Vite process.
+  // Prefer that over a stale URL token after container restarts.
+  const hostPeerId = DEV_DAEMON_PEER_ID || params.get('host');
   const sessionId = params.get('session') || undefined;
   const threadId = params.get('threadId') || undefined;
   return { screen, errorKind, hostPeerId, sessionId, threadId };

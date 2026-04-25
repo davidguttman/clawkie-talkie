@@ -100,9 +100,12 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
         // silence tails. Either form would wipe the live caption, so
         // drop them entirely — only commit non-empty text on screen.
         if (!text.trim()) return;
-        setLiveText(text);
-        if ((msg as { is_final?: boolean }).is_final) {
+        const isFinal = !!(msg as { is_final?: boolean }).is_final;
+        if (isFinal) {
           accumulatedRef.current.push(text.trim());
+          setLiveText(accumulatedRef.current.join(' ').trim());
+        } else {
+          setLiveText(composeTranscript(accumulatedRef.current, text));
         }
         return;
       }
@@ -250,12 +253,6 @@ function runStartMic(
         sendBinary: rtcRef.current.sendBinary,
         addControlListener: rtcRef.current.addControlListener,
         isConnected: () => rtcRef.current.status === 'open',
-        onPartial: (text, _isFinal) => {
-          // Same drop-empty rule as the control-channel listener above —
-          // empty finals must not wipe accumulated caption text.
-          if (!text.trim()) return;
-          setLiveText(text);
-        },
         onError: (reason) => dispatch({ type: 'stt.error', reason }),
       });
       sttRef.current = handle;
@@ -335,4 +332,8 @@ export function displayedCaptionText(ctx: DrivingContext, liveText: string): str
   if (ctx.state === 'ai') return ctx.liveReplyText;
   if (ctx.state === 'thinking') return liveText || ctx.lastUserText;
   return liveText;
+}
+
+export function composeTranscript(finals: string[], current: string): string {
+  return [...finals, current.trim()].filter(Boolean).join(' ').trim();
 }

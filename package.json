@@ -7,7 +7,7 @@
   "scripts": {
     "predev": "npm install",
     "dev": "node scripts/dev.mjs --port 5173",
-    "dev:client": "vite client --force",
+    "dev:client": "VITE_DAEMON_PEER_ID=$DAEMON_PEER_ID vite client --force",
     "dev:daemon": "nodemon --watch daemon/src --ext ts,mjs,js --exec tsx -- --env-file-if-exists=.env daemon/src/index.ts --session-id dev-local --client-origin http://localhost:5173",
     "build": "tsc --noEmit -p client && vite build client",
     "typecheck": "tsc --noEmit -p client && tsc --noEmit -p daemon",

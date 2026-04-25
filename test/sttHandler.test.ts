@@ -1,9 +1,9 @@
 // Pure-function tests for the xAI STT event handler. The xAI streaming
 // API has been observed shipping `transcript.partial { is_final: true }`
-// with empty text, and `transcript.done` with empty text even when real
-// words were committed in earlier finals. Both cases used to surface as
-// "NO SPEECH DETECTED" on the phone. The handler now drops empty
-// partials and falls back to the accumulated finals on done.
+// with empty text, and `transcript.done` with empty text or only the last
+// segment even when real words were committed in earlier finals. Both
+// cases used to wipe prior text on the phone. The handler now drops empty
+// partials and preserves the accumulated finals on done.
 
 import { describe, it, expect, vi } from 'vitest';
 import {
@@ -61,7 +61,19 @@ describe('handleSttEvent', () => {
     expect(cb.onDone).toHaveBeenCalledWith('hello there friend');
   });
 
-  it('prefers transcript.done text when non-empty', () => {
+  it('keeps accumulated finals when transcript.done only contains the last segment', () => {
+    const cb = makeCb();
+    const s = createSttHandlerState();
+    handleSttEvent(s, { type: 'transcript.partial', text: 'Okay, how we doing?', is_final: true }, cb);
+    handleSttEvent(s, { type: 'transcript.partial', text: 'I really hope', is_final: true }, cb);
+    handleSttEvent(s, { type: 'transcript.partial', text: 'Oh my fucking god', is_final: true }, cb);
+    handleSttEvent(s, { type: 'transcript.done', text: 'Oh my fucking god' }, cb);
+    expect(cb.onDone).toHaveBeenCalledWith(
+      'Okay, how we doing? I really hope Oh my fucking god',
+    );
+  });
+
+  it('prefers transcript.done text when it is longer than accumulated finals', () => {
     const cb = makeCb();
     const s = createSttHandlerState();
     handleSttEvent(s, { type: 'transcript.partial', text: 'hi', is_final: true }, cb);
