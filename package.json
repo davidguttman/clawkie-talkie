@@ -7,14 +7,12 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:client": "vite client",
-    "dev:daemon": "tsx --env-file=.env daemon/src/index.ts --session-id dev-local --client-origin http://localhost:5173",
-    "dev:signal": "tsx server/src/index.ts",
+    "dev:daemon": "nodemon --watch daemon/src --ext ts,mjs,js --exec tsx -- --env-file=.env daemon/src/index.ts --session-id dev-local --client-origin http://localhost:5173",
     "build": "tsc --noEmit -p client && vite build client",
-    "typecheck": "tsc --noEmit -p client && tsc --noEmit -p daemon && tsc --noEmit -p server",
+    "typecheck": "tsc --noEmit -p client && tsc --noEmit -p daemon",
     "test": "vitest run",
     "test:watch": "vitest",
-    "daemon": "tsx --env-file=.env daemon/src/index.ts",
-    "signal": "tsx server/src/index.ts"
+    "daemon": "tsx --env-file=.env daemon/src/index.ts"
   },
   "dependencies": {
     "@roamhq/wrtc": "^0.8.0",
@@ -30,6 +28,7 @@
     "@types/simple-peer": "^9.11.8",
     "@types/ws": "^8.5.12",
     "@vitejs/plugin-react": "^4.3.3",
+    "nodemon": "^3.1.14",
     "tsx": "^4.19.1",
     "typescript": "^5.6.3",
     "vite": "^5.4.10",

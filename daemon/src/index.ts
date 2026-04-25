@@ -7,9 +7,9 @@
 //   XAI_API_KEY=... npm run daemon -- --session-id <sid> \
 //     --client-origin <url>
 //
-// The daemon subscribes to a rambly-style signaling server (SSE +
-// HTTP POST) under a UUID token generated each session (or overridden
-// via DAEMON_PEER_ID env). The phone discovers the daemon via
+// The daemon subscribes to the hosted rambly-style signaling broker
+// under a UUID token generated each session (or overridden via
+// DAEMON_PEER_ID env). The phone discovers the daemon via
 // `?host=<uuid>` and joins the same room. simple-peer + @roamhq/wrtc
 // drive the WebRTC DataChannel; the daemon owns the full turn:
 // xAI STT on inbound mic PCM, xAI chat on the final transcript, xAI
@@ -30,6 +30,7 @@ async function main(): Promise<void> {
     peerId: cli.peerId,
     sessionId: cli.sessionId,
     threadId: cli.threadId,
+    signalServer: cli.signalServer,
     onReady: (peerId) => {
       const joinUrl = cli.clientOrigin.replace(/\/$/, '') + '/?host=' + peerId;
       console.log(`Session:  ${cli.sessionId}`);
@@ -60,6 +61,7 @@ function parseCli(): CliOptions {
     options: {
       'session-id': { type: 'string' },
       'client-origin': { type: 'string' },
+      'signal-server': { type: 'string' },
       'stt-language': { type: 'string' },
       'thread-id': { type: 'string' },
     },
@@ -81,6 +83,7 @@ function parseCli(): CliOptions {
       values['client-origin'] ||
       process.env.CT_CLIENT_ORIGIN ||
       'http://localhost:5173',
+    signalServer: values['signal-server'] || process.env.SIGNAL_SERVER,
     sttLanguage: values['stt-language'] || process.env.CT_STT_LANGUAGE,
     xaiApiKey,
     peerId,
@@ -91,6 +94,7 @@ interface CliOptions {
   sessionId: string;
   threadId?: string;
   clientOrigin: string;
+  signalServer?: string;
   xaiApiKey: string;
   sttLanguage?: string;
   peerId: string;

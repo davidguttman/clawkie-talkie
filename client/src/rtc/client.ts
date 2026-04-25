@@ -28,11 +28,13 @@ export interface RtcClientOptions {
 }
 
 const DEFAULT_SIGNAL_SERVER =
-  ((import.meta as unknown as { env?: { VITE_SIGNAL_SERVER?: string } }).env?.VITE_SIGNAL_SERVER) ??
-  'https://api.rambly.app';
+  typeof import.meta.env.VITE_SIGNAL_SERVER === 'string' && import.meta.env.VITE_SIGNAL_SERVER.length > 0
+    ? import.meta.env.VITE_SIGNAL_SERVER
+    : 'https://api.rambly.app';
 
 const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'turn:api.rambly.app:3478', username: 'rambly', credential: 'rambly' },
 ];
 
 function randomPeerId(): string {

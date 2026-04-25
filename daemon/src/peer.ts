@@ -28,6 +28,7 @@ const DEFAULT_SIGNAL_SERVER =
 
 const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'turn:api.rambly.app:3478', username: 'rambly', credential: 'rambly' },
 ];
 
 export interface DaemonPeerOptions {
