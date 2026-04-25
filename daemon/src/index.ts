@@ -18,9 +18,9 @@
 
 import { parseArgs } from 'node:util';
 import { DaemonPeer } from './peer.js';
-import { generateUuid } from './uuid.js';
 
-// Peer ID is now generated per session (see parseCli).
+const DEFAULT_DAEMON_PEER_ID = 'ct-daemon';
+
 async function main(): Promise<void> {
   const cli = parseCli();
 
@@ -73,8 +73,9 @@ function parseCli(): CliOptions {
     process.exit(2);
   }
 
-  // Generate UUID for this session, or allow override via env for dev/testing
-  const peerId = process.env.DAEMON_PEER_ID || generateUuid();
+  // Local-only unreleased app: keep the signaling room stable across
+  // jump.sh restarts so existing phones do not get stranded on stale UUIDs.
+  const peerId = DEFAULT_DAEMON_PEER_ID;
 
   return {
     sessionId: values['session-id'] || 'dev-local',
