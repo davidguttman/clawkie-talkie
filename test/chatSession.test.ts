@@ -17,6 +17,28 @@ describe('runChat OpenClaw CLI integration', () => {
     execMock.mockReset();
   });
 
+  it('posts the final transcript as a Discord quote before running the agent', async () => {
+    execMock.mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+
+    await runChat('Hello\nworld', {
+      apiKey: 'test-key',
+      sessionId: 'session-1',
+      threadId: 'thread-1',
+      deliver: true,
+    });
+
+    const transcriptCommand = String(execMock.mock.calls[0]?.[0]);
+    expect(transcriptCommand).toContain('openclaw "message" "send"');
+    expect(transcriptCommand).toContain('"--channel" "discord"');
+    expect(transcriptCommand).toContain('"--target" "channel:thread-1"');
+    expect(transcriptCommand).toContain(`"--message" ${JSON.stringify('> Hello\n> world')}`);
+
+    const agentCallIndex = execMock.mock.calls.findIndex(([cmd]) =>
+      String(cmd).includes('openclaw "agent"'),
+    );
+    expect(agentCallIndex).toBeGreaterThan(0);
+  });
+
   it('targets the Discord reply thread when threadId is provided', async () => {
     execMock.mockResolvedValue({ stdout: 'ok\n', stderr: '' });
 

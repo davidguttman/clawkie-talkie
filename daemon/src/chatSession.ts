@@ -39,6 +39,43 @@ async function sendDebugNotification(
   }
 }
 
+async function sendTranscriptMessage(
+  apiKey: string,
+  threadId: string | undefined,
+  transcript: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (!threadId) {
+    console.error('[openclaw] transcript_post_skipped: missing_thread_id');
+    return;
+  }
+  const args = [
+    'message', 'send',
+    '--channel', 'discord',
+    '--target', `channel:${threadId}`,
+    '--message', quoteTranscript(transcript),
+  ];
+  try {
+    await execAsync(`openclaw ${args.map(a => JSON.stringify(a)).join(' ')}`, {
+      env: openClawEnv(apiKey),
+      signal,
+    });
+  } catch (err) {
+    if (signal?.aborted) throw new ChatError('aborted', 'aborted');
+    const msg = err instanceof Error ? err.message : 'openclaw_transcript_post_failed';
+    throw new ChatError(msg, classifyOpenClawError(err));
+  }
+}
+
+function quoteTranscript(transcript: string): string {
+  return transcript
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map((line) => `> ${line}`)
+    .join('\n');
+}
+
 // Helper: post user turn as quoted block + get assistant reply
 async function runOpenClawTurn(opts: {
   apiKey: string;
@@ -151,12 +188,7 @@ export async function runChat(userText: string, opts: ChatOptionsWithSession): P
   const trimmed = userText.trim();
   if (!trimmed) throw new ChatError('empty_transcript', 'empty_transcript');
 
-  // Debug: notify that we received the user's speech
-  await sendDebugNotification(
-    opts.apiKey,
-    opts.threadId,
-    `heard: "${trimmed.slice(0, 80)}${trimmed.length > 80 ? '...' : ''}"`,
-  );
+  await sendTranscriptMessage(opts.apiKey, opts.threadId, trimmed, opts.signal);
 
   try {
     const reply = await runOpenClawTurn({
