@@ -14,6 +14,14 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      globalThis.__clawkieProcess = globalThis.process || { env: {} };
+      globalThis.__clawkieProcess.env = globalThis.__clawkieProcess.env || {};
+      globalThis.__clawkieProcess.nextTick =
+        globalThis.__clawkieProcess.nextTick ||
+        ((callback, ...args) => queueMicrotask(() => callback(...args)));
+      globalThis.process = globalThis.__clawkieProcess;
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [react()],
   define: {
     global: 'globalThis',
-    process: { env: {} },
+    process: 'globalThis.__clawkieProcess',
     'process.env': {},
   },
   resolve: {
