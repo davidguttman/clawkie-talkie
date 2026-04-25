@@ -12,6 +12,9 @@ export default defineConfig({
       util: 'util/',
     },
   },
+  optimizeDeps: {
+    include: ['events', 'util'],
+  },
   server: {
     host: true,
     allowedHosts: true,
