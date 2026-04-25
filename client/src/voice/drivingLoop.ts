@@ -116,7 +116,7 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
           return;
         }
         accumulatedRef.current = [];
-        setLiveText('');
+        setLiveText(finalText);
         dispatch({ type: 'stt.done', text: finalText });
         return;
       }
@@ -218,8 +218,7 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
         ? { who: 'user', text: ctx.lastUserText }
         : null;
 
-  const liveCaption =
-    ctx.state === 'ai' ? ctx.liveReplyText : ctx.state === 'thinking' ? '' : liveText;
+  const liveCaption = displayedCaptionText(ctx, liveText);
 
   return {
     state: ctx.state,
@@ -330,4 +329,10 @@ function runCancelReply(
   const tts = ttsRef.current;
   ttsRef.current = null;
   tts?.stop();
+}
+
+export function displayedCaptionText(ctx: DrivingContext, liveText: string): string {
+  if (ctx.state === 'ai') return ctx.liveReplyText;
+  if (ctx.state === 'thinking') return liveText || ctx.lastUserText;
+  return liveText;
 }

@@ -8,6 +8,7 @@ import {
   reduce,
   type DrivingContext,
 } from '../client/src/voice/drivingReducer';
+import { displayedCaptionText } from '../client/src/voice/drivingLoop';
 
 const idle: DrivingContext = { ...initialContext };
 const recording: DrivingContext = { ...initialContext, state: 'recording' };
@@ -135,5 +136,31 @@ describe('full happy-path sequence', () => {
     expect(ctx.state).toBe('idle');
     expect(ctx.lastReplyText).toBe('hello');
     expect(ctx.lastUserText).toBe('hi');
+  });
+});
+
+describe('displayedCaptionText', () => {
+  it('keeps the live transcript visible while thinking before final STT arrives', () => {
+    expect(displayedCaptionText({ ...initialContext, state: 'thinking' }, 'Okay, how we doing?')).toBe(
+      'Okay, how we doing?',
+    );
+  });
+
+  it('keeps the final user transcript visible while waiting for the AI reply', () => {
+    expect(
+      displayedCaptionText(
+        { ...initialContext, state: 'thinking', lastUserText: 'Oh my fucking god' },
+        '',
+      ),
+    ).toBe('Oh my fucking god');
+  });
+
+  it('switches to the AI reply text only once the AI state starts', () => {
+    expect(
+      displayedCaptionText(
+        { ...initialContext, state: 'ai', lastUserText: 'user words', liveReplyText: 'ai words' },
+        'user words',
+      ),
+    ).toBe('ai words');
   });
 });
