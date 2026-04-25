@@ -6,6 +6,12 @@ export default defineConfig({
   define: {
     global: 'globalThis',
   },
+  resolve: {
+    alias: {
+      events: 'events/',
+      util: 'util/',
+    },
+  },
   server: {
     host: true,
     allowedHosts: true,
