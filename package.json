@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Walkie-talkie voice surface for an OpenClaw session",
   "scripts": {
-    "dev": "node scripts/dev.mjs",
+    "predev": "npm install",
+    "dev": "node scripts/dev.mjs --port 5173",
     "dev:client": "vite client",
     "dev:daemon": "nodemon --watch daemon/src --ext ts,mjs,js --exec tsx -- --env-file=.env daemon/src/index.ts --session-id dev-local --client-origin http://localhost:5173",
     "build": "tsc --noEmit -p client && vite build client",
