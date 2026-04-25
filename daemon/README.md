@@ -54,10 +54,10 @@ The join URL is a handoff link like:
 
 ## Signaling
 
-Daemon and browser share a rambly-style signaling server. Default is
+Daemon and browser share the hosted rambly-style signaling broker. Default is
 `https://api.rambly.app`; override with `SIGNAL_SERVER` (daemon) and
-`VITE_SIGNAL_SERVER` (client). For fully-local dev, run `npm run signal`
-(starts `server/src/index.ts` on `:8787`) and point both vars at it.
+`VITE_SIGNAL_SERVER` (client). This repo intentionally does not include or
+start a local signaling server.
 
 The signaling server only carries SDP/ICE — application traffic flows over
 the WebRTC DataChannel directly between phone and daemon.
@@ -90,4 +90,4 @@ Daemon → phone:
 ## Known gaps
 
 - one daemon, one phone — a second phone is rejected while one session is open
-- no TURN server yet
+- one shared TURN server, matching the rambly CLI client default
