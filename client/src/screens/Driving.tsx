@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { HIFI, type AccentKey } from '../tokens';
 import { ButtonAura, LiveWave } from '../components/Phone';
 import { useDrivingLoop, type DrivingState } from '../voice/drivingLoop';
@@ -146,9 +146,8 @@ export function DrivingScreen({
         maxWidth: '100%',
       }}
     >
-      {/* header — compact drops the state pill to guarantee the gear fits
-          on narrow phones. State is still conveyed in the caption panel
-          below (label, color, caret). Desktop keeps the full pill layout. */}
+      {/* header — full hi-fi layout in both compact and desktop. Status
+          pill is always visible so the user can read state at a glance. */}
       <div
         style={{
           display: 'flex',
@@ -173,43 +172,39 @@ export function DrivingScreen({
             whiteSpace: 'nowrap',
           }}
         >
-          {compact ? 'CLWK · f3c1' : 'CLWK · f3c1 · discord'}
+          CLWK · f3c1 · discord
         </div>
-        {!compact && (
-          <div
+        <div
+          style={{
+            display: 'inline-flex',
+            gap: 5,
+            alignItems: 'center',
+            padding: '3px 9px',
+            borderRadius: 20,
+            border: `1px solid ${stateColor}55`,
+            background: `${stateColor}11`,
+            fontFamily: HIFI.fonts.mono,
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: 1.2,
+            color: stateColor,
+            whiteSpace: 'nowrap',
+            flexShrink: 0,
+          }}
+        >
+          <span
             style={{
-              display: 'inline-flex',
-              gap: 5,
-              alignItems: 'center',
-              padding: '3px 9px',
-              borderRadius: 20,
-              border: `1px solid ${stateColor}55`,
-              background: `${stateColor}11`,
-              fontFamily: HIFI.fonts.mono,
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: 1.2,
-              color: stateColor,
-              whiteSpace: 'nowrap',
-              flexShrink: 0,
+              width: 6,
+              height: 6,
+              borderRadius: '50%',
+              background: stateColor,
+              boxShadow: `0 0 8px ${stateColor}`,
+              animation:
+                isRec || isAI || isThink ? 'pulseDot 1.2s ease-in-out infinite' : 'none',
             }}
-          >
-            <span
-              style={{
-                width: 6,
-                height: 6,
-                borderRadius: '50%',
-                background: stateColor,
-                boxShadow: `0 0 8px ${stateColor}`,
-                animation:
-                  isRec || isAI || isThink ? 'pulseDot 1.2s ease-in-out infinite' : 'none',
-              }}
-            />
-            {statePill}
-          </div>
-        )}
-        {/* Desktop keeps the gear in the header. On compact, settings moves
-            to the footer action row where it cannot be clipped. */}
+          />
+          {statePill}
+        </div>
         {!compact && onSettings && (
           <button
             onClick={onSettings}
@@ -239,46 +234,33 @@ export function DrivingScreen({
         )}
       </div>
 
-      {/* caption + waveform panel */}
+      {/* caption — direct stack, no card wrapper. */}
+      <Caption
+        caption={caption}
+        baseFont={baseFont}
+        error={error}
+        daemonConnected={daemonConnected}
+        hasRtcClient={rtc.hasClient}
+        rtcStatus={rtc.status}
+        compact={compact}
+      />
+      {/* divider + waveform sit below the transcript */}
       <div
         style={{
-          border: `1px solid ${HIFI.stroke}`,
-          borderRadius: 16,
-          background: HIFI.surface,
-          padding: compact ? '10px 12px 8px' : '14px 16px 10px',
+          marginTop: 12,
+          paddingTop: 12,
+          borderTop: `1px solid ${HIFI.stroke}`,
           display: 'flex',
-          flexDirection: 'column',
+          justifyContent: 'center',
           minWidth: 0,
-          maxWidth: '100%',
-          boxSizing: 'border-box',
         }}
       >
-        <Caption
-          caption={caption}
-          baseFont={baseFont}
-          error={error}
-          daemonConnected={daemonConnected}
-          hasRtcClient={rtc.hasClient}
-          rtcStatus={rtc.status}
-          compact={compact}
+        <LiveWave
+          intensities={waveIntensities}
+          color={stateColor}
+          width="100%"
+          height={34}
         />
-        <div
-          style={{
-            marginTop: 10,
-            paddingTop: 10,
-            borderTop: `1px solid ${HIFI.stroke}`,
-            display: 'flex',
-            justifyContent: 'center',
-            minWidth: 0,
-          }}
-        >
-          <LiveWave
-            intensities={waveIntensities}
-            color={stateColor}
-            width="100%"
-            height={34}
-          />
-        </div>
       </div>
 
       {/* BIG BUTTON */}
@@ -303,14 +285,12 @@ export function DrivingScreen({
         />
       </div>
 
-      {/* footer — on compact, settings lives here (stacked full-width row)
-          because the header icon wasn't surviving real-device rendering.
-          Desktop keeps the 2-column REPLAY/HISTORY layout since it has the
-          gear in the header. */}
+      {/* footer — REPLAY and HISTORY side-by-side. Settings (compact) is
+          intentionally not duplicated here; gear lives in header on desktop. */}
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: compact ? '1fr' : '1fr 1fr',
+          gridTemplateColumns: '1fr 1fr',
           gap: 8,
           marginTop: 8,
           minWidth: 0,
@@ -318,14 +298,6 @@ export function DrivingScreen({
       >
         <FooterButton icon="↺" label="REPLAY" onClick={onReplay} compact={compact} />
         <FooterButton icon="≡" label="HISTORY" onClick={onHistory} compact={compact} />
-        {compact && onSettings && (
-          <FooterButton
-            icon="⚙"
-            label="SETTINGS"
-            onClick={onSettings}
-            compact={compact}
-          />
-        )}
       </div>
     </div>
   );
@@ -396,7 +368,7 @@ function Caption({
   daemonConnected,
   hasRtcClient,
   rtcStatus,
-  compact: _compact = false,
+  compact = false,
 }: {
   caption: CaptionData;
   baseFont: string;
@@ -418,8 +390,18 @@ function Caption({
     : error
       ? errorLabelFor(error)
       : null;
+
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [caption.text]);
+
+  const transcriptMaxHeight = compact ? 128 : 150;
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', minHeight: 96 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
       <div
         style={{
           fontFamily: HIFI.fonts.mono,
@@ -448,6 +430,8 @@ function Caption({
         <span style={{ flex: 1 }}>{caption.label}</span>
       </div>
       <div
+        ref={scrollRef}
+        className="transcript-scroll"
         style={{
           fontSize: 16,
           lineHeight: 1.5,
@@ -455,6 +439,11 @@ function Caption({
           fontWeight: 400,
           fontFamily: baseFont,
           wordBreak: 'break-word',
+          maxHeight: transcriptMaxHeight,
+          minHeight: compact ? 72 : 96,
+          overflowY: 'auto',
+          paddingRight: 10,
+          borderRight: `1px solid ${HIFI.stroke}`,
         }}
       >
         {caption.text}

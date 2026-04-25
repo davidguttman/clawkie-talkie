@@ -80,6 +80,10 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
 
   const sttRef = useRef<STTHandle | null>(null);
   const ttsRef = useRef<TTSHandle | null>(null);
+  // Accumulator for non-empty final partials. Used as fallback for
+  // `stt.done` when xAI ships an empty final transcript despite having
+  // committed real words during the turn.
+  const accumulatedRef = useRef<string[]>([]);
   const rtcRef = useRef(rtc);
   useEffect(() => {
     rtcRef.current = rtc;
@@ -92,21 +96,28 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     const detach = rtc.addControlListener((msg) => {
       if (msg.t === 'stt.partial') {
         const text = typeof msg.text === 'string' ? msg.text : '';
-        const isFinal = !!(msg as { is_final?: boolean }).is_final;
-        // xAI can emit empty partials during silence tails; ignore those
-        // so they don't wipe the on-screen text mid-utterance.
-        if (!text && !isFinal) return;
+        // xAI can emit empty partials (and even empty *finals*) during
+        // silence tails. Either form would wipe the live caption, so
+        // drop them entirely — only commit non-empty text on screen.
+        if (!text.trim()) return;
         setLiveText(text);
+        if ((msg as { is_final?: boolean }).is_final) {
+          accumulatedRef.current.push(text.trim());
+        }
         return;
       }
       if (msg.t === 'stt.done') {
         const text = typeof msg.text === 'string' ? msg.text.trim() : '';
-        if (!text) {
+        const fallback = accumulatedRef.current.join(' ').trim();
+        const finalText = text || fallback;
+        if (!finalText) {
+          accumulatedRef.current = [];
           dispatch({ type: 'stt.error', reason: 'empty_transcript' });
           return;
         }
+        accumulatedRef.current = [];
         setLiveText('');
-        dispatch({ type: 'stt.done', text });
+        dispatch({ type: 'stt.done', text: finalText });
         return;
       }
       if (msg.t === 'stt.error') {
@@ -190,6 +201,8 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
         dispatch({ type: 'stt.error', reason: 'daemon_not_connected' });
         return;
       }
+      accumulatedRef.current = [];
+      setLiveText('');
     }
     dispatch({ type: 'tap' });
   }, [ctx.state]);
@@ -238,8 +251,10 @@ function runStartMic(
         sendBinary: rtcRef.current.sendBinary,
         addControlListener: rtcRef.current.addControlListener,
         isConnected: () => rtcRef.current.status === 'open',
-        onPartial: (text, isFinal) => {
-          if (!text && !isFinal) return;
+        onPartial: (text, _isFinal) => {
+          // Same drop-empty rule as the control-channel listener above —
+          // empty finals must not wipe accumulated caption text.
+          if (!text.trim()) return;
           setLiveText(text);
         },
         onError: (reason) => dispatch({ type: 'stt.error', reason }),

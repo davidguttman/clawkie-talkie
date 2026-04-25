@@ -92,6 +92,26 @@ body {
   scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
 }
 
+/* Transcript scroll area in driving screen — force a visible thin
+   scrollbar even when an ancestor uses .mobile-scroll to hide them. */
+.transcript-scroll {
+  scrollbar-width: thin !important;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent !important;
+  -ms-overflow-style: auto !important;
+}
+.transcript-scroll::-webkit-scrollbar {
+  display: block !important;
+  width: 4px !important;
+  height: 4px !important;
+}
+.transcript-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22) !important;
+  border-radius: 2px !important;
+}
+.transcript-scroll::-webkit-scrollbar-track {
+  background: transparent !important;
+}
+
 @keyframes pulseDot {
   0%,
   100% {
