@@ -46,12 +46,72 @@ interface SttEventError {
   message?: string;
 }
 
-type SttServerEvent = SttEventCreated | SttEventPartial | SttEventDone | SttEventError;
+export type SttServerEvent =
+  | SttEventCreated
+  | SttEventPartial
+  | SttEventDone
+  | SttEventError;
+
+// Pure event-dispatch helper. Accumulates committed segments from
+// `transcript.partial { is_final: true }` so we can recover when xAI's
+// own `transcript.done` arrives with empty text — which it does in
+// practice on short utterances even when the partials carried words.
+// Empty partials are dropped entirely so they can't wipe live caption
+// state on the phone.
+export interface SttHandlerCallbacks {
+  onReady: () => void;
+  onPartial: (text: string, isFinal: boolean) => void;
+  onDone: (text: string) => void;
+  onError: (message: string) => void;
+}
+
+export interface SttHandlerState {
+  readyFired: boolean;
+  doneFired: boolean;
+  finals: string[];
+}
+
+export function createSttHandlerState(): SttHandlerState {
+  return { readyFired: false, doneFired: false, finals: [] };
+}
+
+export function handleSttEvent(
+  state: SttHandlerState,
+  msg: SttServerEvent,
+  cb: SttHandlerCallbacks,
+): void {
+  switch (msg.type) {
+    case 'transcript.created':
+      if (!state.readyFired) {
+        state.readyFired = true;
+        cb.onReady();
+      }
+      return;
+    case 'transcript.partial': {
+      const text = (msg.text || '').trim();
+      const isFinal = !!msg.is_final;
+      if (!text) return; // drop empty partials/finals — they wipe UI
+      if (isFinal) state.finals.push(text);
+      cb.onPartial(text, isFinal);
+      return;
+    }
+    case 'transcript.done': {
+      if (state.doneFired) return;
+      state.doneFired = true;
+      const doneText = (msg.text || '').trim();
+      const fallback = state.finals.join(' ').trim();
+      cb.onDone(doneText || fallback);
+      return;
+    }
+    case 'error':
+      cb.onError(msg.message || 'xai_stt_error');
+      return;
+  }
+}
 
 export class XaiSttSession {
   private readonly ws: WebSocket;
-  private readyFired = false;
-  private doneFired = false;
+  private readonly handlerState = createSttHandlerState();
   private closed = false;
 
   private audioBytesIn = 0;
@@ -93,33 +153,24 @@ export class XaiSttSession {
       switch (msg.type) {
         case 'transcript.created':
           console.error('[stt] xAI transcript.created');
-          if (!this.readyFired) {
-            this.readyFired = true;
-            cb.onReady();
-          }
-          return;
-        case 'transcript.partial': {
-          const text = msg.text || '';
-          const flag = msg.is_final ? 'FINAL' : 'partial';
-          console.error(`[stt] xAI transcript.${flag}: ${JSON.stringify(text)}`);
-          cb.onPartial(text, !!msg.is_final);
-          return;
-        }
+          break;
+        case 'transcript.partial':
+          console.error(
+            `[stt] xAI transcript.${msg.is_final ? 'FINAL' : 'partial'}: ${JSON.stringify(msg.text || '')}`,
+          );
+          break;
         case 'transcript.done':
           console.error(
             `[stt] xAI transcript.done: ${JSON.stringify(msg.text || '')} ` +
-              `(forwarded ${this.audioBytesIn} bytes in ${this.audioFrameCount} frames)`,
+              `(forwarded ${this.audioBytesIn} bytes in ${this.audioFrameCount} frames, ` +
+              `accumulated ${this.handlerState.finals.length} final segments)`,
           );
-          if (!this.doneFired) {
-            this.doneFired = true;
-            cb.onDone((msg.text || '').trim());
-          }
-          return;
+          break;
         case 'error':
           console.error(`[stt] xAI error: ${msg.message || '(none)'}`);
-          cb.onError(msg.message || 'xai_stt_error');
-          return;
+          break;
       }
+      handleSttEvent(this.handlerState, msg, cb);
     });
 
     this.ws.on('close', (code, reason) => {
@@ -127,7 +178,7 @@ export class XaiSttSession {
       console.error(`[stt] xAI WS close code=${code} reason=${r}`);
       if (!this.closed) {
         this.closed = true;
-        if (!this.doneFired && !this.readyFired) {
+        if (!this.handlerState.doneFired && !this.handlerState.readyFired) {
           cb.onError(`xai_stt_ws_closed_${code}`);
         }
         cb.onClosed();
