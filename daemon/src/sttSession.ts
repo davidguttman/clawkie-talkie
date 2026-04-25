@@ -54,10 +54,10 @@ export type SttServerEvent =
 
 // Pure event-dispatch helper. Accumulates committed segments from
 // `transcript.partial { is_final: true }` so we can recover when xAI's
-// own `transcript.done` arrives with empty text — which it does in
-// practice on short utterances even when the partials carried words.
-// Empty partials are dropped entirely so they can't wipe live caption
-// state on the phone.
+// own `transcript.done` arrives with empty text or only the last
+// segment — both happen in practice even when earlier finals carried
+// real words. Empty partials are dropped entirely so they can't wipe live
+// caption state on the phone.
 export interface SttHandlerCallbacks {
   onReady: () => void;
   onPartial: (text: string, isFinal: boolean) => void;
@@ -99,8 +99,8 @@ export function handleSttEvent(
       if (state.doneFired) return;
       state.doneFired = true;
       const doneText = (msg.text || '').trim();
-      const fallback = state.finals.join(' ').trim();
-      cb.onDone(doneText || fallback);
+      const accumulatedText = state.finals.join(' ').trim();
+      cb.onDone(accumulatedText.length >= doneText.length ? accumulatedText : doneText);
       return;
     }
     case 'error':

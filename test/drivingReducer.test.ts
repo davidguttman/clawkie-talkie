@@ -8,7 +8,7 @@ import {
   reduce,
   type DrivingContext,
 } from '../client/src/voice/drivingReducer';
-import { displayedCaptionText } from '../client/src/voice/drivingLoop';
+import { composeTranscript, displayedCaptionText } from '../client/src/voice/drivingLoop';
 
 const idle: DrivingContext = { ...initialContext };
 const recording: DrivingContext = { ...initialContext, state: 'recording' };
@@ -162,5 +162,13 @@ describe('displayedCaptionText', () => {
         'user words',
       ),
     ).toBe('ai words');
+  });
+});
+
+describe('composeTranscript', () => {
+  it('appends the current partial to committed final segments instead of replacing them', () => {
+    expect(composeTranscript(['Okay, how we doing?', 'I really hope'], 'Oh my fucking god')).toBe(
+      'Okay, how we doing? I really hope Oh my fucking god',
+    );
   });
 });
