@@ -5,7 +5,7 @@
 // two agree on the serialized shapes.
 
 export type PhoneToDaemon =
-  | { t: 'stt.start' }
+  | { t: 'stt.start'; sessionId?: string; threadId?: string }
   | { t: 'stt.audio.done' }
   | { t: 'stt.cancel' }
   | { t: 'reply.cancel' };
@@ -24,7 +24,11 @@ export type DaemonToPhone =
   | { t: 'tts.error'; message: string };
 
 export const phoneToDaemon = {
-  sttStart: (): PhoneToDaemon => ({ t: 'stt.start' }),
+  sttStart: (sessionId?: string, threadId?: string): PhoneToDaemon => ({
+    t: 'stt.start',
+    ...(sessionId ? { sessionId } : {}),
+    ...(threadId ? { threadId } : {}),
+  }),
   sttAudioDone: (): PhoneToDaemon => ({ t: 'stt.audio.done' }),
   sttCancel: (): PhoneToDaemon => ({ t: 'stt.cancel' }),
   replyCancel: (): PhoneToDaemon => ({ t: 'reply.cancel' }),

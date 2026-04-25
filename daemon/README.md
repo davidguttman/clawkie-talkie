@@ -36,13 +36,17 @@ so local dev can either `export XAI_API_KEY=...` or copy
 ## Run the daemon directly
 
     npm run daemon -- \
-      --session-id agent:main:discord:<channelId>:<threadId> \
+      --session-id <openclaw-session-id> \
+      --thread-id <discord-channel-or-thread-id> \
       --client-origin https://clawkie-talkie.davidguttman.jump.sh
 
 Optional flags:
 
-- `--peer-id <id>`
 - `--stt-language <lang>`
+
+`DAEMON_PEER_ID` can be set as a local development override. When it is not
+set, the daemon generates a fresh UUID peer id and prints a join URL containing
+`?host=<peerId>`.
 
 On startup the daemon prints:
 
@@ -68,7 +72,7 @@ the WebRTC DataChannel directly between phone and daemon.
 
 Phone → daemon:
 
-- `{"t":"stt.start"}` — open a fresh xAI STT upstream
+- `{"t":"stt.start","sessionId":"…","threadId":"…"}` — open a fresh xAI STT upstream and bind the turn to the OpenClaw/Discord handoff target
 - binary PCM16LE mono @ 16 kHz — forwarded directly to xAI
 - `{"t":"stt.audio.done"}` — end capture and wait for final transcript
 - `{"t":"stt.cancel"}` — abort session

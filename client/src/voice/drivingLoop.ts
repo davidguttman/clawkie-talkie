@@ -49,6 +49,8 @@ export interface DrivingLoop {
 export interface DrivingLoopOptions {
   ttsRate?: number;
   sttLanguage?: string;
+  sessionId?: string;
+  threadId?: string;
   rtc: {
     status: RtcStatus;
     hasClient: boolean;
@@ -155,7 +157,18 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
   useEffect(() => {
     if (!side.length) return;
     for (const s of side) {
-      if (s.kind === 'startMic') runStartMic(rtcRef, sttRef, opts.sttLanguage, setLiveText, dispatch);
+      if (s.kind === 'startMic') {
+        runStartMic(
+          rtcRef,
+          sttRef,
+          {
+            sessionId: opts.sessionId,
+            threadId: opts.threadId,
+          },
+          setLiveText,
+          dispatch,
+        );
+      }
       else if (s.kind === 'stopMic') runStopMic(sttRef);
       else if (s.kind === 'cancelMic') runCancelMic(sttRef);
       else if (s.kind === 'armTts') runArmTts(rtcRef, ttsRef, ttsRate, dispatch);
@@ -242,7 +255,7 @@ type Dispatch = (e: DrivingEvent) => void;
 function runStartMic(
   rtcRef: React.MutableRefObject<DrivingLoopOptions['rtc']>,
   sttRef: React.MutableRefObject<STTHandle | null>,
-  _lang: string | undefined,
+  handoff: { sessionId?: string; threadId?: string },
   setLiveText: (t: string) => void,
   dispatch: Dispatch,
 ): void {
@@ -253,6 +266,8 @@ function runStartMic(
         sendBinary: rtcRef.current.sendBinary,
         addControlListener: rtcRef.current.addControlListener,
         isConnected: () => rtcRef.current.status === 'open',
+        sessionId: handoff.sessionId,
+        threadId: handoff.threadId,
         onError: (reason) => dispatch({ type: 'stt.error', reason }),
       });
       sttRef.current = handle;

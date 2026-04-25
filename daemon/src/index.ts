@@ -18,8 +18,7 @@
 
 import { parseArgs } from 'node:util';
 import { DaemonPeer } from './peer.js';
-
-const DEFAULT_DAEMON_PEER_ID = 'ct-daemon';
+import { resolveDaemonPeerId } from './peerId.js';
 
 async function main(): Promise<void> {
   const cli = parseCli();
@@ -73,10 +72,6 @@ function parseCli(): CliOptions {
     process.exit(2);
   }
 
-  // Local-only unreleased app: keep the signaling room stable across
-  // jump.sh restarts so existing phones do not get stranded on stale UUIDs.
-  const peerId = DEFAULT_DAEMON_PEER_ID;
-
   return {
     sessionId: values['session-id'] || 'dev-local',
     threadId: values['thread-id'] || process.env.CT_THREAD_ID,
@@ -87,7 +82,7 @@ function parseCli(): CliOptions {
     signalServer: values['signal-server'] || process.env.SIGNAL_SERVER,
     sttLanguage: values['stt-language'] || process.env.CT_STT_LANGUAGE,
     xaiApiKey,
-    peerId,
+    peerId: resolveDaemonPeerId(),
   };
 }
 

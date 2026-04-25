@@ -284,6 +284,8 @@ export class DaemonPeer {
   private handleControl(msg: PhoneToDaemon): void {
     if (msg.t === 'stt.start') {
       this.resetTurn('stt_restart');
+      this.activeSessionId = trimOrNull(msg.sessionId) ?? this.opts.sessionId;
+      this.activeThreadId = trimOrNull(msg.threadId) ?? this.opts.threadId ?? null;
       this.turnInFlight = true;
       this.openStt();
       return;
@@ -484,4 +486,8 @@ function tryDecodeJsonText(bytes: Uint8Array): string | null {
   } catch {
     return null;
   }
+}
+
+function trimOrNull(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }

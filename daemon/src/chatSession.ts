@@ -32,7 +32,7 @@ async function sendDebugNotification(
       '--target', `channel:${threadId}`,
       '--message', `> _clawkie ${message}`,
     ];
-    const env = { XAI_API_KEY: apiKey, ...process.env };
+    const env = openClawEnv(apiKey);
     await execAsync(`openclaw ${args.map(a => JSON.stringify(a)).join(' ')}`, { env });
   } catch {
     // debug notifications are best-effort — don't fail the turn
@@ -47,19 +47,19 @@ async function runOpenClawTurn(opts: {
   userText: string;
   signal?: AbortSignal;
 }): Promise<string> {
+  const sessionId = await resolveOpenClawSessionId(opts);
   const message = `User said: "${opts.userText}"\n\nReply as Clawkie: ${SYSTEM_PROMPT}`;
   const args = [
     'agent',
-    '--session-id', opts.sessionId,
+    '--session-id', sessionId,
     '--message', message,
     '--deliver',
-    '--reply-channel', 'discord',
   ];
   if (opts.threadId) {
-    args.push('--reply-to', `channel:${opts.threadId}`);
+    args.push('--reply-channel', 'discord', '--reply-to', `channel:${opts.threadId}`);
   }
 
-  const env = { XAI_API_KEY: opts.apiKey, ...process.env };
+  const env = openClawEnv(opts.apiKey);
 
   try {
     const { stdout } = await execAsync(
@@ -70,8 +70,75 @@ async function runOpenClawTurn(opts: {
   } catch (err: unknown) {
     if (opts.signal?.aborted) throw new ChatError('aborted', 'aborted');
     const msg = err instanceof Error ? err.message : 'openclaw_failed';
-    throw new ChatError(msg, 'openclaw_failed');
+    throw new ChatError(msg, classifyOpenClawError(err));
   }
+}
+
+async function resolveOpenClawSessionId(opts: {
+  apiKey: string;
+  sessionId: string;
+  signal?: AbortSignal;
+}): Promise<string> {
+  const requested = opts.sessionId.trim();
+  if (!requested) throw new ChatError('openclaw_session_missing', 'openclaw_session_missing');
+  if (!requested.startsWith('agent:')) return requested;
+
+  try {
+    const { stdout } = await execAsync(
+      'openclaw "sessions" "--json" "--all-agents" "--active" "10080"',
+      { env: openClawEnv(opts.apiKey), signal: opts.signal },
+    );
+    const match = parseOpenClawSessions(stdout).find((entry) => entry.key === requested);
+    if (!match?.sessionId) {
+      throw new ChatError('openclaw_session_not_found', 'openclaw_session_not_found');
+    }
+    return match.sessionId;
+  } catch (err) {
+    if (err instanceof ChatError) throw err;
+    if (opts.signal?.aborted) throw new ChatError('aborted', 'aborted');
+    const msg = err instanceof Error ? err.message : 'openclaw_session_lookup_failed';
+    throw new ChatError(msg, classifyOpenClawError(err));
+  }
+}
+
+function openClawEnv(apiKey: string): NodeJS.ProcessEnv {
+  return { ...process.env, XAI_API_KEY: apiKey };
+}
+
+function parseOpenClawSessions(stdout: string): Array<{ key: string; sessionId: string }> {
+  const parsed = JSON.parse(stdout) as unknown;
+  const rows = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === 'object' && Array.isArray((parsed as { sessions?: unknown }).sessions)
+      ? (parsed as { sessions: unknown[] }).sessions
+      : [];
+  return rows.flatMap((row) => {
+    if (!row || typeof row !== 'object') return [];
+    const key = (row as { key?: unknown }).key;
+    const sessionId = (row as { sessionId?: unknown }).sessionId;
+    return typeof key === 'string' && typeof sessionId === 'string' ? [{ key, sessionId }] : [];
+  });
+}
+
+export function classifyOpenClawError(err: unknown): string {
+  const parts: string[] = [];
+  if (err instanceof Error) parts.push(err.message);
+  if (err && typeof err === 'object') {
+    const maybe = err as { code?: unknown; stderr?: unknown; stdout?: unknown };
+    if (typeof maybe.code === 'string') parts.push(maybe.code);
+    if (typeof maybe.stderr === 'string') parts.push(maybe.stderr);
+    if (typeof maybe.stdout === 'string') parts.push(maybe.stdout);
+  }
+  const text = parts.join('\n').toLowerCase();
+  if (/\b(command not found|not found|enoent)\b/.test(text)) return 'openclaw_unavailable';
+  if (/\b(auth|token|credential|unauthorized|forbidden|device-auth|read-only file system|erofs)\b/.test(text)) {
+    return 'openclaw_auth_unavailable';
+  }
+  if (/\bdelivery channel is required\b/.test(text)) return 'openclaw_delivery_unavailable';
+  if (/\b(econnrefused|gateway|fetch failed|failed to connect|127\.0\.0\.1|18789)\b/.test(text)) {
+    return 'openclaw_gateway_unavailable';
+  }
+  return 'openclaw_failed';
 }
 
 export interface ChatOptionsWithSession extends ChatOptions {

@@ -12,10 +12,6 @@ import { loadSettings, saveSettings, type Settings } from './storage';
 
 type ScreenId = 'handoff' | 'driving' | 'history' | 'transcript' | 'settings' | 'error';
 
-// Local-only unreleased app: use a stable daemon room so jump.sh restarts
-// don't strand the phone on a stale generated UUID.
-const DEFAULT_DAEMON_PEER_ID = 'ct-daemon';
-
 const SCREEN_IDS: ScreenId[] = [
   'handoff',
   'driving',
@@ -33,14 +29,14 @@ const ERROR_KINDS: ErrorKind[] = [
   'bad_session',
 ];
 
-function parseInitial(): {
+export function parseInitialSearch(search: string): {
   screen: ScreenId;
   errorKind: ErrorKind;
   hostPeerId: string | null;
   sessionId?: string;
   threadId?: string;
 } {
-  const params = new URLSearchParams(window.location.search);
+  const params = new URLSearchParams(search);
   const rawScreen = params.get('screen');
   const screen: ScreenId = (SCREEN_IDS as string[]).includes(rawScreen || '')
     ? (rawScreen as ScreenId)
@@ -49,10 +45,14 @@ function parseInitial(): {
   const errorKind: ErrorKind = (ERROR_KINDS as string[]).includes(rawKind || '')
     ? (rawKind as ErrorKind)
     : 'bad_session';
-  const hostPeerId = params.get('host') || DEFAULT_DAEMON_PEER_ID;
+  const hostPeerId = params.get('host')?.trim() || null;
   const sessionId = params.get('session') || undefined;
   const threadId = params.get('threadId') || undefined;
   return { screen, errorKind, hostPeerId, sessionId, threadId };
+}
+
+function parseInitial() {
+  return parseInitialSearch(window.location.search);
 }
 
 function setUrlParam(key: string, value: string | null) {
@@ -123,6 +123,8 @@ export function App() {
           onSettings={() => go('settings')}
           compact={compact}
           settings={settings}
+          sessionId={initial.sessionId}
+          threadId={initial.threadId}
         />
       )}
       {screen === 'history' && (

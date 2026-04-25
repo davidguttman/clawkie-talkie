@@ -16,6 +16,11 @@ import {
 describe('phone → daemon factories', () => {
   it('emits stable `t` tags', () => {
     expect(phoneClient.sttStart()).toEqual({ t: 'stt.start' });
+    expect(phoneClient.sttStart('session-1', 'thread-1')).toEqual({
+      t: 'stt.start',
+      sessionId: 'session-1',
+      threadId: 'thread-1',
+    });
     expect(phoneClient.sttAudioDone()).toEqual({ t: 'stt.audio.done' });
     expect(phoneClient.sttCancel()).toEqual({ t: 'stt.cancel' });
     expect(phoneClient.replyCancel()).toEqual({ t: 'reply.cancel' });
@@ -23,6 +28,7 @@ describe('phone → daemon factories', () => {
 
   it('matches the daemon copy of the protocol', () => {
     expect(phoneClient.sttStart()).toEqual(phoneDaemon.sttStart());
+    expect(phoneClient.sttStart('s', 't')).toEqual(phoneDaemon.sttStart('s', 't'));
     expect(phoneClient.sttAudioDone()).toEqual(phoneDaemon.sttAudioDone());
     expect(phoneClient.sttCancel()).toEqual(phoneDaemon.sttCancel());
     expect(phoneClient.replyCancel()).toEqual(phoneDaemon.replyCancel());

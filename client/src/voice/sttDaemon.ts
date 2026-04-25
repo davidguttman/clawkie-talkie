@@ -31,6 +31,7 @@ import {
   selectAudioSource,
   type AudioSource,
 } from './audioSource';
+import { phoneToDaemon } from './protocol';
 
 export { MicPermissionError } from './audioSource';
 
@@ -53,6 +54,8 @@ export interface STTStartOptions {
   isConnected: () => boolean;
   onPartial?: (text: string, isFinal: boolean) => void;
   onError?: (reason: string) => void;
+  sessionId?: string;
+  threadId?: string;
   // Override the audio source. Defaults to `selectAudioSource()` which
   // picks mic or fixture from the `?audio-fixture=` query param.
   audioSource?: AudioSource;
@@ -148,7 +151,7 @@ export async function startDaemonSTT(opts: STTStartOptions): Promise<STTHandle> 
     throw err;
   }
 
-  opts.sendControl({ t: 'stt.start' });
+  opts.sendControl(phoneToDaemon.sttStart(opts.sessionId, opts.threadId));
 
   try {
     await ready;

@@ -20,6 +20,8 @@ export function DrivingScreen({
   onSettings,
   compact = false,
   settings,
+  sessionId,
+  threadId,
 }: {
   accent?: AccentKey;
   fontMode?: 'mono' | 'sans';
@@ -28,6 +30,8 @@ export function DrivingScreen({
   onSettings?: () => void;
   compact?: boolean;
   settings?: Settings;
+  sessionId?: string;
+  threadId?: string;
 }) {
   const accentCfg = HIFI.accents[accent] || HIFI.accents.amber;
 
@@ -35,6 +39,8 @@ export function DrivingScreen({
 
   const loop = useDrivingLoop({
     ttsRate: settings?.speed ?? 1.05,
+    sessionId,
+    threadId,
     rtc: {
       status: rtc.status,
       hasClient: rtc.hasClient,
