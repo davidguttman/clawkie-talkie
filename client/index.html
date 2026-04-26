@@ -5,23 +5,12 @@
     <title>Clawkie-Talkie</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#0a0a0b" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
   </head>
   <body>
-    <div id="root"></div>
-    <script>
-      globalThis.__clawkieProcess = globalThis.process || { env: {} };
-      globalThis.__clawkieProcess.env = globalThis.__clawkieProcess.env || {};
-      globalThis.__clawkieProcess.nextTick =
-        globalThis.__clawkieProcess.nextTick ||
-        ((callback, ...args) => queueMicrotask(() => callback(...args)));
-      globalThis.process = globalThis.__clawkieProcess;
-    </script>
-    <script type="module" src="/src/main.tsx"></script>
+    <main>
+      <h1>Clawkie-Talkie</h1>
+      <p>A walky-talky for your brain.</p>
+      <p><a href="/voice">Open the voice app</a></p>
+    </main>
   </body>
 </html>
