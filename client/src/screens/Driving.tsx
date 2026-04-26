@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { HIFI, type AccentKey } from '../tokens';
 import { ButtonAura, LiveWave } from '../components/Phone';
 import { useDrivingLoop, type DrivingState } from '../voice/drivingLoop';
+import { unlockDaemonTtsAudio } from '../voice/tts';
 import { useRtc } from '../rtc/RtcContext';
 import type { Settings } from '../storage';
 
@@ -533,6 +534,7 @@ function PTTButton({
     <button
       onClick={() => {
         if (disabled) return;
+        void unlockDaemonTtsAudio();
         try {
           navigator.vibrate && navigator.vibrate(18);
         } catch {
@@ -540,7 +542,11 @@ function PTTButton({
         }
         onTap();
       }}
-      onPointerDown={() => !disabled && setPressed(true)}
+      onPointerDown={() => {
+        if (disabled) return;
+        void unlockDaemonTtsAudio();
+        setPressed(true);
+      }}
       onPointerUp={() => setPressed(false)}
       onPointerLeave={() => setPressed(false)}
       onPointerCancel={() => setPressed(false)}
