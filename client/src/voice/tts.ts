@@ -16,6 +16,8 @@
 
 const DEFAULT_SAMPLE_RATE = 24000;
 
+let sharedAudioCtx: AudioContext | null = null;
+
 export interface TTSHandle {
   done: Promise<void>;
   stop(): void;
@@ -27,6 +29,19 @@ export interface TTSPlayerOptions {
   addBinaryListener: (fn: (bytes: ArrayBuffer) => void) => () => void;
   sendControl: (msg: { t: string; [k: string]: unknown }) => void;
   rate?: number;
+}
+
+// Mobile browsers only allow playback after the user has unlocked audio from a
+// trusted gesture. Call this from the first tap/pointerdown path so the daemon's
+// later async TTS stream reuses an already-unlocked context.
+export function unlockDaemonTtsAudio(): Promise<void> {
+  const audioCtx = getSharedAudioContext();
+  if (!audioCtx) return Promise.resolve();
+
+  // iOS Safari is most reliable when a source node is also started inside the
+  // gesture. Keep it silent with a zero-gain node to avoid clicks.
+  playSilentUnlockPulse(audioCtx);
+  return resumeAudioContext(audioCtx);
 }
 
 // Start listening for a single TTS turn from the daemon. Resolves when
@@ -71,9 +86,9 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
     }
     state.sources = [];
     try {
-      void state.audioCtx?.close();
+      state.gain?.disconnect();
     } catch {
-      // ignore
+      // already disconnected
     }
     detachControl();
     detachBinary();
@@ -92,21 +107,22 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
   };
 
   const initAudio = (sampleRate: number) => {
-    if (state.audioCtx) return;
     state.sampleRate = sampleRate;
-    const AudioCtor =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    if (!AudioCtor) {
+    if (state.audioCtx) {
+      void resumeAudioContext(state.audioCtx);
+      return;
+    }
+    const audioCtx = getSharedAudioContext();
+    if (!audioCtx) {
       finish('audio_unsupported');
       return;
     }
-    const audioCtx = new AudioCtor({ sampleRate });
     const gain = audioCtx.createGain();
     gain.gain.value = 1;
     gain.connect(audioCtx.destination);
     state.audioCtx = audioCtx;
     state.gain = gain;
+    void resumeAudioContext(audioCtx);
   };
 
   const detachControl = opts.addControlListener((msg) => {
@@ -159,12 +175,14 @@ function schedulePcmChunk(
     gain: GainNode | null;
     sources: AudioBufferSourceNode[];
     nextStartTime: number;
+    sampleRate: number;
     rate: number;
   },
   bytes: ArrayBuffer,
 ): void {
   if (state.stopped || !state.audioCtx || !state.gain) return;
   if (bytes.byteLength < 2) return;
+  void resumeAudioContext(state.audioCtx);
 
   const sampleCount = bytes.byteLength >> 1;
   const samples = new Float32Array(sampleCount);
@@ -174,7 +192,7 @@ function schedulePcmChunk(
     samples[i] = s < 0 ? s / 0x8000 : s / 0x7fff;
   }
 
-  const buffer = state.audioCtx.createBuffer(1, sampleCount, state.audioCtx.sampleRate);
+  const buffer = state.audioCtx.createBuffer(1, sampleCount, state.sampleRate);
   buffer.getChannelData(0).set(samples);
 
   const source = state.audioCtx.createBufferSource();
@@ -191,4 +209,52 @@ function schedulePcmChunk(
     state.sources = state.sources.filter((s) => s !== source);
   };
   source.start(startAt);
+}
+
+function getSharedAudioContext(): AudioContext | null {
+  if (typeof window === 'undefined') return null;
+  if (sharedAudioCtx && sharedAudioCtx.state !== 'closed') return sharedAudioCtx;
+
+  const AudioCtor =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioCtor) return null;
+  try {
+    sharedAudioCtx = new AudioCtor();
+    return sharedAudioCtx;
+  } catch {
+    return null;
+  }
+}
+
+function resumeAudioContext(audioCtx: AudioContext): Promise<void> {
+  if (audioCtx.state === 'closed' || audioCtx.state === 'running') return Promise.resolve();
+  return audioCtx.resume().then(
+    () => undefined,
+    () => undefined,
+  );
+}
+
+function playSilentUnlockPulse(audioCtx: AudioContext): void {
+  try {
+    const buffer = audioCtx.createBuffer(1, 1, audioCtx.sampleRate || DEFAULT_SAMPLE_RATE);
+    const source = audioCtx.createBufferSource();
+    const gain = audioCtx.createGain();
+    gain.gain.value = 0;
+    source.buffer = buffer;
+    source.connect(gain);
+    gain.connect(audioCtx.destination);
+    source.onended = () => {
+      try {
+        source.disconnect();
+        gain.disconnect();
+      } catch {
+        // already disconnected
+      }
+    };
+    source.start(0);
+  } catch {
+    // Unlock is best-effort; playDaemonTts will report audio_unsupported if
+    // real playback setup fails later.
+  }
 }
