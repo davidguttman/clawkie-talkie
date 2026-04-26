@@ -2,11 +2,39 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Make Clawkie-Talkie production-credible for OpenClaw voice handoff by replacing the current single-phone daemon lane with a durable local rendezvous daemon that can create independent per-session voice rooms for multiple OpenClaw/Discord conversations.
+**Goal:** Make Clawkie-Talkie support Discord-like multiple simultaneous voice handoffs by turning the existing daemon host into a rendezvous/control room and deriving one deterministic voice room per OpenClaw conversation.
 
-**Architecture:** Keep one long-running local Clawkie daemon on the OpenClaw machine. Treat the daemon host ID as the stable control/rendezvous identity, but move actual voice turns into per-handoff `VoiceSession` rooms bound daemon-side to one OpenClaw session/thread. Add a small local handoff API/CLI so agents request “create voice handoff for this current conversation” and receive a valid link, instead of manually assembling `host`, `session`, and `threadId` URL params.
+**Architecture:** Keep one long-running local Clawkie daemon on the OpenClaw machine. The browser first connects to `host=H` only for coordination, sends the target `sessionId`/`threadId`, and the daemon derives a voice room such as `H:<sessionKey>` for that conversation. Actual voice/STT/TTS/OpenClaw turns happen on the per-session room, not on the shared host room. There is no extra pre-created link state, no random join identifier, no separate mapping table, and no per-handoff daemon startup.
 
 **Tech Stack:** TypeScript, React/Vite client, Node/tsx daemon, simple-peer + `@roamhq/wrtc`, rambly-style signaling, Vitest, OpenClaw CLI integration.
+
+---
+
+## Critical Correction From the Thread
+
+This plan intentionally avoids the stateful design that was rejected.
+
+Do **not** implement:
+
+- random join identifiers
+- a pre-created link-state table
+- a separate mapping table from link ID to session/thread/room
+- local daemon API calls that mutate daemon state just to create a link
+- TTL/revocation/claim state for link records
+- a “central gateway” style session store
+
+The agreed shape is simpler:
+
+1. The daemon has stable host/rendezvous ID `H`.
+2. The agent creates a link for the current conversation:
+   - `...?screen=handoff&host=H&session=<sessionId>&threadId=<threadId>`
+3. Browser connects to rendezvous room `H`.
+4. Browser asks for the session room for `sessionId` / `threadId`.
+5. Daemon derives the room deterministically, e.g. `H:<sessionKey>`.
+6. Browser connects to that room.
+7. Voice turns for A and B are isolated because they use different derived rooms.
+
+The only daemon state should be runtime connection state for active voice rooms, e.g. `roomId -> VoiceSession`, because active WebRTC/STT/TTS sessions necessarily need live objects. That is different from pre-created link state.
 
 ---
 
@@ -27,13 +55,12 @@ The key repo-backed blocker:
   - `daemon/README.md` says “Single-session daemon” and “accepts one phone WebRTC DataChannel at a time.”
   - `daemon/src/peer.ts` stores singleton `peer`, `remoteId`, `activeSessionId`, `activeThreadId`, `stt`, `tts`, `chatAbort`, and `turnInFlight` fields.
   - `daemon/src/peer.ts` rejects a second connected phone with `rejecting second phone ... one at a time`.
-- Current browser URL carries routing authority.
-  - `client/src/app.tsx` parses `host`, `session`, and `threadId` from query params.
-  - `client/src/voice/sttDaemon.ts` sends `stt.start(sessionId, threadId)`.
-  - `daemon/src/peer.ts` accepts those values and assigns `activeSessionId` / `activeThreadId`.
 - Current `host` is the actual signaling room.
   - `client/src/rtc/client.ts` creates `SignalClient({ roomName: opts.hostPeerId })`.
   - `daemon/src/peer.ts` creates `SignalClient({ roomName: opts.peerId })`.
+- Current browser sends routing fields at turn start.
+  - `client/src/voice/sttDaemon.ts` sends `stt.start(sessionId, threadId)`.
+  - `daemon/src/peer.ts` accepts those values and assigns singleton `activeSessionId` / `activeThreadId`.
 
 User-facing production problem:
 
@@ -47,203 +74,97 @@ Target shape:
 
 - One durable local Clawkie daemon.
 - `host=H` is coordination/rendezvous identity, not the single voice lane.
-- Each handoff gets an opaque `handoffId` and per-session `roomId`.
-- Daemon owns `handoffId -> { sessionId, threadId, roomId }`.
-- Browser does not choose routing by sending arbitrary `sessionId/threadId` later.
+- `sessionId` determines the conversation the user wants.
+- Daemon derives a stable per-session `roomId` from `host` + `sessionId`.
 - Multiple voice rooms can coexist: A, B, C.
+- `stt.start` no longer carries routing each turn; routing is bound once when the per-session room is created.
 
 ## Non-Goals
 
 - Do not implement “one daemon per handoff.”
 - Do not build a separate hosted/cloud gateway.
 - Do not merge Clawkie into OpenClaw core.
+- Do not add a pre-created link-state store or random join-ID lifecycle.
 - Do not require agents to start/kill/manage Node daemons per handoff.
 - Do not run `npm run dev`, `npm run daemon`, or other long-running Node servers during implementation unless David explicitly asks. Use tests/typecheck/build for verification.
 
 ---
 
-## Task 1: Add a daemon-owned handoff registry
+## Task 1: Add deterministic voice room derivation
 
 **Files:**
-- Create: `daemon/src/handoffRegistry.ts`
-- Create: `test/handoffRegistry.test.ts`
+- Create: `daemon/src/voiceRoom.ts`
+- Create: `client/src/rtc/voiceRoom.ts`
+- Create: `test/voiceRoom.test.ts`
 
-**Step 1: Write failing tests for creating handoffs**
+**Step 1: Write failing tests**
 
-Create `test/handoffRegistry.test.ts`:
+Create `test/voiceRoom.test.ts`:
 
 ```ts
-import { describe, expect, it, vi } from 'vitest';
-import { createHandoffRegistry } from '../daemon/src/handoffRegistry';
+import { describe, expect, it } from 'vitest';
+import { makeVoiceRoomId as daemonMakeVoiceRoomId } from '../daemon/src/voiceRoom';
+import { makeVoiceRoomId as clientMakeVoiceRoomId } from '../client/src/rtc/voiceRoom';
 
-describe('handoff registry', () => {
-  it('creates an opaque handoff bound to a session/thread and room', () => {
-    const registry = createHandoffRegistry({
-      hostPeerId: 'host-1',
-      now: () => 1000,
-      id: () => 'handoff-1',
-      ttlMs: 60_000,
-    });
-
-    const handoff = registry.create({
+describe('voice room derivation', () => {
+  it('derives the same room id in daemon and client code', () => {
+    const input = {
+      hostPeerId: 'host-123',
       sessionId: 'agent:main:discord:channel-1:thread-1',
-      threadId: 'thread-1',
-    });
+    };
 
-    expect(handoff).toEqual({
-      handoffId: 'handoff-1',
-      roomId: 'host-1:handoff-1',
-      expiresAt: 61_000,
-    });
-
-    expect(registry.get('handoff-1')).toMatchObject({
-      handoffId: 'handoff-1',
-      roomId: 'host-1:handoff-1',
-      sessionId: 'agent:main:discord:channel-1:thread-1',
-      threadId: 'thread-1',
-    });
+    expect(daemonMakeVoiceRoomId(input)).toBe('host-123:agent_main_discord_channel_1_thread_1');
+    expect(clientMakeVoiceRoomId(input)).toBe(daemonMakeVoiceRoomId(input));
   });
 
-  it('rejects expired handoffs and removes them', () => {
-    let now = 1000;
-    const registry = createHandoffRegistry({
-      hostPeerId: 'host-1',
-      now: () => now,
-      id: () => 'handoff-1',
-      ttlMs: 10,
-    });
-
-    registry.create({ sessionId: 's1', threadId: 't1' });
-    now = 1011;
-
-    expect(registry.get('handoff-1')).toBeUndefined();
-    expect(registry.has('handoff-1')).toBe(false);
-  });
-
-  it('can revoke a handoff', () => {
-    const registry = createHandoffRegistry({
-      hostPeerId: 'host-1',
-      now: () => 1000,
-      id: () => 'handoff-1',
-      ttlMs: 60_000,
-    });
-
-    registry.create({ sessionId: 's1', threadId: 't1' });
-    registry.revoke('handoff-1');
-
-    expect(registry.get('handoff-1')).toBeUndefined();
+  it('keeps different sessions in different rooms', () => {
+    expect(
+      daemonMakeVoiceRoomId({ hostPeerId: 'host-123', sessionId: 'session-a' }),
+    ).not.toBe(
+      daemonMakeVoiceRoomId({ hostPeerId: 'host-123', sessionId: 'session-b' }),
+    );
   });
 });
 ```
 
 **Step 2: Run test to verify it fails**
 
-Run:
-
 ```bash
 cd /mnt/data/play/web/clawkie-talkie
-npm test -- test/handoffRegistry.test.ts
+npm test -- test/voiceRoom.test.ts
 ```
 
-Expected: FAIL because `daemon/src/handoffRegistry.ts` does not exist.
+Expected: FAIL because the files do not exist.
 
-**Step 3: Implement the registry**
+**Step 3: Implement room derivation**
 
-Create `daemon/src/handoffRegistry.ts`:
+Create `daemon/src/voiceRoom.ts` and `client/src/rtc/voiceRoom.ts` with matching code:
 
 ```ts
-export interface HandoffRecord {
-  handoffId: string;
-  roomId: string;
-  sessionId: string;
-  threadId?: string;
-  createdAt: number;
-  expiresAt: number;
-}
-
-export interface HandoffRegistryOptions {
+export interface VoiceRoomInput {
   hostPeerId: string;
-  ttlMs?: number;
-  now?: () => number;
-  id?: () => string;
-}
-
-export interface CreateHandoffInput {
   sessionId: string;
-  threadId?: string;
 }
 
-export interface CreatedHandoff {
-  handoffId: string;
-  roomId: string;
-  expiresAt: number;
+export function makeVoiceRoomId(input: VoiceRoomInput): string {
+  return `${input.hostPeerId}:${safeRoomSegment(input.sessionId)}`;
 }
 
-const DEFAULT_TTL_MS = 10 * 60 * 1000;
-
-export function createHandoffRegistry(opts: HandoffRegistryOptions) {
-  const now = opts.now ?? Date.now;
-  const makeId = opts.id ?? randomId;
-  const ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS;
-  const records = new Map<string, HandoffRecord>();
-
-  function purgeExpired(): void {
-    const t = now();
-    for (const [id, rec] of records) {
-      if (rec.expiresAt <= t) records.delete(id);
-    }
-  }
-
-  return {
-    create(input: CreateHandoffInput): CreatedHandoff {
-      purgeExpired();
-      const handoffId = makeId();
-      const createdAt = now();
-      const expiresAt = createdAt + ttlMs;
-      const roomId = `${opts.hostPeerId}:${handoffId}`;
-      records.set(handoffId, {
-        handoffId,
-        roomId,
-        sessionId: input.sessionId,
-        threadId: input.threadId,
-        createdAt,
-        expiresAt,
-      });
-      return { handoffId, roomId, expiresAt };
-    },
-
-    get(handoffId: string): HandoffRecord | undefined {
-      purgeExpired();
-      return records.get(handoffId);
-    },
-
-    has(handoffId: string): boolean {
-      purgeExpired();
-      return records.has(handoffId);
-    },
-
-    revoke(handoffId: string): void {
-      records.delete(handoffId);
-    },
-
-    list(): HandoffRecord[] {
-      purgeExpired();
-      return [...records.values()];
-    },
-  };
-}
-
-function randomId(): string {
-  return crypto.randomUUID();
+export function safeRoomSegment(value: string): string {
+  return value
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 160);
 }
 ```
+
+Important: keep this deterministic. Do not generate random IDs. Do not store mapping state.
 
 **Step 4: Run test to verify it passes**
 
-Run:
-
 ```bash
-npm test -- test/handoffRegistry.test.ts
+npm test -- test/voiceRoom.test.ts
 ```
 
 Expected: PASS.
@@ -251,13 +172,13 @@ Expected: PASS.
 **Step 5: Commit**
 
 ```bash
-git add daemon/src/handoffRegistry.ts test/handoffRegistry.test.ts
-git commit -m "feat: add voice handoff registry"
+git add daemon/src/voiceRoom.ts client/src/rtc/voiceRoom.ts test/voiceRoom.test.ts
+git commit -m "feat: derive deterministic voice rooms"
 ```
 
 ---
 
-## Task 2: Change the wire protocol so routing is daemon-owned
+## Task 2: Add rendezvous join protocol
 
 **Files:**
 - Modify: `daemon/src/protocol.ts`
@@ -266,25 +187,26 @@ git commit -m "feat: add voice handoff registry"
 
 **Step 1: Write failing protocol tests**
 
-Update `test/protocol.test.ts` to include handoff messages:
+Update `test/protocol.test.ts` to cover rendezvous messages:
 
 ```ts
-expect(phoneClient.handoffJoin('handoff-1')).toEqual({
-  t: 'handoff.join',
-  handoffId: 'handoff-1',
+expect(phoneClient.rendezvousJoin('session-1', 'thread-1')).toEqual({
+  t: 'rendezvous.join',
+  sessionId: 'session-1',
+  threadId: 'thread-1',
 });
-expect(daemonClient.handoffAccept('room-1')).toEqual({
-  t: 'handoff.accept',
-  roomId: 'room-1',
+expect(daemonClient.rendezvousAccept('host-1:session-1')).toEqual({
+  t: 'rendezvous.accept',
+  roomId: 'host-1:session-1',
 });
-expect(daemonClient.handoffError('expired')).toEqual({
-  t: 'handoff.error',
-  message: 'expired',
+expect(daemonClient.rendezvousError('missing_session')).toEqual({
+  t: 'rendezvous.error',
+  message: 'missing_session',
 });
 expect(phoneClient.sttStart()).toEqual({ t: 'stt.start' });
 ```
 
-Also remove/update expectations that `stt.start` serializes `sessionId` and `threadId`.
+Remove expectations that `stt.start` serializes `sessionId` and `threadId`.
 
 **Step 2: Run test to verify it fails**
 
@@ -292,49 +214,62 @@ Also remove/update expectations that `stt.start` serializes `sessionId` and `thr
 npm test -- test/protocol.test.ts
 ```
 
-Expected: FAIL because factories do not exist and `stt.start` still accepts route IDs.
+Expected: FAIL because protocol factories do not exist and `stt.start` still accepts route IDs.
 
-**Step 3: Update daemon protocol**
+**Step 3: Update protocol files**
 
-In `daemon/src/protocol.ts`:
+In both `daemon/src/protocol.ts` and `client/src/voice/protocol.ts`:
 
 ```ts
 export type PhoneToDaemon =
-  | { t: 'handoff.join'; handoffId: string }
+  | { t: 'rendezvous.join'; sessionId: string; threadId?: string }
   | { t: 'stt.start' }
   | { t: 'stt.audio.done' }
   | { t: 'stt.cancel' }
   | { t: 'reply.cancel' };
 
 export type DaemonToPhone =
-  | { t: 'handoff.accept'; roomId: string }
-  | { t: 'handoff.error'; message: string }
+  | { t: 'rendezvous.accept'; roomId: string }
+  | { t: 'rendezvous.error'; message: string }
   | { t: 'stt.ready' }
-  // keep existing messages...
+  | { t: 'stt.partial'; text: string; is_final: boolean }
+  | { t: 'stt.done'; text: string }
+  | { t: 'stt.error'; message: string }
+  | { t: 'stt.closed' }
+  | { t: 'reply.start'; text: string }
+  | { t: 'reply.done'; text: string }
+  | { t: 'reply.error'; message: string }
+  | { t: 'tts.start'; sample_rate: number }
+  | { t: 'tts.done' }
+  | { t: 'tts.error'; message: string };
 ```
 
-Update factories:
+Factories:
 
 ```ts
 export const phoneToDaemon = {
-  handoffJoin: (handoffId: string): PhoneToDaemon => ({ t: 'handoff.join', handoffId }),
+  rendezvousJoin: (sessionId: string, threadId?: string): PhoneToDaemon => ({
+    t: 'rendezvous.join',
+    sessionId,
+    ...(threadId ? { threadId } : {}),
+  }),
   sttStart: (): PhoneToDaemon => ({ t: 'stt.start' }),
-  // keep existing factories...
+  sttAudioDone: (): PhoneToDaemon => ({ t: 'stt.audio.done' }),
+  sttCancel: (): PhoneToDaemon => ({ t: 'stt.cancel' }),
+  replyCancel: (): PhoneToDaemon => ({ t: 'reply.cancel' }),
 };
 
 export const daemonToPhone = {
-  handoffAccept: (roomId: string): DaemonToPhone => ({ t: 'handoff.accept', roomId }),
-  handoffError: (message: string): DaemonToPhone => ({ t: 'handoff.error', message }),
+  rendezvousAccept: (roomId: string): DaemonToPhone => ({ t: 'rendezvous.accept', roomId }),
+  rendezvousError: (message: string): DaemonToPhone => ({ t: 'rendezvous.error', message }),
   // keep existing factories...
 };
 ```
 
-Mirror the same changes in `client/src/voice/protocol.ts`.
-
-**Step 4: Run protocol tests**
+**Step 4: Run tests**
 
 ```bash
-npm test -- test/protocol.test.ts
+npm test -- test/protocol.test.ts test/voiceRoom.test.ts
 ```
 
 Expected: PASS.
@@ -343,304 +278,41 @@ Expected: PASS.
 
 ```bash
 git add daemon/src/protocol.ts client/src/voice/protocol.ts test/protocol.test.ts
-git commit -m "feat: add voice handoff protocol messages"
+git commit -m "feat: add rendezvous join protocol"
 ```
 
 ---
 
-## Task 3: Add a local handoff creation API to the daemon
-
-**Files:**
-- Create: `daemon/src/controlServer.ts`
-- Modify: `daemon/src/index.ts`
-- Create: `test/controlServer.test.ts`
-
-**Step 1: Write failing tests for the control API handler**
-
-Do not test an actual long-running server. Test pure request handling with injected registry.
-
-Create `test/controlServer.test.ts`:
-
-```ts
-import { describe, expect, it } from 'vitest';
-import { handleCreateHandoffRequest } from '../daemon/src/controlServer';
-import { createHandoffRegistry } from '../daemon/src/handoffRegistry';
-
-describe('control server handoff creation', () => {
-  it('returns a client URL with host and handoff token', async () => {
-    const registry = createHandoffRegistry({
-      hostPeerId: 'host-1',
-      now: () => 1000,
-      id: () => 'handoff-1',
-      ttlMs: 60_000,
-    });
-
-    const res = await handleCreateHandoffRequest({
-      body: JSON.stringify({ sessionId: 'session-1', threadId: 'thread-1' }),
-      clientOrigin: 'https://clawkie-talkie.davidguttman.jump.sh',
-      hostPeerId: 'host-1',
-      registry,
-    });
-
-    expect(res.status).toBe(200);
-    expect(JSON.parse(res.body)).toEqual({
-      handoffId: 'handoff-1',
-      roomId: 'host-1:handoff-1',
-      expiresAt: 61_000,
-      url: 'https://clawkie-talkie.davidguttman.jump.sh/?screen=handoff&host=host-1&handoff=handoff-1',
-    });
-  });
-
-  it('rejects missing sessionId', async () => {
-    const registry = createHandoffRegistry({ hostPeerId: 'host-1' });
-    const res = await handleCreateHandoffRequest({
-      body: JSON.stringify({ threadId: 'thread-1' }),
-      clientOrigin: 'https://example.test',
-      hostPeerId: 'host-1',
-      registry,
-    });
-    expect(res.status).toBe(400);
-  });
-});
-```
-
-**Step 2: Run test to verify it fails**
-
-```bash
-npm test -- test/controlServer.test.ts
-```
-
-Expected: FAIL because `daemon/src/controlServer.ts` does not exist.
-
-**Step 3: Implement pure handler and server bootstrap**
-
-Create `daemon/src/controlServer.ts`:
-
-```ts
-import http from 'node:http';
-import type { createHandoffRegistry } from './handoffRegistry.js';
-
-type Registry = ReturnType<typeof createHandoffRegistry>;
-
-export interface HandleCreateHandoffRequestOptions {
-  body: string;
-  clientOrigin: string;
-  hostPeerId: string;
-  registry: Registry;
-}
-
-export async function handleCreateHandoffRequest(opts: HandleCreateHandoffRequestOptions) {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(opts.body);
-  } catch {
-    return json(400, { error: 'invalid_json' });
-  }
-
-  const input = parsed as { sessionId?: unknown; threadId?: unknown };
-  const sessionId = typeof input.sessionId === 'string' ? input.sessionId.trim() : '';
-  const threadId = typeof input.threadId === 'string' ? input.threadId.trim() : undefined;
-  if (!sessionId) return json(400, { error: 'session_id_required' });
-
-  const handoff = opts.registry.create({ sessionId, threadId });
-  const url = new URL(opts.clientOrigin.replace(/\/$/, '') + '/');
-  url.searchParams.set('screen', 'handoff');
-  url.searchParams.set('host', opts.hostPeerId);
-  url.searchParams.set('handoff', handoff.handoffId);
-
-  return json(200, { ...handoff, url: url.toString() });
-}
-
-export function startControlServer(opts: {
-  port: number;
-  clientOrigin: string;
-  hostPeerId: string;
-  registry: Registry;
-}) {
-  const server = http.createServer(async (req, res) => {
-    if (req.method === 'POST' && req.url === '/handoffs') {
-      const body = await readBody(req);
-      const out = await handleCreateHandoffRequest({ ...opts, body });
-      res.writeHead(out.status, { 'content-type': 'application/json' });
-      res.end(out.body);
-      return;
-    }
-    if (req.method === 'GET' && req.url === '/health') {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true }));
-      return;
-    }
-    res.writeHead(404, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ error: 'not_found' }));
-  });
-
-  server.listen(opts.port, '127.0.0.1');
-  return server;
-}
-
-function json(status: number, payload: unknown) {
-  return { status, body: JSON.stringify(payload) };
-}
-
-function readBody(req: http.IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let body = '';
-    req.setEncoding('utf8');
-    req.on('data', (chunk) => { body += chunk; });
-    req.on('end', () => resolve(body));
-    req.on('error', reject);
-  });
-}
-```
-
-Update `daemon/src/index.ts`:
-
-- Import `createHandoffRegistry` and `startControlServer`.
-- Add CLI/env option `--control-port` / `CT_CONTROL_PORT` defaulting to `0` or `8787`.
-- Create one registry using the daemon `peerId`.
-- Start the control server once daemon is ready.
-- Print the control URL in startup logs.
-
-Keep runtime default conservative: if `--control-port` is omitted, use `8787` for dev or document the chosen default. Do not bind anything except `127.0.0.1`.
-
-**Step 4: Run tests**
-
-```bash
-npm test -- test/controlServer.test.ts test/handoffRegistry.test.ts
-npm run typecheck
-```
-
-Expected: PASS.
-
-**Step 5: Commit**
-
-```bash
-git add daemon/src/controlServer.ts daemon/src/index.ts test/controlServer.test.ts
-git commit -m "feat: add local voice handoff API"
-```
-
----
-
-## Task 4: Add a one-command handoff helper for agents
-
-**Files:**
-- Create: `scripts/create-handoff.mjs`
-- Modify: `package.json`
-- Create: `test/createHandoffScript.test.ts` if practical, otherwise keep logic in an importable helper file and test that helper.
-
-**Step 1: Extract/test the helper logic**
-
-Create `scripts/create-handoff.mjs` as the CLI entrypoint, but keep URL/request construction simple enough to test through a small exported function if moved to `daemon/src/createHandoffClient.ts`.
-
-Target command:
-
-```bash
-npm run create-handoff -- \
-  --session-id agent:main:discord:channel-1:thread-1 \
-  --thread-id thread-1
-```
-
-Expected stdout:
-
-```text
-https://clawkie-talkie.davidguttman.jump.sh/?screen=handoff&host=<host>&handoff=<handoffId>
-```
-
-**Step 2: Add package script**
-
-Modify `package.json`:
-
-```json
-{
-  "scripts": {
-    "create-handoff": "node scripts/create-handoff.mjs"
-  }
-}
-```
-
-**Step 3: Implement script**
-
-`scripts/create-handoff.mjs` should:
-
-- parse `--session-id` and optional `--thread-id`;
-- read `CT_CONTROL_URL`, default `http://127.0.0.1:8787`;
-- POST to `${CT_CONTROL_URL}/handoffs`;
-- print only the returned `url` to stdout;
-- exit non-zero with a clear error if the daemon/control API is unavailable.
-
-Skeleton:
-
-```js
-const args = parseArgs(process.argv.slice(2));
-const sessionId = args['session-id'];
-const threadId = args['thread-id'];
-if (!sessionId) die('--session-id is required');
-
-const controlUrl = process.env.CT_CONTROL_URL || 'http://127.0.0.1:8787';
-const res = await fetch(`${controlUrl.replace(/\/+$/, '')}/handoffs`, {
-  method: 'POST',
-  headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ sessionId, threadId }),
-});
-if (!res.ok) die(`create handoff failed: ${res.status} ${await res.text()}`);
-const payload = await res.json();
-if (!payload.url) die('create handoff failed: missing url');
-console.log(payload.url);
-```
-
-**Step 4: Run verification**
-
-Do not start the daemon unless David explicitly asks. Verify static behavior with tests/typecheck:
-
-```bash
-npm run typecheck
-npm test
-```
-
-Expected: PASS.
-
-**Step 5: Commit**
-
-```bash
-git add package.json scripts/create-handoff.mjs test/createHandoffScript.test.ts
-git commit -m "feat: add voice handoff helper command"
-```
-
----
-
-## Task 5: Refactor daemon peer state into per-session `VoiceSession`
+## Task 3: Refactor daemon runtime into multiple `VoiceSession`s
 
 **Files:**
 - Create: `daemon/src/voiceSession.ts`
 - Modify: `daemon/src/peer.ts`
 - Create: `test/voiceSession.test.ts`
 
-**Step 1: Write failing tests for turn routing state**
+**Step 1: Write pure state tests**
 
-Create `test/voiceSession.test.ts` around pure behavior. Do not instantiate real WebRTC/STT/TTS in unit tests.
-
-Test target:
+Create `test/voiceSession.test.ts`:
 
 ```ts
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { createVoiceSessionState } from '../daemon/src/voiceSession';
 
 describe('voice session state', () => {
-  it('keeps session/thread binding daemon-owned for the lifetime of the room', () => {
+  it('binds one room to one session/thread for its lifetime', () => {
     const s = createVoiceSessionState({
-      handoffId: 'handoff-1',
-      roomId: 'room-1',
+      roomId: 'host-1:session-1',
       sessionId: 'session-1',
       threadId: 'thread-1',
     });
 
     expect(s.chatTarget()).toEqual({ sessionId: 'session-1', threadId: 'thread-1' });
+    expect(s.roomId).toBe('host-1:session-1');
   });
 
-  it('does not accept browser-provided session overrides on stt.start', () => {
+  it('does not accept route changes on stt.start', () => {
     const s = createVoiceSessionState({
-      handoffId: 'handoff-1',
-      roomId: 'room-1',
+      roomId: 'host-1:session-1',
       sessionId: 'session-1',
       threadId: 'thread-1',
     });
@@ -652,23 +324,20 @@ describe('voice session state', () => {
 });
 ```
 
-**Step 2: Run failing test**
+**Step 2: Run test to verify it fails**
 
 ```bash
 npm test -- test/voiceSession.test.ts
 ```
 
-Expected: FAIL because file does not exist.
+Expected: FAIL because `daemon/src/voiceSession.ts` does not exist.
 
-**Step 3: Extract state container**
+**Step 3: Add state core**
 
-Create `daemon/src/voiceSession.ts` with a pure state core first. Then move runtime pieces from `DaemonPeer` into a class in small increments.
-
-Minimum first file:
+Create `daemon/src/voiceSession.ts`:
 
 ```ts
 export interface VoiceSessionConfig {
-  handoffId: string;
   roomId: string;
   sessionId: string;
   threadId?: string;
@@ -676,8 +345,8 @@ export interface VoiceSessionConfig {
 
 export function createVoiceSessionState(config: VoiceSessionConfig) {
   let turnInFlight = false;
+
   return {
-    handoffId: config.handoffId,
     roomId: config.roomId,
     handleStartTurn() {
       turnInFlight = true;
@@ -695,58 +364,70 @@ export function createVoiceSessionState(config: VoiceSessionConfig) {
 }
 ```
 
-Then migrate from `DaemonPeer` into a runtime `VoiceSession` class:
+**Step 4: Move runtime peer/STT/TTS/chat state out of singleton `DaemonPeer`**
 
-- one `SignalClient` per `roomId`;
-- one `SimplePeer.Instance` per voice room;
-- one `remoteId` per voice room;
-- per-session `stt`, `tts`, `chatAbort`, `turnInFlight`, audio pump, keepalive;
-- on `stt.start`, use registry-bound `sessionId/threadId`, not message-provided IDs.
+Refactor `daemon/src/peer.ts` carefully:
 
-**Step 4: Modify `DaemonPeer` to become a manager**
-
-In `daemon/src/peer.ts`:
-
-- Keep the existing host `SignalClient` subscribed to `opts.peerId` as the control/rendezvous room.
-- Replace singleton runtime fields with:
+- Keep one host/rendezvous `SignalClient` subscribed to `opts.peerId` / room `opts.peerId`.
+- Replace singleton voice fields with active sessions:
 
 ```ts
 private voiceSessions = new Map<string, VoiceSession>();
 ```
 
-- Add constructor option:
+- `VoiceSession` owns:
+  - its own room `SignalClient` with `roomName = roomId`
+  - one phone peer for that room
+  - `sessionId`
+  - `threadId`
+  - `stt`
+  - `tts`
+  - `chatAbort`
+  - `turnInFlight`
+  - audio source/queue/pump/keepalive for that room
 
-```ts
-handoffs: ReturnType<typeof createHandoffRegistry>;
-```
+Keep behavior equivalent inside one session. The main change is that state is per room instead of global singleton.
 
-- On host-room control connection, accept `handoff.join` only.
-- Lookup `handoffId` in registry.
-- Create/start a `VoiceSession` for `record.roomId` if one does not exist.
-- Send `daemonToPhone.handoffAccept(record.roomId)`.
-- Close the rendezvous peer after accept.
+**Step 5: Implement rendezvous handling in `DaemonPeer`**
 
-Important: keep host-room peer lifetime short. Host room should not carry mic audio or chat turns.
+When a browser connects to host room `H`:
 
-**Step 5: Run focused tests**
+1. Accept only `rendezvous.join` control message.
+2. Validate `sessionId` is non-empty.
+3. Derive `roomId = makeVoiceRoomId({ hostPeerId: opts.peerId, sessionId })`.
+4. Create/start `VoiceSession` for `roomId` if it does not already exist.
+5. Send `rendezvous.accept(roomId)` to the browser.
+6. Close the host-room peer for that browser.
+
+No pre-created link-state table. No random join-ID validation. No TTL state.
+
+**Step 6: Route turns using room-bound session/thread**
+
+Inside `VoiceSession`, when it receives `stt.start`:
+
+- do **not** read session/thread from the message;
+- use the `sessionId`/`threadId` captured at room creation;
+- call `runChat({ sessionId, threadId, ... })` exactly as current code does, but from the per-room state.
+
+**Step 7: Run focused checks**
 
 ```bash
-npm test -- test/voiceSession.test.ts test/protocol.test.ts test/handoffRegistry.test.ts
+npm test -- test/voiceSession.test.ts test/protocol.test.ts test/voiceRoom.test.ts
 npm run typecheck
 ```
 
 Expected: PASS.
 
-**Step 6: Commit**
+**Step 8: Commit**
 
 ```bash
 git add daemon/src/voiceSession.ts daemon/src/peer.ts test/voiceSession.test.ts
-git commit -m "feat: split daemon voice sessions by room"
+git commit -m "feat: split daemon voice state by session room"
 ```
 
 ---
 
-## Task 6: Update the browser to resolve a handoff before entering voice mode
+## Task 4: Update browser flow to switch from rendezvous room to voice room
 
 **Files:**
 - Modify: `client/src/app.tsx`
@@ -757,66 +438,57 @@ git commit -m "feat: split daemon voice sessions by room"
 - Modify: `client/src/voice/sttDaemon.ts`
 - Modify: `test/appRouting.test.ts`
 
-**Step 1: Write failing URL parsing tests**
+**Step 1: Write URL parsing tests**
 
 Update `test/appRouting.test.ts`:
 
 ```ts
-it('parses host and handoff without trusting route ids from the URL', () => {
+it('parses host/session/thread for rendezvous handoff', () => {
   expect(
-    parseInitialSearch('?screen=handoff&host=host-1&handoff=handoff-1&session=evil&threadId=wrong'),
+    parseInitialSearch('?screen=handoff&host=host-1&session=session-1&threadId=thread-1'),
   ).toMatchObject({
     screen: 'handoff',
     hostPeerId: 'host-1',
-    handoffId: 'handoff-1',
+    sessionId: 'session-1',
+    threadId: 'thread-1',
   });
 });
 ```
 
-Also add an expectation that `sessionId/threadId` are no longer the production route source. If backward compatibility is needed, keep them only for dev mode and name that explicitly in code/tests.
-
-**Step 2: Run failing test**
+**Step 2: Run failing test if needed**
 
 ```bash
 npm test -- test/appRouting.test.ts
 ```
 
-Expected: FAIL because `handoffId` is not parsed.
+Expected: PASS if current parser already handles this; otherwise FAIL until updated.
 
-**Step 3: Update URL parser**
+**Step 3: Implement two-phase browser connection**
 
-In `client/src/app.tsx`:
+Current browser connects directly to `hostPeerId` and uses that connection for voice.
 
-- Add `handoffId?: string` to `parseInitialSearch` result.
-- Parse `handoff` param.
-- Stop passing `sessionId/threadId` into `DrivingScreen` for production handoff links.
+Change it to:
 
-Example:
+1. Handoff screen connects to `hostPeerId` as the rendezvous room.
+2. On user enter / start, send:
 
 ```ts
-const handoffId = params.get('handoff')?.trim() || undefined;
-return { screen, errorKind, hostPeerId, handoffId, sessionId, threadId };
+phoneToDaemon.rendezvousJoin(sessionId, threadId)
 ```
 
-**Step 4: Add handoff resolution state**
+3. Wait for `rendezvous.accept` with `roomId`.
+4. Close rendezvous `RtcClient`.
+5. Create a new `RtcClient` using `hostPeerId = roomId`.
+6. Enter `DrivingScreen` using the voice-room connection.
 
-In `RtcContext` or a new `client/src/voice/handoff.ts`, implement this flow:
-
-1. Connect to rendezvous host room from `hostPeerId`.
-2. On handoff screen enter, send `phoneToDaemon.handoffJoin(handoffId)`.
-3. Wait for `handoff.accept` with `roomId`.
-4. Close rendezvous client.
-5. Create/open a new `RtcClient` for `roomId`.
-6. Drive `DrivingScreen` from the room connection.
-
-Keep user-visible status explicit:
+Expose UI states clearly:
 
 - `CONNECTING TO CLAWKIE`
-- `JOINING VOICE SESSION`
+- `JOINING SESSION ROOM`
 - `READY`
-- `SESSION EXPIRED` / `HANDOFF FAILED`
+- `SESSION JOIN FAILED`
 
-**Step 5: Remove route IDs from STT start**
+**Step 4: Remove route IDs from `stt.start`**
 
 In `client/src/voice/sttDaemon.ts`:
 
@@ -824,11 +496,9 @@ In `client/src/voice/sttDaemon.ts`:
 opts.sendControl(phoneToDaemon.sttStart());
 ```
 
-Remove `sessionId` / `threadId` from `STTStartOptions` unless needed for dev-only fallback. If kept, mark as dev-only and do not include it in production handoff path.
+Remove `sessionId` / `threadId` from `STTStartOptions` unless tests require temporary compatibility. If compatibility remains, do not use it in the normal rendezvous path.
 
-In `client/src/screens/Driving.tsx`, stop passing `sessionId/threadId` into `useDrivingLoop` for production handoff flow.
-
-**Step 6: Run focused tests**
+**Step 5: Run focused checks**
 
 ```bash
 npm test -- test/appRouting.test.ts test/protocol.test.ts test/drivingReducer.test.ts
@@ -837,89 +507,176 @@ npm run typecheck
 
 Expected: PASS.
 
-**Step 7: Commit**
+**Step 6: Commit**
 
 ```bash
 git add client/src/app.tsx client/src/rtc/RtcContext.tsx client/src/rtc/client.ts client/src/screens/Handoff.tsx client/src/screens/Driving.tsx client/src/voice/sttDaemon.ts test/appRouting.test.ts
-git commit -m "feat: resolve voice handoffs before driving mode"
+git commit -m "feat: connect browser through rendezvous room"
 ```
 
 ---
 
-## Task 7: Add session cleanup, limits, and failure legibility
+## Task 5: Add active session cleanup and limits only for live voice sessions
 
 **Files:**
-- Modify: `daemon/src/handoffRegistry.ts`
 - Modify: `daemon/src/voiceSession.ts`
 - Modify: `daemon/src/peer.ts`
-- Modify: `client/src/screens/Handoff.tsx`
-- Modify: `client/src/screens/ErrorScreen.tsx`
-- Modify: `test/handoffRegistry.test.ts`
 - Modify: `test/voiceSession.test.ts`
 
-**Step 1: Write cleanup/limit tests**
+**Step 1: Write cleanup tests**
 
-Add tests for:
-
-- expired handoffs disappear;
-- completed/revoked handoffs cannot be reused if we choose one-time use;
-- daemon enforces max active voice sessions;
-- voice session cleanup destroys peer/STT/TTS/chat abort state.
-
-Example registry test:
+Add tests for pure cleanup behavior:
 
 ```ts
-it('can mark a handoff as claimed so stale links cannot create duplicate rooms', () => {
-  const registry = createHandoffRegistry({
-    hostPeerId: 'host-1',
-    now: () => 1000,
-    id: () => 'handoff-1',
-  });
-  registry.create({ sessionId: 's1' });
-
-  expect(registry.claim('handoff-1')?.roomId).toBe('host-1:handoff-1');
-  expect(registry.claim('handoff-1')).toBeUndefined();
+it('marks a voice session closed after cleanup', () => {
+  const s = createVoiceSessionState({ roomId: 'host:s1', sessionId: 's1' });
+  expect(s.closed).toBe(false);
+  s.close();
+  expect(s.closed).toBe(true);
 });
 ```
 
-**Step 2: Implement cleanup semantics**
+**Step 2: Implement runtime cleanup**
 
-Recommended defaults:
+In runtime `VoiceSession`:
 
-- handoff TTL: 10 minutes;
-- handoff claim: one active `VoiceSession` per handoff;
-- idle voice session cleanup: 10 minutes after disconnect;
-- max active sessions: configurable, default 8;
-- explicit error messages: `handoff_expired`, `handoff_already_claimed`, `too_many_voice_sessions`.
+- destroy peer on close;
+- close room `SignalClient`;
+- cancel STT/TTS/chat abort;
+- stop keepalive/audio pump;
+- notify manager when session closes;
+- manager removes `voiceSessions.delete(roomId)`.
 
-**Step 3: Surface failures clearly in client**
+Add max active sessions only to prevent resource runaway:
 
-Update handoff UI so failures do not look like generic WebRTC failure:
+```ts
+private readonly maxVoiceSessions = opts.maxVoiceSessions ?? 8;
+```
 
-- expired token → “This voice link expired. Ask for a new one.”
-- daemon unavailable → “Couldn’t reach Clawkie on this machine.”
-- room allocation failed → “Couldn’t create a voice room.”
-- room connected but STT fails → existing STT error path.
+If exceeded, rendezvous returns `rendezvous.error('too_many_voice_sessions')`.
 
-**Step 4: Run focused tests**
+Important: this is active runtime session state only. It is not pre-created link state.
+
+**Step 3: Run focused checks**
 
 ```bash
-npm test -- test/handoffRegistry.test.ts test/voiceSession.test.ts test/appRouting.test.ts test/drivingReducer.test.ts
+npm test -- test/voiceSession.test.ts test/protocol.test.ts
 npm run typecheck
 ```
 
 Expected: PASS.
 
-**Step 5: Commit**
+**Step 4: Commit**
 
 ```bash
-git add daemon/src/handoffRegistry.ts daemon/src/voiceSession.ts daemon/src/peer.ts client/src/screens/Handoff.tsx client/src/screens/ErrorScreen.tsx test/handoffRegistry.test.ts test/voiceSession.test.ts
-git commit -m "feat: add handoff cleanup and readable failures"
+git add daemon/src/voiceSession.ts daemon/src/peer.ts test/voiceSession.test.ts
+git commit -m "feat: clean up active voice sessions"
 ```
 
 ---
 
-## Task 8: Update docs for the production handoff flow
+## Task 6: Add a pure URL helper, not a stateful daemon API
+
+**Files:**
+- Create: `scripts/create-handoff-link.mjs`
+- Modify: `package.json`
+
+**Step 1: Add helper script**
+
+The helper must not call the daemon and must not create daemon state. It only formats the agreed URL.
+
+Command:
+
+```bash
+npm run create-handoff-link -- \
+  --host host-1 \
+  --session-id agent:main:discord:channel-1:thread-1 \
+  --thread-id thread-1 \
+  --client-origin https://clawkie-talkie.davidguttman.jump.sh
+```
+
+Output:
+
+```text
+https://clawkie-talkie.davidguttman.jump.sh/?screen=handoff&host=host-1&session=agent%3Amain%3Adiscord%3Achannel-1%3Athread-1&threadId=thread-1
+```
+
+**Step 2: Implement script**
+
+Create `scripts/create-handoff-link.mjs`:
+
+```js
+const args = parseArgs(process.argv.slice(2));
+const host = args.host;
+const sessionId = args['session-id'];
+const threadId = args['thread-id'];
+const clientOrigin = args['client-origin'] || process.env.CT_CLIENT_ORIGIN;
+
+if (!host) die('--host is required');
+if (!sessionId) die('--session-id is required');
+if (!clientOrigin) die('--client-origin or CT_CLIENT_ORIGIN is required');
+
+const url = new URL(clientOrigin.replace(/\/$/, '') + '/');
+url.searchParams.set('screen', 'handoff');
+url.searchParams.set('host', host);
+url.searchParams.set('session', sessionId);
+if (threadId) url.searchParams.set('threadId', threadId);
+console.log(url.toString());
+
+function parseArgs(argv) {
+  const out = {};
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (!arg.startsWith('--')) continue;
+    out[arg.slice(2)] = argv[++i];
+  }
+  return out;
+}
+
+function die(msg) {
+  console.error(msg);
+  process.exit(1);
+}
+```
+
+**Step 3: Add package script**
+
+Modify `package.json`:
+
+```json
+{
+  "scripts": {
+    "create-handoff-link": "node scripts/create-handoff-link.mjs"
+  }
+}
+```
+
+**Step 4: Verify script without starting servers**
+
+```bash
+node scripts/create-handoff-link.mjs \
+  --host host-1 \
+  --session-id session-1 \
+  --thread-id thread-1 \
+  --client-origin https://clawkie-talkie.davidguttman.jump.sh
+```
+
+Expected output:
+
+```text
+https://clawkie-talkie.davidguttman.jump.sh/?screen=handoff&host=host-1&session=session-1&threadId=thread-1
+```
+
+**Step 5: Commit**
+
+```bash
+git add package.json scripts/create-handoff-link.mjs
+git commit -m "feat: add deterministic handoff link helper"
+```
+
+---
+
+## Task 7: Update docs for deterministic rendezvous
 
 **Files:**
 - Modify: `daemon/README.md`
@@ -929,26 +686,27 @@ git commit -m "feat: add handoff cleanup and readable failures"
 
 Replace “Single-session daemon” framing with:
 
-- daemon is a local voice handoff daemon;
-- one daemon can manage multiple voice handoffs;
-- `host` is control/rendezvous identity;
-- each handoff creates a per-session voice room;
-- browser links contain `host` + `handoff`, not browser-owned routing IDs.
+- daemon is a local rendezvous daemon;
+- `host` is a control/rendezvous room;
+- voice happens on deterministic per-session rooms;
+- browser links contain `host`, `session`, and optional `threadId`;
+- no pre-created link-state lifecycle exists.
 
 Document:
 
 ```bash
 npm run daemon -- \
-  --client-origin https://clawkie-talkie.davidguttman.jump.sh \
-  --control-port 8787
+  --client-origin https://clawkie-talkie.davidguttman.jump.sh
 ```
 
 And:
 
 ```bash
-npm run create-handoff -- \
-  --session-id agent:main:discord:<channel>:<thread> \
-  --thread-id <thread>
+npm run create-handoff-link -- \
+  --host <daemon-peer-id> \
+  --session-id <openclaw-session-id> \
+  --thread-id <discord-thread-id> \
+  --client-origin https://clawkie-talkie.davidguttman.jump.sh
 ```
 
 **Step 2: Create design doc**
@@ -956,11 +714,10 @@ npm run create-handoff -- \
 Create `docs/voice-handoff.md` with:
 
 - user story;
-- old architecture;
-- new architecture;
-- sequence diagram in Mermaid;
+- old singleton architecture;
+- new deterministic rendezvous architecture;
+- sequence diagram;
 - failure states;
-- security/authority boundary;
 - testing checklist.
 
 Suggested Mermaid:
@@ -969,23 +726,20 @@ Suggested Mermaid:
 sequenceDiagram
   participant User
   participant Agent as OpenClaw Agent
-  participant API as Local Clawkie Control API
   participant Phone as Browser Client
-  participant Host as Daemon Host/Rendezvous
-  participant Room as VoiceSession Room
+  participant Host as Daemon Host/Rendezvous H
+  participant Room as Voice Room H:session
   participant OC as OpenClaw Session
 
   User->>Agent: switch to voice
-  Agent->>API: create handoff(sessionId, threadId)
-  API->>API: store handoffId -> session/thread/room
-  API-->>Agent: URL with host + handoff
-  Agent-->>User: link
+  Agent-->>User: URL with host H + session A + thread A
   User->>Phone: open link
-  Phone->>Host: handoff.join(handoffId)
-  Host-->>Phone: handoff.accept(roomId)
+  Phone->>Host: rendezvous.join(session A, thread A)
+  Host->>Host: derive room H:A
+  Host-->>Phone: rendezvous.accept(room H:A)
   Phone->>Room: WebRTC voice connection
   User->>Phone: speak
-  Room->>OC: run OpenClaw turn with bound session/thread
+  Room->>OC: run OpenClaw turn with room-bound session/thread
   OC-->>Room: reply text
   Room-->>Phone: TTS audio
 ```
@@ -1003,70 +757,84 @@ Expected: PASS.
 
 ```bash
 git add daemon/README.md docs/voice-handoff.md
-git commit -m "docs: describe rendezvous voice handoff flow"
+git commit -m "docs: describe deterministic rendezvous voice handoff"
 ```
 
 ---
 
-## Task 9: Add an integration-style test for two simultaneous handoffs
+## Task 8: Add integration-style test for two simultaneous sessions
 
 **Files:**
-- Create: `test/multiHandoffFlow.test.ts`
+- Create: `test/multiSessionRendezvous.test.ts`
 - Modify test helpers as needed.
 
-**Step 1: Write the test at the state/protocol level**
+**Step 1: Write state/protocol-level test**
 
-Do not require real WebRTC in CI. Test the daemon manager behavior with fake sessions.
+Do not require real WebRTC in CI. Test the manager behavior with fake voice sessions.
 
 Desired behavior:
 
 ```ts
-describe('multi-handoff flow', () => {
-  it('binds two handoffs to separate rooms and chat targets', () => {
-    // create handoff A -> room host:A -> session A/thread A
-    // create handoff B -> room host:B -> session B/thread B
-    // join both
-    // assert sessions map has two independent VoiceSession states
-    // assert A chatTarget remains A and B chatTarget remains B
+describe('multi-session rendezvous', () => {
+  it('derives separate rooms for separate sessions on the same host', () => {
+    const host = 'host-1';
+    const roomA = makeVoiceRoomId({ hostPeerId: host, sessionId: 'session-a' });
+    const roomB = makeVoiceRoomId({ hostPeerId: host, sessionId: 'session-b' });
+
+    expect(roomA).toBe('host-1:session-a');
+    expect(roomB).toBe('host-1:session-b');
+    expect(roomA).not.toBe(roomB);
+  });
+
+  it('keeps chat targets isolated by room', () => {
+    const a = createVoiceSessionState({
+      roomId: 'host-1:session-a',
+      sessionId: 'session-a',
+      threadId: 'thread-a',
+    });
+    const b = createVoiceSessionState({
+      roomId: 'host-1:session-b',
+      sessionId: 'session-b',
+      threadId: 'thread-b',
+    });
+
+    expect(a.chatTarget()).toEqual({ sessionId: 'session-a', threadId: 'thread-a' });
+    expect(b.chatTarget()).toEqual({ sessionId: 'session-b', threadId: 'thread-b' });
   });
 });
 ```
 
-If `DaemonPeer` is too coupled to WebRTC to test directly, extract a pure `VoiceSessionManager` from it first:
+If `DaemonPeer` is too coupled to WebRTC to test directly, extract a pure `VoiceSessionManager`:
 
 - Create: `daemon/src/voiceSessionManager.ts`
 - Test: `test/voiceSessionManager.test.ts`
 
-**Step 2: Implement/extract manager if needed**
-
 Manager responsibilities:
 
-- validate handoff ID;
-- claim handoff;
-- create `VoiceSession` for room;
-- enforce max sessions;
-- remove sessions on cleanup;
-- never allow browser route override.
+- derive room from host/session;
+- create/get active `VoiceSession` by room;
+- enforce max active sessions;
+- remove sessions on cleanup.
 
-**Step 3: Run focused tests**
+**Step 2: Run focused tests**
 
 ```bash
-npm test -- test/multiHandoffFlow.test.ts test/voiceSessionManager.test.ts
+npm test -- test/multiSessionRendezvous.test.ts test/voiceSession.test.ts test/voiceRoom.test.ts
 npm run typecheck
 ```
 
 Expected: PASS.
 
-**Step 4: Commit**
+**Step 3: Commit**
 
 ```bash
-git add daemon/src/voiceSessionManager.ts test/multiHandoffFlow.test.ts test/voiceSessionManager.test.ts
-git commit -m "test: cover multiple voice handoffs"
+git add daemon/src/voiceSessionManager.ts test/multiSessionRendezvous.test.ts test/voiceSessionManager.test.ts
+git commit -m "test: cover multi-session rendezvous"
 ```
 
 ---
 
-## Task 10: Final verification gate
+## Task 9: Final verification gate
 
 **Files:**
 - No new files unless fixing failures.
@@ -1105,8 +873,8 @@ Because this requires running Node server/daemon processes, do not do it silentl
 If authorized, verify:
 
 1. Start existing project dev flow in the approved way.
-2. Create handoff A for thread A.
-3. Create handoff B for thread B.
+2. Create link A for thread/session A.
+3. Create link B for thread/session B.
 4. Open both links in separate browser tabs/devices.
 5. Confirm both reach READY independently.
 6. Speak one deterministic fixture or mic turn in A.
@@ -1114,13 +882,6 @@ If authorized, verify:
 8. Speak one turn in B.
 9. Confirm transcript/reply mirrors to B only.
 10. Confirm closing A does not close B.
-
-**Step 4: Final commit if any verification fixes were needed**
-
-```bash
-git add <fixed-files>
-git commit -m "fix: stabilize rendezvous voice handoff"
-```
 
 ---
 
@@ -1131,25 +892,24 @@ The feature is complete when:
 - `npm test` passes.
 - `npm run typecheck` passes.
 - `npm run build` passes.
-- Agent handoff path is one stable local command/API call, not manual URL assembly.
-- Browser handoff links use `host` + opaque `handoff`, not browser-controlled `session/threadId` as production routing authority.
+- `host=H` is rendezvous/control only.
+- The actual voice WebRTC session uses a derived per-session room.
 - Daemon can hold at least two simultaneous independent voice sessions.
-- Each voice session has daemon-owned `sessionId/threadId` binding.
-- A failed/expired handoff produces a clear user-facing error.
-- Docs describe current production handoff flow accurately.
+- Each voice session has its own room-bound `sessionId/threadId` for chat routing.
+- `stt.start` no longer accepts or sets routing fields per turn.
+- There is no pre-created link-state table / random join-ID store / TTL lifecycle for link creation.
+- Docs describe deterministic rendezvous accurately.
 
 ## Recommended Commit Sequence
 
-1. `feat: add voice handoff registry`
-2. `feat: add voice handoff protocol messages`
-3. `feat: add local voice handoff API`
-4. `feat: add voice handoff helper command`
-5. `feat: split daemon voice sessions by room`
-6. `feat: resolve voice handoffs before driving mode`
-7. `feat: add handoff cleanup and readable failures`
-8. `docs: describe rendezvous voice handoff flow`
-9. `test: cover multiple voice handoffs`
-10. final fix commit only if verification requires it
+1. `feat: derive deterministic voice rooms`
+2. `feat: add rendezvous join protocol`
+3. `feat: split daemon voice state by session room`
+4. `feat: connect browser through rendezvous room`
+5. `feat: clean up active voice sessions`
+6. `feat: add deterministic handoff link helper`
+7. `docs: describe deterministic rendezvous voice handoff`
+8. `test: cover multi-session rendezvous`
 
 ## Execution Notes
 
@@ -1159,4 +919,4 @@ The feature is complete when:
 - Do not commit credentials.
 - Do not start or kill Node servers during automated implementation unless David explicitly authorizes live verification.
 - Prefer small commits after each task.
-- If a task exposes that per-room WebRTC requires a deeper signaling change than expected, stop and report the exact blocker before broadening scope.
+- If implementation reveals that deterministic rooms cannot work with the current signaling server semantics, stop and report that exact blocker before adding stateful handoff machinery.
