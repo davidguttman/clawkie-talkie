@@ -54,8 +54,6 @@ export interface STTStartOptions {
   isConnected: () => boolean;
   onPartial?: (text: string, isFinal: boolean) => void;
   onError?: (reason: string) => void;
-  sessionId?: string;
-  threadId?: string;
   // Override the audio source. Defaults to `selectAudioSource()` which
   // picks mic or fixture from the `?audio-fixture=` query param.
   audioSource?: AudioSource;

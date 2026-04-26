@@ -185,7 +185,17 @@ export function App() {
   );
 
   return (
-    <RtcProvider hostPeerId={initial.hostPeerId ?? undefined}>
+    <RtcProvider
+      hostPeerId={initial.hostPeerId ?? undefined}
+      rendezvous={
+        initial.handoff
+          ? {
+              sessionId: initial.handoff.sessionId,
+              delivery: initial.handoff.delivery,
+            }
+          : null
+      }
+    >
       {rendered}
     </RtcProvider>
   );
