@@ -104,49 +104,53 @@ describe('runChat OpenClaw CLI integration', () => {
     expect(agentCommand).not.toContain('"--reply-to"');
   });
 
-  it('posts the agent reply text to Discord exactly once after the agent returns', async () => {
+  it('does not post the agent reply text via openclaw message send (the agent does it)', async () => {
     execMock
       .mockResolvedValueOnce({ stdout: 'transcript posted\n', stderr: '' })
       .mockResolvedValueOnce({ stdout: 'hello back\n', stderr: '' })
-      .mockResolvedValueOnce({ stdout: 'reply posted\n', stderr: '' })
       .mockResolvedValueOnce({ stdout: 'ok\n', stderr: '' });
 
-    await runChat('hi', {
+    const result = await runChat('hi', {
       apiKey: 'test-key',
       sessionId: 'session-1',
       threadId: 'thread-1',
       deliver: true,
     });
 
+    expect(result.text).toBe('hello back');
+
     const sendCommands = execMock.mock.calls
       .map(([cmd]) => String(cmd))
       .filter((cmd) => cmd.includes('openclaw "message" "send"'));
-    // Expect: transcript, reply, then debug notification — but only one
-    // contains the actual reply text and none use --deliver/--reply-to.
-    const replyCommand = sendCommands.find((cmd) =>
+    // No `message send` should ever carry the agent reply text — the
+    // Discord-bound agent session posts the reply itself, and posting
+    // again here is what was producing the doubled message in Discord.
+    const replyEchoes = sendCommands.filter((cmd) =>
       cmd.includes('"--message" "hello back"'),
     );
-    expect(replyCommand).toBeDefined();
-    expect(replyCommand).toContain('"--target" "channel:thread-1"');
-    const replyMatches = sendCommands.filter((cmd) =>
-      cmd.includes('"--message" "hello back"'),
-    );
-    expect(replyMatches).toHaveLength(1);
+    expect(replyEchoes).toHaveLength(0);
+
+    // Debug notifications must not embed reply text either.
+    for (const cmd of sendCommands) {
+      expect(cmd).not.toContain('hello back');
+    }
   });
 
-  it('skips reply-message delivery when no Discord target can be derived', async () => {
+  it('runs the turn even when no Discord target can be derived (no reply re-send)', async () => {
     execMock.mockResolvedValue({ stdout: 'plain reply\n', stderr: '' });
 
-    await runChat('hi', {
+    const result = await runChat('hi', {
       apiKey: 'test-key',
       sessionId: 'session-1',
       deliver: true,
     });
 
+    expect(result.text).toBe('plain reply');
+
     const sendCommands = execMock.mock.calls
       .map(([cmd]) => String(cmd))
       .filter((cmd) => cmd.includes('openclaw "message" "send"'));
-    // No transcript and no reply send when there's no Discord target.
+    // No transcript (no Discord target) and no explicit reply send.
     expect(sendCommands).toHaveLength(0);
   });
 
