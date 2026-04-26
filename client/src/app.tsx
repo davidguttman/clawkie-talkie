@@ -9,6 +9,7 @@ import { SettingsScreen } from './screens/Settings';
 import { ErrorScreen, type ErrorKind } from './screens/ErrorScreen';
 import { RtcProvider } from './rtc/RtcContext';
 import { loadSettings, saveSettings, type Settings } from './storage';
+import { parseHandoffUrl, type HandoffRoute } from './voice/handoffUrl';
 
 type ScreenId = 'handoff' | 'driving' | 'history' | 'transcript' | 'settings' | 'error';
 
@@ -52,7 +53,20 @@ export function parseInitialSearch(search: string): {
 }
 
 function parseInitial() {
-  return parseInitialSearch(window.location.search);
+  const legacy = parseInitialSearch(window.location.search);
+  // Hash-first handoff URLs (preferred) — keep identifiers off the wire.
+  const handoff = parseHandoffUrl(
+    '/voice' + (window.location.search || '') + (window.location.hash || ''),
+  );
+  if (handoff) {
+    return {
+      ...legacy,
+      hostPeerId: handoff.hostPeerId,
+      sessionId: handoff.sessionId,
+      handoff,
+    };
+  }
+  return { ...legacy, handoff: null as HandoffRoute | null };
 }
 
 function setUrlParam(key: string, value: string | null) {
