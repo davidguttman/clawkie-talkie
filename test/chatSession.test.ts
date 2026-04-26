@@ -10,7 +10,13 @@ const execMock = vi.hoisted(() => {
 
 vi.mock('node:child_process', () => ({ exec: execMock }));
 
-import { ChatError, classifyOpenClawError, runChat } from '../daemon/src/chatSession';
+import {
+  ChatError,
+  classifyOpenClawError,
+  deriveDiscordMessageTarget,
+  quoteTranscript,
+  runChat,
+} from '../daemon/src/chatSession';
 
 describe('runChat OpenClaw CLI integration', () => {
   beforeEach(() => {
@@ -31,12 +37,39 @@ describe('runChat OpenClaw CLI integration', () => {
     expect(transcriptCommand).toContain('openclaw "message" "send"');
     expect(transcriptCommand).toContain('"--channel" "discord"');
     expect(transcriptCommand).toContain('"--target" "channel:thread-1"');
-    expect(transcriptCommand).toContain(`"--message" ${JSON.stringify('> Hello\n> world')}`);
+    expect(transcriptCommand).toContain(
+      `"--message" ${JSON.stringify('**User said:**\n> Hello\n> world')}`,
+    );
 
     const agentCallIndex = execMock.mock.calls.findIndex(([cmd]) =>
       String(cmd).includes('openclaw "agent"'),
     );
     expect(agentCallIndex).toBeGreaterThan(0);
+  });
+
+  it('posts transcripts to the Discord target derived from the session key when threadId is absent', async () => {
+    execMock
+      .mockResolvedValueOnce({ stdout: 'transcript posted\n', stderr: '' })
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify([
+          { key: 'agent:main:discord:channel-1:thread-2', sessionId: 'stored-session-id' },
+        ]),
+        stderr: '',
+      })
+      .mockResolvedValueOnce({ stdout: 'reply\n', stderr: '' });
+
+    await runChat('from session route', {
+      apiKey: 'test-key',
+      sessionId: 'agent:main:discord:channel-1:thread-2',
+      deliver: true,
+    });
+
+    const transcriptCommand = String(execMock.mock.calls[0]?.[0]);
+    expect(transcriptCommand).toContain('openclaw "message" "send"');
+    expect(transcriptCommand).toContain('"--target" "channel:thread-2"');
+    expect(transcriptCommand).toContain(
+      `"--message" ${JSON.stringify('**User said:**\n> from session route')}`,
+    );
   });
 
   it('targets the Discord reply thread when threadId is provided', async () => {
@@ -74,6 +107,7 @@ describe('runChat OpenClaw CLI integration', () => {
 
   it('resolves OpenClaw session keys to stored session ids before agent runs', async () => {
     execMock
+      .mockResolvedValueOnce({ stdout: 'transcript posted\n', stderr: '' })
       .mockResolvedValueOnce({
         stdout: JSON.stringify([
           { key: 'agent:main:discord:channel:thread-1', sessionId: 'stored-session-id' },
@@ -88,7 +122,7 @@ describe('runChat OpenClaw CLI integration', () => {
       deliver: true,
     });
 
-    expect(execMock.mock.calls[0]?.[0]).toContain('openclaw "sessions"');
+    expect(execMock.mock.calls[1]?.[0]).toContain('openclaw "sessions"');
     const agentCommand = findAgentCommand();
     expect(agentCommand).toContain('"--session-id" "stored-session-id"');
   });
@@ -121,6 +155,34 @@ describe('runChat OpenClaw CLI integration', () => {
         deliver: true,
       }),
     ).rejects.toMatchObject({ code: 'aborted' });
+  });
+});
+
+describe('Discord transcript formatting and target derivation', () => {
+  it('labels and quotes the user transcript', () => {
+    expect(quoteTranscript('one\ntwo')).toBe('**User said:**\n> one\n> two');
+  });
+
+  it('uses explicit threadId before session-derived IDs', () => {
+    expect(
+      deriveDiscordMessageTarget({
+        threadId: 'explicit-thread',
+        sessionId: 'agent:main:discord:channel-1:thread-2',
+      }),
+    ).toBe('explicit-thread');
+  });
+
+  it('derives the most specific Discord ID from agent session keys', () => {
+    expect(
+      deriveDiscordMessageTarget({
+        sessionId: 'agent:main:discord:channel-1:thread-2',
+      }),
+    ).toBe('thread-2');
+    expect(
+      deriveDiscordMessageTarget({
+        sessionId: 'agent:main:discord:channel:1497851727846576159',
+      }),
+    ).toBe('1497851727846576159');
   });
 });
 
