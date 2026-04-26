@@ -38,7 +38,7 @@ describe('runChat OpenClaw CLI integration', () => {
     expect(transcriptCommand).toContain('"--channel" "discord"');
     expect(transcriptCommand).toContain('"--target" "channel:thread-1"');
     expect(transcriptCommand).toContain(
-      `"--message" ${JSON.stringify('**User said:**\n> Hello\n> world')}`,
+      `"--message" ${JSON.stringify('> Hello\n> world')}`,
     );
 
     const agentCallIndex = execMock.mock.calls.findIndex(([cmd]) =>
@@ -68,7 +68,7 @@ describe('runChat OpenClaw CLI integration', () => {
     expect(transcriptCommand).toContain('openclaw "message" "send"');
     expect(transcriptCommand).toContain('"--target" "channel:thread-2"');
     expect(transcriptCommand).toContain(
-      `"--message" ${JSON.stringify('**User said:**\n> from session route')}`,
+      `"--message" ${JSON.stringify('> from session route')}`,
     );
   });
 
@@ -208,8 +208,8 @@ describe('runChat OpenClaw CLI integration', () => {
 });
 
 describe('Discord transcript formatting and target derivation', () => {
-  it('labels and quotes the user transcript', () => {
-    expect(quoteTranscript('one\ntwo')).toBe('**User said:**\n> one\n> two');
+  it('block-quotes each line of the user transcript without a header', () => {
+    expect(quoteTranscript('one\ntwo')).toBe('> one\n> two');
   });
 
   it('uses explicit threadId before session-derived IDs', () => {

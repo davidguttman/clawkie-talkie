@@ -52,12 +52,40 @@ export type SttServerEvent =
   | SttEventDone
   | SttEventError;
 
-// Pure event-dispatch helper. Accumulates committed segments from
-// `transcript.partial { is_final: true }` so we can recover when xAI's
-// own `transcript.done` arrives with empty text or only the last
-// segment — both happen in practice even when earlier finals carried
-// real words. Empty partials are dropped entirely so they can't wipe live
-// caption state on the phone.
+// Pure event-dispatch helper for the xAI STT stream.
+//
+// Two channels of information feed the final hand-off:
+//
+//   * `transcript.partial` events. While speech is in flight these are
+//     low-context guesses; they MUST stay UI-only. Empty partials are
+//     dropped entirely so they can't wipe live caption state. The
+//     latest non-empty partial is also retained as a last-resort
+//     fallback for when both `done` and the committed finals are empty.
+//
+//   * `transcript.partial { is_final: true }` events. xAI emits these
+//     in two patterns:
+//       - cumulative: each new final extends the previous one
+//         (`hello`, then `hello world`). Treating these as independent
+//         segments and concatenating produces `hello hello world`,
+//         which is wrong. We dedupe by detecting when the new final
+//         starts with the prior cumulative state.
+//       - segmented: each new final is an independent utterance
+//         (`hello`, then `world`). Concatenate with a space.
+//     The result is `bestFinals`, the best fully-committed hypothesis.
+//
+// On `transcript.done` we hand off ONE transcript to the caller. We
+// never fire onDone from a partial — the daemon waits for `done` (or
+// the WS close) so chat / Discord / TTS only see the most settled
+// hypothesis. Selection prefers, in order:
+//
+//   1. doneText if it's a strict superset of bestFinals (xAI sometimes
+//      returns the full hypothesis here even when finals were segmented).
+//   2. bestFinals if doneText is empty, a substring of bestFinals, or
+//      bestFinals is itself a strict superset of doneText (the
+//      "done is just the last segment" case observed in practice).
+//   3. The longer of the two when they're independent.
+//   4. The latest non-empty partial as the last fallback if both
+//      doneText and bestFinals are empty.
 export interface SttHandlerCallbacks {
   onReady: () => void;
   onPartial: (text: string, isFinal: boolean) => void;
@@ -68,11 +96,25 @@ export interface SttHandlerCallbacks {
 export interface SttHandlerState {
   readyFired: boolean;
   doneFired: boolean;
+  // All non-empty `is_final: true` partials, in arrival order. Kept
+  // for diagnostics / backwards-compat with callers that inspect
+  // segment counts; `bestFinals` is the source of truth for selection.
   finals: string[];
+  // Best committed hypothesis after dedupe of cumulative finals.
+  bestFinals: string;
+  // Latest non-empty partial text (final or not). Used as the
+  // last-resort fallback when `done` and `bestFinals` are both empty.
+  latestPartial: string;
 }
 
 export function createSttHandlerState(): SttHandlerState {
-  return { readyFired: false, doneFired: false, finals: [] };
+  return {
+    readyFired: false,
+    doneFired: false,
+    finals: [],
+    bestFinals: '',
+    latestPartial: '',
+  };
 }
 
 export function handleSttEvent(
@@ -91,7 +133,11 @@ export function handleSttEvent(
       const text = (msg.text || '').trim();
       const isFinal = !!msg.is_final;
       if (!text) return; // drop empty partials/finals — they wipe UI
-      if (isFinal) state.finals.push(text);
+      state.latestPartial = text;
+      if (isFinal) {
+        state.finals.push(text);
+        state.bestFinals = mergeFinal(state.bestFinals, text);
+      }
       cb.onPartial(text, isFinal);
       return;
     }
@@ -99,14 +145,51 @@ export function handleSttEvent(
       if (state.doneFired) return;
       state.doneFired = true;
       const doneText = (msg.text || '').trim();
-      const accumulatedText = state.finals.join(' ').trim();
-      cb.onDone(accumulatedText.length >= doneText.length ? accumulatedText : doneText);
+      cb.onDone(selectFinalTranscript(state, doneText));
       return;
     }
     case 'error':
       cb.onError(msg.message || 'xai_stt_error');
       return;
   }
+}
+
+// Merge a fresh `is_final: true` segment into the best-committed
+// hypothesis. Detects xAI's cumulative-final pattern (`hello`, then
+// `hello world`) so we don't double-concat into `hello hello world`.
+export function mergeFinal(prev: string, next: string): string {
+  const p = prev.trim();
+  const n = next.trim();
+  if (!p) return n;
+  if (!n) return p;
+  if (n === p) return p;
+  if (n.startsWith(p)) return n;        // cumulative: next extends prev
+  if (p.startsWith(n)) return p;        // server retraction: keep prev
+  if (p.endsWith(n) || p.includes(n)) return p; // already inside prev
+  return `${p} ${n}`;                   // independent segment
+}
+
+// Choose the single transcript handed to chat/TTS/Discord at end of
+// turn. Conservative: we never invent text, never reorder, and never
+// ship a partial unless both authoritative sources are empty.
+export function selectFinalTranscript(
+  state: SttHandlerState,
+  doneText: string,
+): string {
+  const dt = doneText.trim();
+  const finals = state.bestFinals.trim();
+  const partial = state.latestPartial.trim();
+
+  if (!dt && !finals) return partial;
+  if (!dt) return finals;
+  if (!finals) return dt;
+
+  if (dt === finals) return dt;
+  if (dt.startsWith(finals)) return dt;       // done extends finals
+  if (finals.startsWith(dt)) return finals;   // done is a prefix of finals
+  if (finals.includes(dt)) return finals;     // done is a substring (last-segment case)
+  if (dt.includes(finals)) return dt;
+  return dt.length >= finals.length ? dt : finals;
 }
 
 export class XaiSttSession {

@@ -29,6 +29,10 @@ const DEFAULT_SAMPLE_RATE = 24000;
 let sharedAudioCtx: AudioContext | null = null;
 let sharedAudioElement: HTMLAudioElement | null = null;
 let attachedRemoteStream: MediaStream | null = null;
+let backgroundStaticState: { source: AudioBufferSourceNode; gain: GainNode } | null = null;
+
+const BACKGROUND_STATIC_GAIN = 0.04;
+const BACKGROUND_STATIC_BUFFER_SECONDS = 2;
 
 export interface TTSHandle {
   done: Promise<void>;
@@ -374,6 +378,69 @@ function resumeAudioContext(audioCtx: AudioContext): Promise<void> {
     () => undefined,
     () => undefined,
   );
+}
+
+// Low-volume background static + occasional crackle — used as an
+// audible "system is alive" signal during the `thinking` and `ai`
+// phases. Mixed at a much lower gain than TTS so it sits behind the
+// agent voice without masking it. Idempotent start; cleans up its own
+// nodes on stop. Reuses the same shared/unlocked AudioContext as the
+// PTT cue, so iOS lets it run after the user's first tap.
+export function startBackgroundStatic(): void {
+  if (backgroundStaticState) return;
+  const audioCtx = getSharedAudioContext();
+  if (!audioCtx) return;
+  void resumeAudioContext(audioCtx);
+  try {
+    const sr = audioCtx.sampleRate || DEFAULT_SAMPLE_RATE;
+    const samples = Math.max(1, Math.floor(sr * BACKGROUND_STATIC_BUFFER_SECONDS));
+    const buffer = audioCtx.createBuffer(1, samples, sr);
+    const ch = buffer.getChannelData(0);
+    for (let i = 0; i < samples; i++) {
+      // Soft white noise (0.6 amp) plus rare pops to give a vinyl-crackle texture.
+      let s = (Math.random() * 2 - 1) * 0.6;
+      if (Math.random() < 0.0008) s += (Math.random() * 2 - 1) * 1.5;
+      if (s > 1) s = 1;
+      else if (s < -1) s = -1;
+      ch[i] = s;
+    }
+    const source = audioCtx.createBufferSource();
+    source.buffer = buffer;
+    (source as AudioBufferSourceNode & { loop: boolean }).loop = true;
+    const gain = audioCtx.createGain();
+    gain.gain.value = BACKGROUND_STATIC_GAIN;
+    source.connect(gain);
+    gain.connect(audioCtx.destination);
+    source.start(0);
+    backgroundStaticState = { source, gain };
+  } catch {
+    backgroundStaticState = null;
+  }
+}
+
+export function stopBackgroundStatic(): void {
+  const s = backgroundStaticState;
+  backgroundStaticState = null;
+  if (!s) return;
+  try {
+    s.source.stop();
+  } catch {
+    // already stopped
+  }
+  try {
+    s.source.disconnect();
+  } catch {
+    // already disconnected
+  }
+  try {
+    s.gain.disconnect();
+  } catch {
+    // already disconnected
+  }
+}
+
+export function isBackgroundStaticActive(): boolean {
+  return !!backgroundStaticState;
 }
 
 function playSilentUnlockPulse(audioCtx: AudioContext): void {

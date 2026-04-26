@@ -87,13 +87,17 @@ async function sendDiscordMessage(
 }
 
 export function quoteTranscript(transcript: string): string {
-  const quoted = transcript
+  // Plain Discord block-quote: each transcript line gets a leading `> `,
+  // no header. Discord-bound agent sessions post the agent reply
+  // themselves; the transcript message is the only thing the daemon
+  // writes for the user side of the turn, so an explicit "User said:"
+  // header would just add noise.
+  return transcript
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
     .split('\n')
     .map((line) => `> ${line}`)
     .join('\n');
-  return `**User said:**\n${quoted}`;
 }
 
 export function deriveDiscordMessageTarget(opts: {

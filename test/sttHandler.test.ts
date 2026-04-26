@@ -9,7 +9,10 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   createSttHandlerState,
   handleSttEvent,
+  mergeFinal,
+  selectFinalTranscript,
   type SttHandlerCallbacks,
+  type SttHandlerState,
   type SttServerEvent,
 } from '../daemon/src/sttSession';
 
@@ -101,5 +104,109 @@ describe('handleSttEvent', () => {
     const s = createSttHandlerState();
     handleSttEvent(s, { type: 'error', message: 'boom' }, cb);
     expect(cb.onError).toHaveBeenCalledWith('boom');
+  });
+
+  it('dedupes cumulative finals so `hello` then `hello world` finals to `hello world`', () => {
+    const cb = makeCb();
+    const s = createSttHandlerState();
+    handleSttEvent(s, { type: 'transcript.partial', text: 'hello', is_final: true }, cb);
+    handleSttEvent(s, { type: 'transcript.partial', text: 'hello world', is_final: true }, cb);
+    handleSttEvent(s, { type: 'transcript.done', text: '' }, cb);
+    expect(cb.onDone).toHaveBeenCalledWith('hello world');
+  });
+
+  it('still handles segmented finals when done is empty (`hello` + `world` → `hello world`)', () => {
+    const cb = makeCb();
+    const s = createSttHandlerState();
+    handleSttEvent(s, { type: 'transcript.partial', text: 'hello', is_final: true }, cb);
+    handleSttEvent(s, { type: 'transcript.partial', text: 'world', is_final: true }, cb);
+    handleSttEvent(s, { type: 'transcript.done', text: '' }, cb);
+    expect(cb.onDone).toHaveBeenCalledWith('hello world');
+  });
+
+  it('falls back to the latest partial when both done and finals are empty', () => {
+    const cb = makeCb();
+    const s = createSttHandlerState();
+    handleSttEvent(s, { type: 'transcript.partial', text: 'hello world', is_final: false }, cb);
+    handleSttEvent(s, { type: 'transcript.done', text: '' }, cb);
+    expect(cb.onDone).toHaveBeenCalledWith('hello world');
+  });
+
+  it('prefers done when it is a strict superset of bestFinals', () => {
+    const cb = makeCb();
+    const s = createSttHandlerState();
+    handleSttEvent(s, { type: 'transcript.partial', text: 'hello world', is_final: true }, cb);
+    handleSttEvent(
+      s,
+      { type: 'transcript.done', text: 'hello world how are you' },
+      cb,
+    );
+    expect(cb.onDone).toHaveBeenCalledWith('hello world how are you');
+  });
+});
+
+describe('mergeFinal', () => {
+  it('returns next when prev is empty', () => {
+    expect(mergeFinal('', 'hi')).toBe('hi');
+  });
+  it('returns prev when next is empty', () => {
+    expect(mergeFinal('hi', '')).toBe('hi');
+  });
+  it('replaces prev with next when next extends prev (cumulative finals)', () => {
+    expect(mergeFinal('hello', 'hello world')).toBe('hello world');
+  });
+  it('keeps prev when prev already contains next (server retraction / repeat)', () => {
+    expect(mergeFinal('hello world', 'hello')).toBe('hello world');
+    expect(mergeFinal('hello world friend', 'world')).toBe('hello world friend');
+  });
+  it('concatenates independent segments with a single space', () => {
+    expect(mergeFinal('hello', 'world')).toBe('hello world');
+  });
+});
+
+describe('selectFinalTranscript', () => {
+  function stateFrom(opts: {
+    bestFinals?: string;
+    latestPartial?: string;
+  }): SttHandlerState {
+    return {
+      readyFired: true,
+      doneFired: false,
+      finals: [],
+      bestFinals: opts.bestFinals ?? '',
+      latestPartial: opts.latestPartial ?? '',
+    };
+  }
+
+  it('uses done text when finals are empty', () => {
+    expect(selectFinalTranscript(stateFrom({}), 'hello')).toBe('hello');
+  });
+  it('uses finals when done is empty', () => {
+    expect(selectFinalTranscript(stateFrom({ bestFinals: 'hello world' }), '')).toBe(
+      'hello world',
+    );
+  });
+  it('falls back to latest partial when both done and finals are empty', () => {
+    expect(
+      selectFinalTranscript(stateFrom({ latestPartial: 'maybe this' }), ''),
+    ).toBe('maybe this');
+  });
+  it('prefers finals when done is just the trailing segment', () => {
+    expect(
+      selectFinalTranscript(
+        stateFrom({ bestFinals: 'hello there friend' }),
+        'friend',
+      ),
+    ).toBe('hello there friend');
+  });
+  it('prefers done when it strictly extends finals', () => {
+    expect(
+      selectFinalTranscript(stateFrom({ bestFinals: 'hello' }), 'hello there'),
+    ).toBe('hello there');
+  });
+  it('uses the longer of two independent strings as a tie-breaker', () => {
+    expect(
+      selectFinalTranscript(stateFrom({ bestFinals: 'hi' }), 'hello there friend'),
+    ).toBe('hello there friend');
   });
 });

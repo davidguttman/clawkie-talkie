@@ -14,7 +14,12 @@ import {
   MicPermissionError,
   type STTHandle,
 } from './sttDaemon';
-import { playDaemonTts, type TTSHandle } from './tts';
+import {
+  playDaemonTts,
+  startBackgroundStatic,
+  stopBackgroundStatic,
+  type TTSHandle,
+} from './tts';
 import {
   initialContext,
   reduce,
@@ -202,11 +207,23 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     return () => cancelAnimationFrame(raf);
   }, [ctx.state]);
 
+  // Background static / crackle while the agent is thinking or
+  // speaking. Tied to ctx.state so it stops cleanly the moment the
+  // turn ends or the user starts a new recording.
+  useEffect(() => {
+    if (ctx.state === 'thinking' || ctx.state === 'ai') {
+      startBackgroundStatic();
+    } else {
+      stopBackgroundStatic();
+    }
+  }, [ctx.state]);
+
   // Tear down active handles on unmount.
   useEffect(() => {
     return () => {
       sttRef.current?.cancel();
       ttsRef.current?.stop();
+      stopBackgroundStatic();
     };
   }, []);
 

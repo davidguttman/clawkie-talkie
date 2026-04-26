@@ -178,6 +178,47 @@ describe('daemon TTS playback audio context', () => {
     expect(ctx.buffers).toContainEqual({ channels: 1, length: 2, sampleRate: 24000 });
   });
 
+  it('starts background static once and stops cleanly on stop', async () => {
+    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+    const { startBackgroundStatic, stopBackgroundStatic, isBackgroundStaticActive } = await import(
+      '../client/src/voice/tts'
+    );
+
+    expect(isBackgroundStaticActive()).toBe(false);
+    startBackgroundStatic();
+    expect(isBackgroundStaticActive()).toBe(true);
+
+    expect(FakeAudioContext.instances).toHaveLength(1);
+    const ctx = FakeAudioContext.instances[0];
+    expect(ctx.sources.length).toBe(1);
+    const source = ctx.sources[0];
+    // Loop flag must be set so the buffer plays continuously instead
+    // of firing onended after the first 2 s.
+    expect((source as unknown as { loop?: boolean }).loop).toBe(true);
+    expect(source.start).toHaveBeenCalledWith(0);
+    // Buffer sized at sampleRate * BACKGROUND_STATIC_BUFFER_SECONDS.
+    expect(ctx.buffers[0]?.sampleRate).toBe(48000);
+    expect(ctx.buffers[0]?.length).toBe(48000 * 2);
+
+    // Idempotent: a second call must not create a second source.
+    startBackgroundStatic();
+    expect(ctx.sources.length).toBe(1);
+
+    stopBackgroundStatic();
+    expect(isBackgroundStaticActive()).toBe(false);
+    expect(source.stop).toHaveBeenCalled();
+    expect(source.disconnect).toHaveBeenCalled();
+  });
+
+  it('background static is a no-op when AudioContext is not available', async () => {
+    vi.stubGlobal('window', {});
+    const { startBackgroundStatic, isBackgroundStaticActive } = await import(
+      '../client/src/voice/tts'
+    );
+    expect(() => startBackgroundStatic()).not.toThrow();
+    expect(isBackgroundStaticActive()).toBe(false);
+  });
+
   it('defensively resumes the shared context when TTS starts without prior unlock', async () => {
     vi.stubGlobal('window', { AudioContext: FakeAudioContext });
     const { playDaemonTts } = await import('../client/src/voice/tts');
