@@ -44,6 +44,39 @@ export function unlockDaemonTtsAudio(): Promise<void> {
   return resumeAudioContext(audioCtx);
 }
 
+// Audible PTT confirmation tone. Doubles as proof that the audio path works
+// from inside the user's tap gesture — if the user can hear this, mobile
+// playback is unlocked and the daemon TTS stream should be reachable too.
+export function playPttPressTone(): void {
+  const audioCtx = getSharedAudioContext();
+  if (!audioCtx) return;
+  void resumeAudioContext(audioCtx);
+  try {
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, now);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.22, now + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start(now);
+    osc.stop(now + 0.18);
+    osc.onended = () => {
+      try {
+        osc.disconnect();
+        gain.disconnect();
+      } catch {
+        // already disconnected
+      }
+    };
+  } catch {
+    // best-effort — silent failure is fine, the tone is just a UX hint
+  }
+}
+
 // Start listening for a single TTS turn from the daemon. Resolves when
 // the daemon emits `tts.done` (or on `tts.error`, settling with an
 // error code on the handle). Caller should invoke this after it sees

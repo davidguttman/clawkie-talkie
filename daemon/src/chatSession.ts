@@ -41,18 +41,19 @@ async function sendDebugNotification(
 
 async function sendTranscriptMessage(
   apiKey: string,
-  threadId: string | undefined,
+  opts: { threadId?: string; sessionId: string },
   transcript: string,
   signal?: AbortSignal,
 ): Promise<void> {
-  if (!threadId) {
-    console.error('[openclaw] transcript_post_skipped: missing_thread_id');
+  const target = deriveDiscordMessageTarget(opts);
+  if (!target) {
+    console.error('[openclaw] transcript_post_skipped: missing_discord_target');
     return;
   }
   const args = [
     'message', 'send',
     '--channel', 'discord',
-    '--target', `channel:${threadId}`,
+    '--target', `channel:${target}`,
     '--message', quoteTranscript(transcript),
   ];
   try {
@@ -67,13 +68,33 @@ async function sendTranscriptMessage(
   }
 }
 
-function quoteTranscript(transcript: string): string {
-  return transcript
+export function quoteTranscript(transcript: string): string {
+  const quoted = transcript
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
     .split('\n')
     .map((line) => `> ${line}`)
     .join('\n');
+  return `**User said:**\n${quoted}`;
+}
+
+export function deriveDiscordMessageTarget(opts: {
+  threadId?: string;
+  sessionId: string;
+}): string | undefined {
+  const explicitThreadId = opts.threadId?.trim();
+  if (explicitThreadId) return explicitThreadId;
+
+  const prefix = 'agent:main:discord:';
+  if (!opts.sessionId.startsWith(prefix)) return undefined;
+
+  const ids = opts.sessionId
+    .slice(prefix.length)
+    .split(':')
+    .map((part) => part.trim())
+    .filter((part) => part && !['channel', 'thread', 'message', 'guild'].includes(part));
+
+  return ids.at(-1);
 }
 
 // Helper: post user turn as quoted block + get assistant reply
@@ -188,7 +209,12 @@ export async function runChat(userText: string, opts: ChatOptionsWithSession): P
   const trimmed = userText.trim();
   if (!trimmed) throw new ChatError('empty_transcript', 'empty_transcript');
 
-  await sendTranscriptMessage(opts.apiKey, opts.threadId, trimmed, opts.signal);
+  await sendTranscriptMessage(
+    opts.apiKey,
+    { threadId: opts.threadId, sessionId: opts.sessionId },
+    trimmed,
+    opts.signal,
+  );
 
   try {
     const reply = await runOpenClawTurn({

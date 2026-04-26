@@ -5,10 +5,30 @@ interface FakeAudioBuffer {
   getChannelData: (channel: number) => Float32Array;
 }
 
+class FakeAudioParam {
+  value = 1;
+  setValueAtTime = vi.fn((value: number) => {
+    this.value = value;
+  });
+  exponentialRampToValueAtTime = vi.fn((value: number) => {
+    this.value = value;
+  });
+}
+
 class FakeGainNode {
-  gain = { value: 1 };
+  gain = new FakeAudioParam();
   connect = vi.fn();
   disconnect = vi.fn();
+}
+
+class FakeOscillatorNode {
+  type: OscillatorType = 'sine';
+  frequency = new FakeAudioParam();
+  onended: (() => void) | null = null;
+  connect = vi.fn();
+  disconnect = vi.fn();
+  start = vi.fn();
+  stop = vi.fn();
 }
 
 class FakeBufferSourceNode {
@@ -34,6 +54,7 @@ class FakeAudioContext {
   closeCalls = 0;
   buffers: Array<{ channels: number; length: number; sampleRate: number }> = [];
   sources: FakeBufferSourceNode[] = [];
+  oscillators: FakeOscillatorNode[] = [];
 
   constructor() {
     FakeAudioContext.instances.push(this);
@@ -68,6 +89,12 @@ class FakeAudioContext {
     this.sources.push(source);
     return source;
   }
+
+  createOscillator(): FakeOscillatorNode {
+    const oscillator = new FakeOscillatorNode();
+    this.oscillators.push(oscillator);
+    return oscillator;
+  }
 }
 
 afterEach(() => {
@@ -89,6 +116,23 @@ describe('daemon TTS playback audio context', () => {
     expect(ctx.sources).toHaveLength(1);
     expect(ctx.sources[0].start).toHaveBeenCalledWith(0);
     expect(ctx.buffers[0]).toMatchObject({ channels: 1, length: 1, sampleRate: 48000 });
+  });
+
+  it('plays a short PTT press tone on the shared audio context', async () => {
+    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+    const { playPttPressTone } = await import('../client/src/voice/tts');
+
+    playPttPressTone();
+
+    expect(FakeAudioContext.instances).toHaveLength(1);
+    const ctx = FakeAudioContext.instances[0];
+    expect(ctx.resumeCalls).toBe(1);
+    expect(ctx.oscillators).toHaveLength(1);
+    const oscillator = ctx.oscillators[0];
+    expect(oscillator.type).toBe('sine');
+    expect(oscillator.frequency.setValueAtTime).toHaveBeenCalledWith(880, 0);
+    expect(oscillator.start).toHaveBeenCalledWith(0);
+    expect(oscillator.stop).toHaveBeenCalledWith(0.18);
   });
 
   it('does not reject when the browser refuses AudioContext construction', async () => {

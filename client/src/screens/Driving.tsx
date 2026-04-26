@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { HIFI, type AccentKey } from '../tokens';
 import { ButtonAura, LiveWave } from '../components/Phone';
 import { useDrivingLoop, type DrivingState } from '../voice/drivingLoop';
-import { unlockDaemonTtsAudio } from '../voice/tts';
+import { playPttPressTone, unlockDaemonTtsAudio } from '../voice/tts';
 import { useRtc } from '../rtc/RtcContext';
 import type { Settings } from '../storage';
 
@@ -522,6 +522,7 @@ function PTTButton({
   accentRec: string;
 }) {
   const [pressed, setPressed] = useState(false);
+  const clickHandledByPointerRef = useRef(false);
   const disabled = state === 'thinking';
 
   const isIdle = state === 'idle';
@@ -534,7 +535,12 @@ function PTTButton({
     <button
       onClick={() => {
         if (disabled) return;
-        void unlockDaemonTtsAudio();
+        const handledByPointer = clickHandledByPointerRef.current;
+        clickHandledByPointerRef.current = false;
+        if (!handledByPointer) {
+          void unlockDaemonTtsAudio();
+          playPttPressTone();
+        }
         try {
           navigator.vibrate && navigator.vibrate(18);
         } catch {
@@ -544,12 +550,17 @@ function PTTButton({
       }}
       onPointerDown={() => {
         if (disabled) return;
+        clickHandledByPointerRef.current = true;
         void unlockDaemonTtsAudio();
+        playPttPressTone();
         setPressed(true);
       }}
       onPointerUp={() => setPressed(false)}
       onPointerLeave={() => setPressed(false)}
-      onPointerCancel={() => setPressed(false)}
+      onPointerCancel={() => {
+        clickHandledByPointerRef.current = false;
+        setPressed(false);
+      }}
       disabled={disabled}
       style={{
         position: 'relative',

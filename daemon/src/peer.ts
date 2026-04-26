@@ -378,14 +378,14 @@ export class DaemonPeer {
     if (!this.turnInFlight) return;
     this.send(daemonToPhone.replyDone(replyText));
 
-    await this.sendDebugNotification('chat_done', `reply: ${replyText.slice(0, 40)}...`);
+    await this.sendDebugNotification('chat_done', 'reply ready');
 
     this.openTts(replyText);
   }
 
   private async openTts(text: string): Promise<void> {
     try {
-      await this.sendDebugNotification('tts_start', `text: ${text.slice(0, 40)}...`);
+      await this.sendDebugNotification('tts_start', 'opening TTS stream');
 
       this.tts = new XaiTtsSession(
         { apiKey: this.opts.apiKey, text },
