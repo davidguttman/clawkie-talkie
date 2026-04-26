@@ -3,6 +3,7 @@ import { HIFI, type AccentKey } from '../tokens';
 import { ButtonAura, LiveWave } from '../components/Phone';
 import { useDrivingLoop, type DrivingState } from '../voice/drivingLoop';
 import { useMediaSessionControls } from '../voice/mediaSession';
+import { stopMediaSessionKeeper } from '../voice/mediaSessionKeeper';
 import { playPttPressTone, unlockDaemonTtsAudio } from '../voice/tts';
 import { useRtc } from '../rtc/RtcContext';
 import type { Settings } from '../storage';
@@ -67,6 +68,16 @@ export function DrivingScreen({
   // entrypoint the on-screen PTT button uses. Feature-detected and a
   // no-op when navigator.mediaSession is unavailable.
   useMediaSessionControls(state, tap);
+
+  // Tear down the silent media-session keeper when the Driving
+  // screen unmounts. The keeper itself is started lazily from the
+  // PTT gesture (via unlockDaemonTtsAudio); we just own the
+  // teardown so it doesn't leak across full-screen navigations.
+  useEffect(() => {
+    return () => {
+      stopMediaSessionKeeper();
+    };
+  }, []);
 
   // Ambient idle waveform drift — keeps the panel feeling alive when no
   // turn is in flight. The driving loop owns intensities for non-idle
