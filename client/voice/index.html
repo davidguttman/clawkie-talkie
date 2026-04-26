@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>ClawkieTalkie Voice</title>
+    <script>
+      location.replace('/voice.html' + location.search + location.hash);
+    </script>
+  </head>
+  <body>
+    <a id="fallback" href="/voice.html">Continue to voice</a>
+    <script>
+      document.getElementById('fallback').href = '/voice.html' + location.search + location.hash;
+    </script>
+  </body>
+</html>
