@@ -38,64 +38,159 @@ export class MicPermissionError extends Error {
   }
 }
 
-export function createMicAudioSource(): AudioSource {
-  let stream: MediaStream | null = null;
-  let audioCtx: AudioContext | null = null;
-  let source: MediaStreamAudioSourceNode | null = null;
-  let processor: ScriptProcessorNode | null = null;
-  let sink: GainNode | null = null;
+// Module-level mic resources, held across PTT cycles. iOS / Safari
+// re-prompts for microphone access if the underlying MediaStream tracks
+// are stopped between turns; we therefore acquire once and reuse the
+// same stream + AudioContext + MediaStreamAudioSourceNode for every
+// subsequent press. Only the per-turn `ScriptProcessorNode` (and its
+// silent sink) is created and torn down on each start/stop.
+let cachedStream: MediaStream | null = null;
+let cachedAudioCtx: AudioContext | null = null;
+let cachedSourceNode: MediaStreamAudioSourceNode | null = null;
+let cachedSourceCtx: AudioContext | null = null;
 
-  return {
-    kind: 'mic',
-    async start(onFrame) {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        throw new Error('media_unsupported');
-      }
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            channelCount: 1,
-            echoCancellation: true,
-            noiseSuppression: true,
-          },
-        });
-      } catch (err) {
-        throw new MicPermissionError(err);
-      }
+async function acquireMicResources(): Promise<{
+  stream: MediaStream;
+  audioCtx: AudioContext;
+  source: MediaStreamAudioSourceNode;
+}> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error('media_unsupported');
+  }
 
+  if (cachedStream && cachedStream.getTracks().every((t) => t.readyState === 'live')) {
+    // Stream is still alive — reuse it. Recreate the audio context if
+    // it was closed (browsers can shut down inactive contexts).
+    if (!cachedAudioCtx || cachedAudioCtx.state === 'closed') {
       const AudioCtor =
         window.AudioContext ||
         (window as unknown as { webkitAudioContext: typeof AudioContext })
           .webkitAudioContext;
-      audioCtx = new AudioCtor({ sampleRate: SAMPLE_RATE });
-      if (audioCtx.state === 'suspended') {
-        try {
-          await audioCtx.resume();
-        } catch {
-          // non-fatal
-        }
+      cachedAudioCtx = new AudioCtor({ sampleRate: SAMPLE_RATE });
+      cachedSourceNode = null;
+      cachedSourceCtx = null;
+    }
+    if (cachedAudioCtx.state === 'suspended') {
+      try {
+        await cachedAudioCtx.resume();
+      } catch {
+        // non-fatal
       }
+    }
+    if (!cachedSourceNode || cachedSourceCtx !== cachedAudioCtx) {
+      cachedSourceNode = cachedAudioCtx.createMediaStreamSource(cachedStream);
+      cachedSourceCtx = cachedAudioCtx;
+    }
+    return { stream: cachedStream, audioCtx: cachedAudioCtx, source: cachedSourceNode };
+  }
 
-      source = audioCtx.createMediaStreamSource(stream);
+  // Fresh acquisition (first PTT, or tracks died and need re-asking).
+  let stream: MediaStream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+      },
+    });
+  } catch (err) {
+    throw new MicPermissionError(err);
+  }
+  const AudioCtor =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext: typeof AudioContext })
+      .webkitAudioContext;
+  const audioCtx = new AudioCtor({ sampleRate: SAMPLE_RATE });
+  if (audioCtx.state === 'suspended') {
+    try {
+      await audioCtx.resume();
+    } catch {
+      // non-fatal
+    }
+  }
+  const source = audioCtx.createMediaStreamSource(stream);
+  cachedStream = stream;
+  cachedAudioCtx = audioCtx;
+  cachedSourceNode = source;
+  cachedSourceCtx = audioCtx;
+  return { stream, audioCtx, source };
+}
+
+// Deliberate teardown for app unmount / cancel. Stops the underlying
+// mic tracks, which is what triggers the "permission released"
+// indicator on mobile. Safe to call repeatedly.
+export async function releaseMicAudioSource(): Promise<void> {
+  const stream = cachedStream;
+  const audioCtx = cachedAudioCtx;
+  const source = cachedSourceNode;
+  cachedStream = null;
+  cachedAudioCtx = null;
+  cachedSourceNode = null;
+  cachedSourceCtx = null;
+  try {
+    source?.disconnect();
+  } catch {
+    // ignore
+  }
+  if (stream) {
+    for (const t of stream.getTracks()) {
+      try {
+        t.stop();
+      } catch {
+        // ignore
+      }
+    }
+  }
+  try {
+    await audioCtx?.close();
+  } catch {
+    // ignore
+  }
+}
+
+// Test seam: reset module-level cache without touching the DOM. Used
+// by unit tests to start each scenario from a known-clean state.
+export function _resetMicAudioSourceForTests(): void {
+  cachedStream = null;
+  cachedAudioCtx = null;
+  cachedSourceNode = null;
+  cachedSourceCtx = null;
+}
+
+export function createMicAudioSource(): AudioSource {
+  let processor: ScriptProcessorNode | null = null;
+  let sink: GainNode | null = null;
+  let connectedSource: MediaStreamAudioSourceNode | null = null;
+
+  return {
+    kind: 'mic',
+    async start(onFrame) {
+      const { audioCtx, source } = await acquireMicResources();
+
       processor = audioCtx.createScriptProcessor(MIC_BUFFER_SIZE, 1, 1);
       processor.onaudioprocess = (ev) => {
         const input = ev.inputBuffer.getChannelData(0);
         onFrame(floatTo16BitPcm(input));
       };
       source.connect(processor);
+      connectedSource = source;
       sink = audioCtx.createGain();
       sink.gain.value = 0;
       processor.connect(sink);
       sink.connect(audioCtx.destination);
     },
     async stop() {
+      // Disconnect only the per-turn nodes. Leave the cached mic
+      // stream + AudioContext + MediaStreamAudioSourceNode alive so
+      // the next PTT does not re-prompt for mic permission.
       try {
-        processor?.disconnect();
+        if (connectedSource && processor) connectedSource.disconnect(processor);
       } catch {
         // ignore
       }
       try {
-        source?.disconnect();
+        processor?.disconnect();
       } catch {
         // ignore
       }
@@ -104,17 +199,9 @@ export function createMicAudioSource(): AudioSource {
       } catch {
         // ignore
       }
-      if (stream) for (const t of stream.getTracks()) t.stop();
-      try {
-        await audioCtx?.close();
-      } catch {
-        // ignore
-      }
-      stream = null;
-      audioCtx = null;
-      source = null;
       processor = null;
       sink = null;
+      connectedSource = null;
     },
   };
 }

@@ -1,16 +1,20 @@
 // OpenClaw-integrated chat completions — uses OpenClaw CLI for all
 // LLM interaction and Discord delivery.
 //
-// Two-step turn (same shape as the Rambly OpenClaw plugin):
+// Two-step turn (same shape as the Rambly OpenClaw thread-linked
+// plugin):
 //   1. Post the user transcript as a quoted Discord message.
-//   2. Run `openclaw agent` for the reply text only (no --deliver),
-//      then post that text once via `openclaw message send`.
-// We do NOT pass --deliver / --reply-channel / --reply-to: agent
-// sessions bound to a Discord channel deliver internally and any
-// explicit reply target on top causes a duplicate Discord message.
+//   2. Run `openclaw agent --session-id agent:main:discord:<target>
+//      --message ...`. Discord-bound agent sessions post the reply
+//      to the bound channel themselves; we capture stdout only so we
+//      can feed the same text to TTS. We do NOT pass --deliver or
+//      --reply-to (either causes a duplicate Discord post on top of
+//      the session-bound delivery), and we do NOT post the reply
+//      explicitly with `openclaw message send` for the same reason.
 //
-// The daemon never calls xAI directly. Debug activity notifications are
-// sent before/after key events (STT start/stop, TTS start/stop, etc.)
+// The daemon never calls xAI directly. Debug activity notifications
+// are sent before/after key events (STT start/stop, TTS start/stop,
+// etc.) and never embed the agent reply text.
 
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -55,19 +59,6 @@ async function sendTranscriptMessage(
     return;
   }
   await sendDiscordMessage(apiKey, target, quoteTranscript(transcript), signal, 'openclaw_transcript_post_failed');
-}
-
-async function sendReplyMessage(
-  apiKey: string,
-  opts: { threadId?: string; sessionId: string },
-  replyText: string,
-  signal?: AbortSignal,
-): Promise<void> {
-  const target = deriveDiscordMessageTarget(opts);
-  if (!target) return;
-  const trimmed = replyText.trim();
-  if (!trimmed) return;
-  await sendDiscordMessage(apiKey, target, trimmed, signal, 'openclaw_reply_post_failed');
 }
 
 async function sendDiscordMessage(
@@ -251,19 +242,10 @@ export async function runChat(userText: string, opts: ChatOptionsWithSession): P
       signal: opts.signal,
     });
 
-    await sendReplyMessage(
-      opts.apiKey,
-      { threadId: opts.threadId, sessionId: opts.sessionId },
-      reply,
-      opts.signal,
-    );
-
-    // Debug: notify that reply was delivered
-    await sendDebugNotification(
-      opts.apiKey,
-      opts.threadId,
-      'reply delivered',
-    );
+    // Discord-bound agent sessions post the reply themselves; do not
+    // post it again here. Debug notification stays a fixed-string
+    // status ping so it never embeds reply text.
+    await sendDebugNotification(opts.apiKey, opts.threadId, 'reply delivered');
 
     return { text: reply, source: 'xai_via_openclaw' };
   } catch (err) {
