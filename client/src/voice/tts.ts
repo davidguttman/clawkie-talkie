@@ -31,8 +31,61 @@ let sharedAudioElement: HTMLAudioElement | null = null;
 let attachedRemoteStream: MediaStream | null = null;
 let backgroundStaticState: { source: AudioBufferSourceNode; gain: GainNode } | null = null;
 
-const BACKGROUND_STATIC_GAIN = 0.04;
+// Pink-shaped noise sits below the agent voice in the mix; this
+// multiplier is intentionally low and was halved from the previous
+// 0.04 white-noise tuning after pink shaping made the bed audibly
+// warmer at the same nominal level.
+export const BACKGROUND_STATIC_GAIN = 0.02;
 const BACKGROUND_STATIC_BUFFER_SECONDS = 2;
+
+export interface PinkNoiseOptions {
+  // Base amplitude applied to the filtered pink output before
+  // crackle pops are mixed in. ~0.18 keeps peaks near ±0.5 with the
+  // Kellet coefficients below; the gain node attenuates further.
+  amplitude?: number;
+  // Per-sample probability of a crackle pop. Kept rare so the bed
+  // sounds like vinyl warmth rather than overt static.
+  crackleProbability?: number;
+  // Crackle pop amplitude (added on top of the pink sample).
+  crackleAmplitude?: number;
+  // Injectable RNG for deterministic tests.
+  random?: () => number;
+}
+
+// Paul Kellet's pink-noise filter (public domain). Cheap, stable,
+// and produces a perceptually warm 1/f spectrum from a white-noise
+// driver without needing an AudioWorklet or BiquadFilter chain.
+export function generatePinkNoiseSamples(
+  count: number,
+  opts: PinkNoiseOptions = {},
+): Float32Array {
+  const amplitude = opts.amplitude ?? 0.18;
+  const crackleProbability = opts.crackleProbability ?? 0.0004;
+  const crackleAmplitude = opts.crackleAmplitude ?? 0.6;
+  const rand = opts.random ?? Math.random;
+
+  const out = new Float32Array(Math.max(0, count));
+  let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+  for (let i = 0; i < out.length; i++) {
+    const white = rand() * 2 - 1;
+    b0 = 0.99886 * b0 + white * 0.0555179;
+    b1 = 0.99332 * b1 + white * 0.0750759;
+    b2 = 0.96900 * b2 + white * 0.1538520;
+    b3 = 0.86650 * b3 + white * 0.3104856;
+    b4 = 0.55000 * b4 + white * 0.5329522;
+    b5 = -0.7616 * b5 - white * 0.0168980;
+    const pink = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362;
+    b6 = white * 0.115926;
+    let s = pink * amplitude;
+    if (rand() < crackleProbability) {
+      s += (rand() * 2 - 1) * crackleAmplitude;
+    }
+    if (s > 1) s = 1;
+    else if (s < -1) s = -1;
+    out[i] = s;
+  }
+  return out;
+}
 
 export interface TTSHandle {
   done: Promise<void>;
@@ -396,14 +449,7 @@ export function startBackgroundStatic(): void {
     const samples = Math.max(1, Math.floor(sr * BACKGROUND_STATIC_BUFFER_SECONDS));
     const buffer = audioCtx.createBuffer(1, samples, sr);
     const ch = buffer.getChannelData(0);
-    for (let i = 0; i < samples; i++) {
-      // Soft white noise (0.6 amp) plus rare pops to give a vinyl-crackle texture.
-      let s = (Math.random() * 2 - 1) * 0.6;
-      if (Math.random() < 0.0008) s += (Math.random() * 2 - 1) * 1.5;
-      if (s > 1) s = 1;
-      else if (s < -1) s = -1;
-      ch[i] = s;
-    }
+    ch.set(generatePinkNoiseSamples(samples));
     const source = audioCtx.createBufferSource();
     source.buffer = buffer;
     (source as AudioBufferSourceNode & { loop: boolean }).loop = true;

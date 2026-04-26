@@ -55,6 +55,7 @@ class FakeAudioContext {
   buffers: Array<{ channels: number; length: number; sampleRate: number }> = [];
   sources: FakeBufferSourceNode[] = [];
   oscillators: FakeOscillatorNode[] = [];
+  gains: FakeGainNode[] = [];
 
   constructor() {
     FakeAudioContext.instances.push(this);
@@ -73,7 +74,9 @@ class FakeAudioContext {
   }
 
   createGain(): FakeGainNode {
-    return new FakeGainNode();
+    const gain = new FakeGainNode();
+    this.gains.push(gain);
+    return gain;
   }
 
   createBuffer(channels: number, length: number, sampleRate: number): FakeAudioBuffer {
@@ -180,9 +183,12 @@ describe('daemon TTS playback audio context', () => {
 
   it('starts background static once and stops cleanly on stop', async () => {
     vi.stubGlobal('window', { AudioContext: FakeAudioContext });
-    const { startBackgroundStatic, stopBackgroundStatic, isBackgroundStaticActive } = await import(
-      '../client/src/voice/tts'
-    );
+    const {
+      startBackgroundStatic,
+      stopBackgroundStatic,
+      isBackgroundStaticActive,
+      BACKGROUND_STATIC_GAIN,
+    } = await import('../client/src/voice/tts');
 
     expect(isBackgroundStaticActive()).toBe(false);
     startBackgroundStatic();
@@ -200,6 +206,11 @@ describe('daemon TTS playback audio context', () => {
     expect(ctx.buffers[0]?.sampleRate).toBe(48000);
     expect(ctx.buffers[0]?.length).toBe(48000 * 2);
 
+    // Gain halved from the previous 0.04 white-noise tuning.
+    expect(BACKGROUND_STATIC_GAIN).toBe(0.02);
+    const lastGain = ctx.gains[ctx.gains.length - 1];
+    expect(lastGain.gain.value).toBe(0.02);
+
     // Idempotent: a second call must not create a second source.
     startBackgroundStatic();
     expect(ctx.sources.length).toBe(1);
@@ -208,6 +219,47 @@ describe('daemon TTS playback audio context', () => {
     expect(isBackgroundStaticActive()).toBe(false);
     expect(source.stop).toHaveBeenCalled();
     expect(source.disconnect).toHaveBeenCalled();
+  });
+
+  it('generatePinkNoiseSamples returns a bounded Float32Array of the requested length', async () => {
+    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+    const { generatePinkNoiseSamples } = await import('../client/src/voice/tts');
+
+    // Deterministic RNG so the test isn't flaky.
+    let seed = 1;
+    const rand = () => {
+      seed = (seed * 9301 + 49297) % 233280;
+      return seed / 233280;
+    };
+
+    const samples = generatePinkNoiseSamples(2048, {
+      random: rand,
+      crackleProbability: 0, // isolate the pink path
+    });
+
+    expect(samples).toBeInstanceOf(Float32Array);
+    expect(samples.length).toBe(2048);
+    let nonZero = 0;
+    let maxAbs = 0;
+    for (const s of samples) {
+      expect(s).toBeGreaterThanOrEqual(-1);
+      expect(s).toBeLessThanOrEqual(1);
+      if (s !== 0) nonZero++;
+      const abs = Math.abs(s);
+      if (abs > maxAbs) maxAbs = abs;
+    }
+    // The Kellet filter ramps up over the first few samples; almost
+    // every sample after that is non-zero.
+    expect(nonZero).toBeGreaterThan(2000);
+    // Pink output at amplitude=0.18 should peak well below clip.
+    expect(maxAbs).toBeLessThan(1);
+  });
+
+  it('generatePinkNoiseSamples returns an empty array for non-positive counts', async () => {
+    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+    const { generatePinkNoiseSamples } = await import('../client/src/voice/tts');
+    expect(generatePinkNoiseSamples(0).length).toBe(0);
+    expect(generatePinkNoiseSamples(-5).length).toBe(0);
   });
 
   it('background static is a no-op when AudioContext is not available', async () => {
