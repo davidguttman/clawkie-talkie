@@ -13,6 +13,7 @@ import {
 } from 'react';
 import { RtcClient, type ControlMessage, type RtcStatus } from './client';
 import { attachDaemonRemoteStream } from '../voice/tts';
+import { phoneToDaemon, type DeliveryTarget } from '../voice/protocol';
 
 export interface RtcContextValue {
   status: RtcStatus;
@@ -41,15 +42,30 @@ const Ctx = createContext<RtcContextValue>({
   hasClient: false,
 });
 
+export interface RtcRendezvous {
+  sessionId: string;
+  delivery: DeliveryTarget;
+}
+
 export function RtcProvider({
   hostPeerId,
+  rendezvous,
   children,
 }: {
   hostPeerId?: string;
+  rendezvous?: RtcRendezvous | null;
   children: ReactNode;
 }) {
   const [status, setStatus] = useState<RtcStatus>('idle');
   const [detail, setDetail] = useState<string | undefined>(undefined);
+  // The active room flips from the rendezvous host to the
+  // deterministic per-session voice room after `rendezvous.accept`
+  // arrives. Each flip re-creates the underlying RtcClient.
+  const [activeRoomId, setActiveRoomId] = useState<string | undefined>(hostPeerId);
+  useEffect(() => {
+    setActiveRoomId(hostPeerId);
+  }, [hostPeerId]);
+
   const clientRef = useRef<RtcClient | null>(null);
   const controlListenersRef = useRef<Set<(msg: ControlMessage) => void>>(new Set());
   const binaryListenersRef = useRef<Set<(bytes: ArrayBuffer) => void>>(new Set());
@@ -57,10 +73,10 @@ export function RtcProvider({
   const remoteStreamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
-    if (!hostPeerId) return;
+    if (!activeRoomId) return;
 
     const client = new RtcClient({
-      hostPeerId,
+      hostPeerId: activeRoomId,
       onStatusChange: (s, d) => {
         setStatus(s);
         setDetail(d);
@@ -89,7 +105,40 @@ export function RtcProvider({
       clientRef.current = null;
       remoteStreamRef.current = null;
     };
-  }, [hostPeerId]);
+  }, [activeRoomId]);
+
+  // Rendezvous orchestration: when we are still on the rendezvous
+  // (host) room and the data channel comes up, send rendezvous.join
+  // once and wait for the daemon to point us at the deterministic
+  // per-session voice room.
+  useEffect(() => {
+    if (!rendezvous || !hostPeerId) return;
+    if (activeRoomId !== hostPeerId) return;
+    if (status !== 'open') return;
+    clientRef.current?.sendControl(
+      phoneToDaemon.rendezvousJoin({
+        sessionId: rendezvous.sessionId,
+        delivery: rendezvous.delivery,
+      }),
+    );
+  }, [rendezvous, hostPeerId, activeRoomId, status]);
+
+  useEffect(() => {
+    if (!rendezvous) return;
+    const off = (msg: ControlMessage) => {
+      if (msg.t === 'rendezvous.accept' && typeof msg.roomId === 'string') {
+        setActiveRoomId(msg.roomId);
+        return;
+      }
+      if (msg.t === 'rendezvous.error') {
+        setDetail(typeof msg.message === 'string' ? msg.message : 'rendezvous_error');
+      }
+    };
+    controlListenersRef.current.add(off);
+    return () => {
+      controlListenersRef.current.delete(off);
+    };
+  }, [rendezvous]);
 
   const sendControl = useCallback((msg: ControlMessage) => {
     clientRef.current?.sendControl(msg);

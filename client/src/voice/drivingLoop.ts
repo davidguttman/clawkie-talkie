@@ -163,16 +163,7 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     if (!side.length) return;
     for (const s of side) {
       if (s.kind === 'startMic') {
-        runStartMic(
-          rtcRef,
-          sttRef,
-          {
-            sessionId: opts.sessionId,
-            threadId: opts.threadId,
-          },
-          setLiveText,
-          dispatch,
-        );
+        runStartMic(rtcRef, sttRef, setLiveText, dispatch);
       }
       else if (s.kind === 'stopMic') runStopMic(sttRef);
       else if (s.kind === 'cancelMic') runCancelMic(sttRef);
@@ -272,7 +263,6 @@ type Dispatch = (e: DrivingEvent) => void;
 function runStartMic(
   rtcRef: React.MutableRefObject<DrivingLoopOptions['rtc']>,
   sttRef: React.MutableRefObject<STTHandle | null>,
-  handoff: { sessionId?: string; threadId?: string },
   setLiveText: (t: string) => void,
   dispatch: Dispatch,
 ): void {
@@ -283,8 +273,6 @@ function runStartMic(
         sendBinary: rtcRef.current.sendBinary,
         addControlListener: rtcRef.current.addControlListener,
         isConnected: () => rtcRef.current.status === 'open',
-        sessionId: handoff.sessionId,
-        threadId: handoff.threadId,
         onError: (reason) => dispatch({ type: 'stt.error', reason }),
       });
       sttRef.current = handle;
