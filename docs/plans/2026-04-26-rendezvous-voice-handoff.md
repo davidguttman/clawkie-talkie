@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Make Clawkie-Talkie support Discord-like multiple simultaneous voice handoffs by turning the existing daemon host into a rendezvous/control room and deriving one deterministic voice room per OpenClaw conversation.
+**Goal:** Make Clawkie-Talkie support OpenClaw agents handing any active session to voice by using one durable local daemon as a rendezvous/control host and deriving one deterministic voice room per OpenClaw session.
 
-**Architecture:** Keep one long-running local Clawkie daemon on the OpenClaw machine. The browser first connects to `host=H` only for coordination, sends the target `sessionId`/`threadId`, and the daemon derives a voice room such as `H:<sessionKey>` for that conversation. Actual voice/STT/TTS/OpenClaw turns happen on the per-session room, not on the shared host room. There is no extra pre-created link state, no random join identifier, no separate mapping table, and no per-handoff daemon startup.
+**Architecture:** Agents construct a ClawkieTalkie URL directly from values already present in the current OpenClaw turn: daemon `host`, OpenClaw `session`, delivery `channel`, and delivery `target`. The URL is hash-first (`/voice#...`) so UUIDs/session values are not sent to web servers; query params remain supported for compatibility. The browser joins the daemon rendezvous room `host=H`, sends those values once, then moves to a deterministic per-session voice room such as `H:<sessionKey>`. Actual voice/STT/TTS/OpenClaw turns happen on the per-session room.
 
 **Tech Stack:** TypeScript, React/Vite client, Node/tsx daemon, simple-peer + `@roamhq/wrtc`, rambly-style signaling, Vitest, OpenClaw CLI integration.
 
@@ -12,7 +12,7 @@
 
 ## Critical Correction From the Thread
 
-This plan intentionally avoids the stateful design that was rejected.
+This plan intentionally avoids the stateful link-creation design that was rejected.
 
 Do **not** implement:
 
@@ -21,20 +21,58 @@ Do **not** implement:
 - a separate mapping table from link ID to session/thread/room
 - local daemon API calls that mutate daemon state just to create a link
 - TTL/revocation/claim state for link records
-- a “central gateway” style session store
+- a central gateway/session store
+- one daemon per handoff
+- a separate hosted/cloud gateway
+- a helper command whose only job is turning known params into a URL
 
 The agreed shape is simpler:
 
-1. The daemon has stable host/rendezvous ID `H`.
-2. The agent creates a link for the current conversation:
-   - `...?screen=handoff&host=H&session=<sessionId>&threadId=<threadId>`
-3. Browser connects to rendezvous room `H`.
-4. Browser asks for the session room for `sessionId` / `threadId`.
-5. Daemon derives the room deterministically, e.g. `H:<sessionKey>`.
-6. Browser connects to that room.
+1. The daemon has stable rendezvous/control host ID `H`.
+2. The agent creates a URL directly for the current conversation:
+   - preferred: `https://clawkietalkie.app/voice#host=H&session=<sessionId>&channel=<channel>&target=<target>`
+   - compatibility: `https://clawkietalkie.app/voice?host=H&session=<sessionId>&channel=<channel>&target=<target>`
+3. The browser connects to rendezvous room `H`.
+4. The browser sends `sessionId`, `channel`, and `target` to the daemon once during rendezvous.
+5. The daemon derives the voice room deterministically, e.g. `H:<sessionKey>`.
+6. The browser connects to that room.
 7. Voice turns for A and B are isolated because they use different derived rooms.
 
 The only daemon state should be runtime connection state for active voice rooms, e.g. `roomId -> VoiceSession`, because active WebRTC/STT/TTS sessions necessarily need live objects. That is different from pre-created link state.
+
+---
+
+## URL and App Routing Requirements
+
+Public URL shape:
+
+```txt
+https://clawkietalkie.app/voice#host=<host>&session=<sessionId>&channel=<channel>&target=<target>
+```
+
+Rules:
+
+- `/` is reserved for a marketing landing page.
+- The voice app HTML lives at `/voice.html`.
+- `/voice` must be supported as the nice user-facing path.
+- `/voice` must preserve both query and hash args when loading/redirecting to `/voice.html`.
+- Handoff args must be accepted from both hash fragments and query params.
+- Agents should construct hash-fragment URLs by default so `host`, `session`, `channel`, and `target` are not sent in HTTP requests.
+- If a key exists in both hash and query, hash wins.
+- All values must be URL-encoded.
+
+Required handoff args:
+
+- `host`: stable Clawkie daemon rendezvous/control host ID.
+- `session`: current OpenClaw session key/id, passed later to `openclaw agent --session-id`.
+- `channel`: OpenClaw delivery channel, passed later to `openclaw message send --channel`.
+- `target`: OpenClaw provider-specific delivery target, passed later to `openclaw message send --target`.
+
+Example for this Discord thread:
+
+```txt
+https://clawkietalkie.app/voice#host=H&session=agent%3Amain%3Adiscord%3Achannel%3A1498020851298209852&channel=discord&target=channel%3A1498020851298209852
+```
 
 ---
 
@@ -42,12 +80,12 @@ The only daemon state should be runtime connection state for active voice rooms,
 
 The intended user flow:
 
-1. User is in an OpenClaw/Discord session/thread.
+1. User is in an OpenClaw session on any channel/surface.
 2. User says “switch to voice.”
-3. Agent posts a Clawkie-Talkie link.
+3. Agent posts a ClawkieTalkie `/voice#...` link built from the current session context.
 4. User opens the link.
 5. User speaks on the Clawkie page.
-6. Clawkie transcribes speech, runs the OpenClaw session, mirrors the transcript/reply back into the originating Discord/OpenClaw thread, and speaks the reply back on the page.
+6. Clawkie transcribes speech, mirrors the transcript into the originating OpenClaw conversation, runs the OpenClaw session, and speaks the reply back on the page.
 
 The key repo-backed blocker:
 
@@ -74,8 +112,9 @@ Target shape:
 
 - One durable local Clawkie daemon.
 - `host=H` is coordination/rendezvous identity, not the single voice lane.
-- `sessionId` determines the conversation the user wants.
-- Daemon derives a stable per-session `roomId` from `host` + `sessionId`.
+- `session` determines the OpenClaw session the user wants.
+- `channel` and `target` determine where transcript mirroring goes.
+- Daemon derives a stable per-session `roomId` from `host` + `session`.
 - Multiple voice rooms can coexist: A, B, C.
 - `stt.start` no longer carries routing each turn; routing is bound once when the per-session room is created.
 
@@ -86,11 +125,220 @@ Target shape:
 - Do not merge Clawkie into OpenClaw core.
 - Do not add a pre-created link-state store or random join-ID lifecycle.
 - Do not require agents to start/kill/manage Node daemons per handoff.
+- Do not add a URL-formatting helper script or daemon API call. The agent formats the URL directly.
 - Do not run `npm run dev`, `npm run daemon`, or other long-running Node servers during implementation unless David explicitly asks. Use tests/typecheck/build for verification.
 
 ---
 
-## Task 1: Add deterministic voice room derivation
+## Task 1: Move the voice app to `/voice.html` and support `/voice`
+
+**Files:**
+- Rename: `client/index.html` -> `client/voice.html`
+- Create: `client/index.html`
+- Create: `client/voice/index.html`
+- Modify: `client/vite.config.ts`
+- Modify/Create tests as needed: `test/appEntry.test.ts` or existing routing tests
+
+**Step 1: Write failing entrypoint checks**
+
+Add a test or static assertion that verifies:
+
+- `client/index.html` exists and is marketing/root shell, not the React voice app shell.
+- `client/voice.html` exists and loads the React voice app entry.
+- `client/voice/index.html` preserves `location.search` and `location.hash` when redirecting/loading `/voice.html`.
+
+Expected redirect behavior:
+
+```js
+const next = '/voice.html' + window.location.search + window.location.hash;
+window.location.replace(next);
+```
+
+**Step 2: Run the failing check**
+
+```bash
+cd /mnt/data/play/web/clawkie-talkie
+npm test -- test/appEntry.test.ts
+```
+
+Expected: FAIL until the files are changed.
+
+**Step 3: Move app HTML**
+
+Move the existing React app HTML from `client/index.html` to `client/voice.html`.
+
+Create a simple root `client/index.html` marketing placeholder. Keep it minimal; this plan is not the marketing-page design.
+
+Create `client/voice/index.html` as a tiny redirect/preserve page for `/voice`:
+
+```html
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>ClawkieTalkie Voice</title>
+    <script>
+      location.replace('/voice.html' + location.search + location.hash);
+    </script>
+  </head>
+  <body>
+    <a id="fallback" href="/voice.html">Continue to voice</a>
+    <script>
+      document.getElementById('fallback').href = '/voice.html' + location.search + location.hash;
+    </script>
+  </body>
+</html>
+```
+
+**Step 4: Update Vite multi-page build**
+
+Update `client/vite.config.ts` so Vite builds all HTML entrypoints:
+
+```ts
+import { resolve } from 'node:path';
+
+export default defineConfig({
+  // existing config...
+  build: {
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        voice: resolve(__dirname, 'voice.html'),
+        voicePath: resolve(__dirname, 'voice/index.html'),
+      },
+    },
+  },
+});
+```
+
+Preserve existing `plugins`, `define`, `resolve`, `optimizeDeps`, and `server` settings.
+
+**Step 5: Verify**
+
+```bash
+npm test -- test/appEntry.test.ts
+npm run build
+```
+
+Expected: PASS. Build output should include `index.html`, `voice.html`, and `voice/index.html` or equivalent static output for `/voice`.
+
+**Step 6: Commit**
+
+```bash
+git add client/index.html client/voice.html client/voice/index.html client/vite.config.ts test/appEntry.test.ts
+git commit -m "feat: add voice entrypoint and marketing root"
+```
+
+---
+
+## Task 2: Add hash-first handoff URL parsing
+
+**Files:**
+- Modify: `client/src/app.tsx`
+- Create or modify: `client/src/voice/handoffUrl.ts`
+- Modify: `test/appRouting.test.ts`
+
+**Step 1: Write failing URL parsing tests**
+
+Update `test/appRouting.test.ts` or create focused tests for `parseHandoffUrl`:
+
+```ts
+it('parses handoff args from hash fragment', () => {
+  expect(
+    parseHandoffUrl('/voice#host=host-1&session=session-1&channel=discord&target=channel%3Athread-1'),
+  ).toEqual({
+    hostPeerId: 'host-1',
+    sessionId: 'session-1',
+    delivery: { channel: 'discord', target: 'channel:thread-1' },
+  });
+});
+
+it('parses handoff args from query params for compatibility', () => {
+  expect(
+    parseHandoffUrl('/voice?host=host-1&session=session-1&channel=discord&target=channel%3Athread-1'),
+  ).toMatchObject({
+    hostPeerId: 'host-1',
+    sessionId: 'session-1',
+    delivery: { channel: 'discord', target: 'channel:thread-1' },
+  });
+});
+
+it('prefers hash args over query args', () => {
+  expect(
+    parseHandoffUrl('/voice?host=query-host&session=query-session&channel=discord&target=channel%3Aquery#host=hash-host&session=hash-session&channel=slack&target=channel%3Ahash'),
+  ).toMatchObject({
+    hostPeerId: 'hash-host',
+    sessionId: 'hash-session',
+    delivery: { channel: 'slack', target: 'channel:hash' },
+  });
+});
+```
+
+**Step 2: Run failing tests**
+
+```bash
+npm test -- test/appRouting.test.ts
+```
+
+Expected: FAIL until hash parsing and generic delivery fields exist.
+
+**Step 3: Implement parser**
+
+Create `client/src/voice/handoffUrl.ts`:
+
+```ts
+export interface HandoffRoute {
+  hostPeerId: string;
+  sessionId: string;
+  delivery: {
+    channel: string;
+    target: string;
+  };
+}
+
+export function parseHandoffUrl(raw: string): HandoffRoute | null {
+  const url = new URL(raw, 'https://clawkietalkie.app');
+  const query = url.searchParams;
+  const hashText = url.hash.startsWith('#') ? url.hash.slice(1) : url.hash;
+  const hash = new URLSearchParams(hashText);
+
+  const get = (key: string) => hash.get(key) || query.get(key) || '';
+  const hostPeerId = get('host').trim();
+  const sessionId = get('session').trim();
+  const channel = get('channel').trim();
+  const target = get('target').trim();
+
+  if (!hostPeerId || !sessionId || !channel || !target) return null;
+
+  return {
+    hostPeerId,
+    sessionId,
+    delivery: { channel, target },
+  };
+}
+```
+
+Update `client/src/app.tsx` to use this parser for `/voice`, `/voice.html`, and compatible old query URLs.
+
+**Step 4: Verify**
+
+```bash
+npm test -- test/appRouting.test.ts
+npm run typecheck
+```
+
+Expected: PASS.
+
+**Step 5: Commit**
+
+```bash
+git add client/src/app.tsx client/src/voice/handoffUrl.ts test/appRouting.test.ts
+git commit -m "feat: parse hash-based voice handoff urls"
+```
+
+---
+
+## Task 3: Add deterministic voice room derivation
 
 **Files:**
 - Create: `daemon/src/voiceRoom.ts`
@@ -110,10 +358,10 @@ describe('voice room derivation', () => {
   it('derives the same room id in daemon and client code', () => {
     const input = {
       hostPeerId: 'host-123',
-      sessionId: 'agent:main:discord:channel-1:thread-1',
+      sessionId: 'agent:main:discord:channel:1498020851298209852',
     };
 
-    expect(daemonMakeVoiceRoomId(input)).toBe('host-123:agent_main_discord_channel_1_thread_1');
+    expect(daemonMakeVoiceRoomId(input)).toBe('host-123:agent_main_discord_channel_1498020851298209852');
     expect(clientMakeVoiceRoomId(input)).toBe(daemonMakeVoiceRoomId(input));
   });
 
@@ -130,7 +378,6 @@ describe('voice room derivation', () => {
 **Step 2: Run test to verify it fails**
 
 ```bash
-cd /mnt/data/play/web/clawkie-talkie
 npm test -- test/voiceRoom.test.ts
 ```
 
@@ -161,7 +408,7 @@ export function safeRoomSegment(value: string): string {
 
 Important: keep this deterministic. Do not generate random IDs. Do not store mapping state.
 
-**Step 4: Run test to verify it passes**
+**Step 4: Verify**
 
 ```bash
 npm test -- test/voiceRoom.test.ts
@@ -178,7 +425,7 @@ git commit -m "feat: derive deterministic voice rooms"
 
 ---
 
-## Task 2: Add rendezvous join protocol
+## Task 4: Add rendezvous join protocol with generic delivery
 
 **Files:**
 - Modify: `daemon/src/protocol.ts`
@@ -187,26 +434,32 @@ git commit -m "feat: derive deterministic voice rooms"
 
 **Step 1: Write failing protocol tests**
 
-Update `test/protocol.test.ts` to cover rendezvous messages:
+Update `test/protocol.test.ts`:
 
 ```ts
-expect(phoneClient.rendezvousJoin('session-1', 'thread-1')).toEqual({
+expect(phoneClient.rendezvousJoin({
+  sessionId: 'session-1',
+  delivery: { channel: 'discord', target: 'channel:thread-1' },
+})).toEqual({
   t: 'rendezvous.join',
   sessionId: 'session-1',
-  threadId: 'thread-1',
+  delivery: { channel: 'discord', target: 'channel:thread-1' },
 });
+
 expect(daemonClient.rendezvousAccept('host-1:session-1')).toEqual({
   t: 'rendezvous.accept',
   roomId: 'host-1:session-1',
 });
+
 expect(daemonClient.rendezvousError('missing_session')).toEqual({
   t: 'rendezvous.error',
   message: 'missing_session',
 });
+
 expect(phoneClient.sttStart()).toEqual({ t: 'stt.start' });
 ```
 
-Remove expectations that `stt.start` serializes `sessionId` and `threadId`.
+Remove expectations that `stt.start` serializes `sessionId`, `threadId`, `channel`, or `target`.
 
 **Step 2: Run test to verify it fails**
 
@@ -214,15 +467,20 @@ Remove expectations that `stt.start` serializes `sessionId` and `threadId`.
 npm test -- test/protocol.test.ts
 ```
 
-Expected: FAIL because protocol factories do not exist and `stt.start` still accepts route IDs.
+Expected: FAIL until protocol factories exist and `stt.start` no longer carries routing.
 
 **Step 3: Update protocol files**
 
 In both `daemon/src/protocol.ts` and `client/src/voice/protocol.ts`:
 
 ```ts
+export interface DeliveryTarget {
+  channel: string;
+  target: string;
+}
+
 export type PhoneToDaemon =
-  | { t: 'rendezvous.join'; sessionId: string; threadId?: string }
+  | { t: 'rendezvous.join'; sessionId: string; delivery: DeliveryTarget }
   | { t: 'stt.start' }
   | { t: 'stt.audio.done' }
   | { t: 'stt.cancel' }
@@ -248,10 +506,10 @@ Factories:
 
 ```ts
 export const phoneToDaemon = {
-  rendezvousJoin: (sessionId: string, threadId?: string): PhoneToDaemon => ({
+  rendezvousJoin: (input: { sessionId: string; delivery: DeliveryTarget }): PhoneToDaemon => ({
     t: 'rendezvous.join',
-    sessionId,
-    ...(threadId ? { threadId } : {}),
+    sessionId: input.sessionId,
+    delivery: input.delivery,
   }),
   sttStart: (): PhoneToDaemon => ({ t: 'stt.start' }),
   sttAudioDone: (): PhoneToDaemon => ({ t: 'stt.audio.done' }),
@@ -266,7 +524,7 @@ export const daemonToPhone = {
 };
 ```
 
-**Step 4: Run tests**
+**Step 4: Verify**
 
 ```bash
 npm test -- test/protocol.test.ts test/voiceRoom.test.ts
@@ -278,12 +536,109 @@ Expected: PASS.
 
 ```bash
 git add daemon/src/protocol.ts client/src/voice/protocol.ts test/protocol.test.ts
-git commit -m "feat: add rendezvous join protocol"
+git commit -m "feat: add generic rendezvous join protocol"
 ```
 
 ---
 
-## Task 3: Refactor daemon runtime into multiple `VoiceSession`s
+## Task 5: Make OpenClaw chat delivery generic
+
+**Files:**
+- Modify: `daemon/src/chatSession.ts`
+- Modify: `daemon/src/types.ts` if needed
+- Modify: `test/chatSession.test.ts`
+
+**Step 1: Write failing tests**
+
+Update `test/chatSession.test.ts` so `runChat` accepts an explicit delivery target:
+
+```ts
+await runChat('hello', {
+  apiKey: 'test-key',
+  sessionId: 'session-1',
+  delivery: { channel: 'slack', target: 'channel:C123' },
+});
+
+const transcriptCommand = String(execMock.mock.calls[0]?.[0]);
+expect(transcriptCommand).toContain('openclaw "message" "send"');
+expect(transcriptCommand).toContain('"--channel" "slack"');
+expect(transcriptCommand).toContain('"--target" "channel:C123"');
+```
+
+Keep tests that verify the agent call is:
+
+```bash
+openclaw agent --session-id <sessionId> --message <voicePrompt>
+```
+
+and does **not** pass `--deliver`, `--reply-to`, or an explicit reply target.
+
+**Step 2: Run failing tests**
+
+```bash
+npm test -- test/chatSession.test.ts
+```
+
+Expected: FAIL until generic delivery is supported.
+
+**Step 3: Update chat session API**
+
+Change `runChat` options to include:
+
+```ts
+export interface DeliveryTarget {
+  channel: string;
+  target: string;
+}
+
+export interface ChatOptionsWithSession extends ChatOptions {
+  sessionId: string;
+  delivery: DeliveryTarget;
+}
+```
+
+Transcript mirror command becomes:
+
+```ts
+const args = [
+  'message', 'send',
+  '--channel', opts.delivery.channel,
+  '--target', opts.delivery.target,
+  '--message', quoteTranscript(transcript),
+];
+```
+
+Remove Discord-only `threadId` assumptions from the normal path. If keeping compatibility helpers, mark them legacy and do not use them in rendezvous sessions.
+
+Agent command remains:
+
+```ts
+const args = [
+  'agent',
+  '--session-id', sessionId,
+  '--message', message,
+];
+```
+
+**Step 4: Verify**
+
+```bash
+npm test -- test/chatSession.test.ts
+npm run typecheck
+```
+
+Expected: PASS.
+
+**Step 5: Commit**
+
+```bash
+git add daemon/src/chatSession.ts daemon/src/types.ts test/chatSession.test.ts
+git commit -m "feat: use generic OpenClaw delivery targets"
+```
+
+---
+
+## Task 6: Refactor daemon runtime into multiple `VoiceSession`s
 
 **Files:**
 - Create: `daemon/src/voiceSession.ts`
@@ -299,14 +654,17 @@ import { describe, expect, it } from 'vitest';
 import { createVoiceSessionState } from '../daemon/src/voiceSession';
 
 describe('voice session state', () => {
-  it('binds one room to one session/thread for its lifetime', () => {
+  it('binds one room to one session and delivery target for its lifetime', () => {
     const s = createVoiceSessionState({
       roomId: 'host-1:session-1',
       sessionId: 'session-1',
-      threadId: 'thread-1',
+      delivery: { channel: 'discord', target: 'channel:thread-1' },
     });
 
-    expect(s.chatTarget()).toEqual({ sessionId: 'session-1', threadId: 'thread-1' });
+    expect(s.chatTarget()).toEqual({
+      sessionId: 'session-1',
+      delivery: { channel: 'discord', target: 'channel:thread-1' },
+    });
     expect(s.roomId).toBe('host-1:session-1');
   });
 
@@ -314,12 +672,13 @@ describe('voice session state', () => {
     const s = createVoiceSessionState({
       roomId: 'host-1:session-1',
       sessionId: 'session-1',
-      threadId: 'thread-1',
+      delivery: { channel: 'discord', target: 'channel:thread-1' },
     });
 
     s.handleStartTurn();
 
-    expect(s.chatTarget()).toEqual({ sessionId: 'session-1', threadId: 'thread-1' });
+    expect(s.chatTarget().sessionId).toBe('session-1');
+    expect(s.chatTarget().delivery.target).toBe('channel:thread-1');
   });
 });
 ```
@@ -337,14 +696,17 @@ Expected: FAIL because `daemon/src/voiceSession.ts` does not exist.
 Create `daemon/src/voiceSession.ts`:
 
 ```ts
+import type { DeliveryTarget } from './protocol';
+
 export interface VoiceSessionConfig {
   roomId: string;
   sessionId: string;
-  threadId?: string;
+  delivery: DeliveryTarget;
 }
 
 export function createVoiceSessionState(config: VoiceSessionConfig) {
   let turnInFlight = false;
+  let closed = false;
 
   return {
     roomId: config.roomId,
@@ -354,11 +716,17 @@ export function createVoiceSessionState(config: VoiceSessionConfig) {
     resetTurn() {
       turnInFlight = false;
     },
+    close() {
+      closed = true;
+    },
     get turnInFlight() {
       return turnInFlight;
     },
+    get closed() {
+      return closed;
+    },
     chatTarget() {
-      return { sessionId: config.sessionId, threadId: config.threadId };
+      return { sessionId: config.sessionId, delivery: config.delivery };
     },
   };
 }
@@ -379,7 +747,8 @@ private voiceSessions = new Map<string, VoiceSession>();
   - its own room `SignalClient` with `roomName = roomId`
   - one phone peer for that room
   - `sessionId`
-  - `threadId`
+  - `delivery.channel`
+  - `delivery.target`
   - `stt`
   - `tts`
   - `chatAbort`
@@ -393,7 +762,7 @@ Keep behavior equivalent inside one session. The main change is that state is pe
 When a browser connects to host room `H`:
 
 1. Accept only `rendezvous.join` control message.
-2. Validate `sessionId` is non-empty.
+2. Validate `sessionId`, `delivery.channel`, and `delivery.target` are non-empty.
 3. Derive `roomId = makeVoiceRoomId({ hostPeerId: opts.peerId, sessionId })`.
 4. Create/start `VoiceSession` for `roomId` if it does not already exist.
 5. Send `rendezvous.accept(roomId)` to the browser.
@@ -401,18 +770,18 @@ When a browser connects to host room `H`:
 
 No pre-created link-state table. No random join-ID validation. No TTL state.
 
-**Step 6: Route turns using room-bound session/thread**
+**Step 6: Route turns using room-bound session/delivery**
 
 Inside `VoiceSession`, when it receives `stt.start`:
 
-- do **not** read session/thread from the message;
-- use the `sessionId`/`threadId` captured at room creation;
-- call `runChat({ sessionId, threadId, ... })` exactly as current code does, but from the per-room state.
+- do **not** read session/channel/target from the message;
+- use the `sessionId` and `delivery` captured at room creation;
+- call `runChat({ sessionId, delivery, ... })`.
 
-**Step 7: Run focused checks**
+**Step 7: Verify**
 
 ```bash
-npm test -- test/voiceSession.test.ts test/protocol.test.ts test/voiceRoom.test.ts
+npm test -- test/voiceSession.test.ts test/protocol.test.ts test/voiceRoom.test.ts test/chatSession.test.ts
 npm run typecheck
 ```
 
@@ -427,7 +796,7 @@ git commit -m "feat: split daemon voice state by session room"
 
 ---
 
-## Task 4: Update browser flow to switch from rendezvous room to voice room
+## Task 7: Update browser flow to switch from rendezvous room to voice room
 
 **Files:**
 - Modify: `client/src/app.tsx`
@@ -438,32 +807,21 @@ git commit -m "feat: split daemon voice state by session room"
 - Modify: `client/src/voice/sttDaemon.ts`
 - Modify: `test/appRouting.test.ts`
 
-**Step 1: Write URL parsing tests**
+**Step 1: Write flow tests**
 
-Update `test/appRouting.test.ts`:
+Update routing/state tests so the browser stores:
 
 ```ts
-it('parses host/session/thread for rendezvous handoff', () => {
-  expect(
-    parseInitialSearch('?screen=handoff&host=host-1&session=session-1&threadId=thread-1'),
-  ).toMatchObject({
-    screen: 'handoff',
-    hostPeerId: 'host-1',
-    sessionId: 'session-1',
-    threadId: 'thread-1',
-  });
-});
+{
+  hostPeerId: 'host-1',
+  sessionId: 'session-1',
+  delivery: { channel: 'discord', target: 'channel:thread-1' },
+}
 ```
 
-**Step 2: Run failing test if needed**
+and sends `rendezvous.join` before entering the voice room.
 
-```bash
-npm test -- test/appRouting.test.ts
-```
-
-Expected: PASS if current parser already handles this; otherwise FAIL until updated.
-
-**Step 3: Implement two-phase browser connection**
+**Step 2: Implement two-phase browser connection**
 
 Current browser connects directly to `hostPeerId` and uses that connection for voice.
 
@@ -473,7 +831,7 @@ Change it to:
 2. On user enter / start, send:
 
 ```ts
-phoneToDaemon.rendezvousJoin(sessionId, threadId)
+phoneToDaemon.rendezvousJoin({ sessionId, delivery })
 ```
 
 3. Wait for `rendezvous.accept` with `roomId`.
@@ -488,7 +846,7 @@ Expose UI states clearly:
 - `READY`
 - `SESSION JOIN FAILED`
 
-**Step 4: Remove route IDs from `stt.start`**
+**Step 3: Remove route IDs from `stt.start`**
 
 In `client/src/voice/sttDaemon.ts`:
 
@@ -496,9 +854,9 @@ In `client/src/voice/sttDaemon.ts`:
 opts.sendControl(phoneToDaemon.sttStart());
 ```
 
-Remove `sessionId` / `threadId` from `STTStartOptions` unless tests require temporary compatibility. If compatibility remains, do not use it in the normal rendezvous path.
+Remove `sessionId`, `threadId`, `channel`, and `target` from `STTStartOptions` unless tests require temporary compatibility. If compatibility remains, do not use it in the normal rendezvous path.
 
-**Step 5: Run focused checks**
+**Step 4: Verify**
 
 ```bash
 npm test -- test/appRouting.test.ts test/protocol.test.ts test/drivingReducer.test.ts
@@ -507,7 +865,7 @@ npm run typecheck
 
 Expected: PASS.
 
-**Step 6: Commit**
+**Step 5: Commit**
 
 ```bash
 git add client/src/app.tsx client/src/rtc/RtcContext.tsx client/src/rtc/client.ts client/src/screens/Handoff.tsx client/src/screens/Driving.tsx client/src/voice/sttDaemon.ts test/appRouting.test.ts
@@ -516,7 +874,7 @@ git commit -m "feat: connect browser through rendezvous room"
 
 ---
 
-## Task 5: Add active session cleanup and limits only for live voice sessions
+## Task 8: Add active session cleanup and limits only for live voice sessions
 
 **Files:**
 - Modify: `daemon/src/voiceSession.ts`
@@ -529,7 +887,11 @@ Add tests for pure cleanup behavior:
 
 ```ts
 it('marks a voice session closed after cleanup', () => {
-  const s = createVoiceSessionState({ roomId: 'host:s1', sessionId: 's1' });
+  const s = createVoiceSessionState({
+    roomId: 'host:s1',
+    sessionId: 's1',
+    delivery: { channel: 'discord', target: 'channel:t1' },
+  });
   expect(s.closed).toBe(false);
   s.close();
   expect(s.closed).toBe(true);
@@ -557,7 +919,7 @@ If exceeded, rendezvous returns `rendezvous.error('too_many_voice_sessions')`.
 
 Important: this is active runtime session state only. It is not pre-created link state.
 
-**Step 3: Run focused checks**
+**Step 3: Verify**
 
 ```bash
 npm test -- test/voiceSession.test.ts test/protocol.test.ts
@@ -575,112 +937,12 @@ git commit -m "feat: clean up active voice sessions"
 
 ---
 
-## Task 6: Add a pure URL helper, not a stateful daemon API
-
-**Files:**
-- Create: `scripts/create-handoff-link.mjs`
-- Modify: `package.json`
-
-**Step 1: Add helper script**
-
-The helper must not call the daemon and must not create daemon state. It only formats the agreed URL.
-
-Command:
-
-```bash
-npm run create-handoff-link -- \
-  --host host-1 \
-  --session-id agent:main:discord:channel-1:thread-1 \
-  --thread-id thread-1 \
-  --client-origin https://clawkie-talkie.davidguttman.jump.sh
-```
-
-Output:
-
-```text
-https://clawkie-talkie.davidguttman.jump.sh/?screen=handoff&host=host-1&session=agent%3Amain%3Adiscord%3Achannel-1%3Athread-1&threadId=thread-1
-```
-
-**Step 2: Implement script**
-
-Create `scripts/create-handoff-link.mjs`:
-
-```js
-const args = parseArgs(process.argv.slice(2));
-const host = args.host;
-const sessionId = args['session-id'];
-const threadId = args['thread-id'];
-const clientOrigin = args['client-origin'] || process.env.CT_CLIENT_ORIGIN;
-
-if (!host) die('--host is required');
-if (!sessionId) die('--session-id is required');
-if (!clientOrigin) die('--client-origin or CT_CLIENT_ORIGIN is required');
-
-const url = new URL(clientOrigin.replace(/\/$/, '') + '/');
-url.searchParams.set('screen', 'handoff');
-url.searchParams.set('host', host);
-url.searchParams.set('session', sessionId);
-if (threadId) url.searchParams.set('threadId', threadId);
-console.log(url.toString());
-
-function parseArgs(argv) {
-  const out = {};
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (!arg.startsWith('--')) continue;
-    out[arg.slice(2)] = argv[++i];
-  }
-  return out;
-}
-
-function die(msg) {
-  console.error(msg);
-  process.exit(1);
-}
-```
-
-**Step 3: Add package script**
-
-Modify `package.json`:
-
-```json
-{
-  "scripts": {
-    "create-handoff-link": "node scripts/create-handoff-link.mjs"
-  }
-}
-```
-
-**Step 4: Verify script without starting servers**
-
-```bash
-node scripts/create-handoff-link.mjs \
-  --host host-1 \
-  --session-id session-1 \
-  --thread-id thread-1 \
-  --client-origin https://clawkie-talkie.davidguttman.jump.sh
-```
-
-Expected output:
-
-```text
-https://clawkie-talkie.davidguttman.jump.sh/?screen=handoff&host=host-1&session=session-1&threadId=thread-1
-```
-
-**Step 5: Commit**
-
-```bash
-git add package.json scripts/create-handoff-link.mjs
-git commit -m "feat: add deterministic handoff link helper"
-```
-
----
-
-## Task 7: Update docs for deterministic rendezvous
+## Task 9: Update docs for deterministic rendezvous and agent-built URLs
 
 **Files:**
 - Modify: `daemon/README.md`
 - Create: `docs/voice-handoff.md`
+- Update if present: agent/skill docs that describe Clawkie voice handoff
 
 **Step 1: Update daemon README**
 
@@ -689,24 +951,19 @@ Replace “Single-session daemon” framing with:
 - daemon is a local rendezvous daemon;
 - `host` is a control/rendezvous room;
 - voice happens on deterministic per-session rooms;
-- browser links contain `host`, `session`, and optional `threadId`;
+- agents construct `/voice#host=...&session=...&channel=...&target=...` directly;
+- `/voice` is the public handoff path;
+- `/voice.html` is the app HTML path;
+- `/` is reserved for the marketing landing page;
+- hash args are preferred so handoff identifiers are not sent to web servers;
+- query params are accepted for compatibility;
 - no pre-created link-state lifecycle exists.
 
-Document:
+Document daemon startup only, not link-helper startup:
 
 ```bash
 npm run daemon -- \
-  --client-origin https://clawkie-talkie.davidguttman.jump.sh
-```
-
-And:
-
-```bash
-npm run create-handoff-link -- \
-  --host <daemon-peer-id> \
-  --session-id <openclaw-session-id> \
-  --thread-id <discord-thread-id> \
-  --client-origin https://clawkie-talkie.davidguttman.jump.sh
+  --client-origin https://clawkietalkie.app
 ```
 
 **Step 2: Create design doc**
@@ -716,6 +973,9 @@ Create `docs/voice-handoff.md` with:
 - user story;
 - old singleton architecture;
 - new deterministic rendezvous architecture;
+- URL contract;
+- hash-vs-query privacy note;
+- app route contract (`/`, `/voice`, `/voice.html`);
 - sequence diagram;
 - failure states;
 - testing checklist.
@@ -732,19 +992,20 @@ sequenceDiagram
   participant OC as OpenClaw Session
 
   User->>Agent: switch to voice
-  Agent-->>User: URL with host H + session A + thread A
+  Agent-->>User: /voice#host=H&session=A&channel=C&target=T
   User->>Phone: open link
-  Phone->>Host: rendezvous.join(session A, thread A)
+  Phone->>Host: rendezvous.join(session A, delivery C/T)
   Host->>Host: derive room H:A
   Host-->>Phone: rendezvous.accept(room H:A)
   Phone->>Room: WebRTC voice connection
   User->>Phone: speak
-  Room->>OC: run OpenClaw turn with room-bound session/thread
+  Room->>OC: openclaw message send --channel C --target T
+  Room->>OC: openclaw agent --session-id A
   OC-->>Room: reply text
   Room-->>Phone: TTS audio
 ```
 
-**Step 3: Run docs-adjacent checks**
+**Step 3: Verify docs-adjacent checks**
 
 ```bash
 npm run typecheck
@@ -757,16 +1018,17 @@ Expected: PASS.
 
 ```bash
 git add daemon/README.md docs/voice-handoff.md
-git commit -m "docs: describe deterministic rendezvous voice handoff"
+git commit -m "docs: describe deterministic voice handoff urls"
 ```
 
 ---
 
-## Task 8: Add integration-style test for two simultaneous sessions
+## Task 10: Add integration-style test for two simultaneous sessions
 
 **Files:**
 - Create: `test/multiSessionRendezvous.test.ts`
-- Modify test helpers as needed.
+- Create if useful: `daemon/src/voiceSessionManager.ts`
+- Create if useful: `test/voiceSessionManager.test.ts`
 
 **Step 1: Write state/protocol-level test**
 
@@ -790,16 +1052,22 @@ describe('multi-session rendezvous', () => {
     const a = createVoiceSessionState({
       roomId: 'host-1:session-a',
       sessionId: 'session-a',
-      threadId: 'thread-a',
+      delivery: { channel: 'discord', target: 'channel:thread-a' },
     });
     const b = createVoiceSessionState({
       roomId: 'host-1:session-b',
       sessionId: 'session-b',
-      threadId: 'thread-b',
+      delivery: { channel: 'slack', target: 'channel:C123' },
     });
 
-    expect(a.chatTarget()).toEqual({ sessionId: 'session-a', threadId: 'thread-a' });
-    expect(b.chatTarget()).toEqual({ sessionId: 'session-b', threadId: 'thread-b' });
+    expect(a.chatTarget()).toEqual({
+      sessionId: 'session-a',
+      delivery: { channel: 'discord', target: 'channel:thread-a' },
+    });
+    expect(b.chatTarget()).toEqual({
+      sessionId: 'session-b',
+      delivery: { channel: 'slack', target: 'channel:C123' },
+    });
   });
 });
 ```
@@ -816,7 +1084,7 @@ Manager responsibilities:
 - enforce max active sessions;
 - remove sessions on cleanup.
 
-**Step 2: Run focused tests**
+**Step 2: Verify**
 
 ```bash
 npm test -- test/multiSessionRendezvous.test.ts test/voiceSession.test.ts test/voiceRoom.test.ts
@@ -834,7 +1102,7 @@ git commit -m "test: cover multi-session rendezvous"
 
 ---
 
-## Task 9: Final verification gate
+## Task 11: Final verification gate
 
 **Files:**
 - No new files unless fixing failures.
@@ -873,8 +1141,8 @@ Because this requires running Node server/daemon processes, do not do it silentl
 If authorized, verify:
 
 1. Start existing project dev flow in the approved way.
-2. Create link A for thread/session A.
-3. Create link B for thread/session B.
+2. Create link A for session A using hash args.
+3. Create link B for session B using hash args.
 4. Open both links in separate browser tabs/devices.
 5. Confirm both reach READY independently.
 6. Speak one deterministic fixture or mic turn in A.
@@ -892,24 +1160,32 @@ The feature is complete when:
 - `npm test` passes.
 - `npm run typecheck` passes.
 - `npm run build` passes.
+- `/` is a marketing landing page entrypoint.
+- `/voice` is a supported user-facing voice handoff path.
+- `/voice.html` is the voice app HTML path.
+- Browser accepts handoff args from hash fragments and query params.
+- Agents construct hash-fragment URLs by default.
 - `host=H` is rendezvous/control only.
 - The actual voice WebRTC session uses a derived per-session room.
 - Daemon can hold at least two simultaneous independent voice sessions.
-- Each voice session has its own room-bound `sessionId/threadId` for chat routing.
+- Each voice session has its own room-bound `sessionId` and `delivery.channel/target` for chat routing.
 - `stt.start` no longer accepts or sets routing fields per turn.
 - There is no pre-created link-state table / random join-ID store / TTL lifecycle for link creation.
+- There is no helper script/API whose only job is formatting the URL.
 - Docs describe deterministic rendezvous accurately.
 
 ## Recommended Commit Sequence
 
-1. `feat: derive deterministic voice rooms`
-2. `feat: add rendezvous join protocol`
-3. `feat: split daemon voice state by session room`
-4. `feat: connect browser through rendezvous room`
-5. `feat: clean up active voice sessions`
-6. `feat: add deterministic handoff link helper`
-7. `docs: describe deterministic rendezvous voice handoff`
-8. `test: cover multi-session rendezvous`
+1. `feat: add voice entrypoint and marketing root`
+2. `feat: parse hash-based voice handoff urls`
+3. `feat: derive deterministic voice rooms`
+4. `feat: add generic rendezvous join protocol`
+5. `feat: use generic OpenClaw delivery targets`
+6. `feat: split daemon voice state by session room`
+7. `feat: connect browser through rendezvous room`
+8. `feat: clean up active voice sessions`
+9. `docs: describe deterministic voice handoff urls`
+10. `test: cover multi-session rendezvous`
 
 ## Execution Notes
 
