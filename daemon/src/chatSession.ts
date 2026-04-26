@@ -49,16 +49,51 @@ async function sendDebugNotification(
 
 async function sendTranscriptMessage(
   apiKey: string,
-  opts: { threadId?: string; sessionId: string },
+  opts: { threadId?: string; sessionId: string; delivery?: DeliveryTarget },
   transcript: string,
   signal?: AbortSignal,
 ): Promise<void> {
+  if (opts.delivery) {
+    await sendGenericMessage(
+      apiKey,
+      opts.delivery,
+      quoteTranscript(transcript),
+      signal,
+      'openclaw_transcript_post_failed',
+    );
+    return;
+  }
   const target = deriveDiscordMessageTarget(opts);
   if (!target) {
     console.error('[openclaw] transcript_post_skipped: missing_discord_target');
     return;
   }
   await sendDiscordMessage(apiKey, target, quoteTranscript(transcript), signal, 'openclaw_transcript_post_failed');
+}
+
+async function sendGenericMessage(
+  apiKey: string,
+  delivery: DeliveryTarget,
+  message: string,
+  signal: AbortSignal | undefined,
+  failureLabel: string,
+): Promise<void> {
+  const args = [
+    'message', 'send',
+    '--channel', delivery.channel,
+    '--target', delivery.target,
+    '--message', message,
+  ];
+  try {
+    await execAsync(`openclaw ${args.map(a => JSON.stringify(a)).join(' ')}`, {
+      env: openClawEnv(apiKey),
+      signal,
+    });
+  } catch (err) {
+    if (signal?.aborted) throw new ChatError('aborted', 'aborted');
+    const msg = err instanceof Error ? err.message : failureLabel;
+    throw new ChatError(msg, classifyOpenClawError(err));
+  }
 }
 
 async function sendDiscordMessage(
@@ -220,9 +255,15 @@ export function classifyOpenClawError(err: unknown): string {
   return 'openclaw_failed';
 }
 
+export interface DeliveryTarget {
+  channel: string;
+  target: string;
+}
+
 export interface ChatOptionsWithSession extends ChatOptions {
   sessionId: string;
   threadId?: string;
+  delivery?: DeliveryTarget;
 }
 
 export async function runChat(userText: string, opts: ChatOptionsWithSession): Promise<ChatResult> {
@@ -232,7 +273,7 @@ export async function runChat(userText: string, opts: ChatOptionsWithSession): P
 
   await sendTranscriptMessage(
     opts.apiKey,
-    { threadId: opts.threadId, sessionId: opts.sessionId },
+    { threadId: opts.threadId, sessionId: opts.sessionId, delivery: opts.delivery },
     trimmed,
     opts.signal,
   );

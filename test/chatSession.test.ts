@@ -207,6 +207,28 @@ describe('runChat OpenClaw CLI integration', () => {
   });
 });
 
+describe('runChat with explicit delivery target', () => {
+  beforeEach(() => {
+    execMock.mockReset();
+  });
+
+  it('routes the transcript through the explicit delivery channel/target', async () => {
+    execMock.mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+
+    await runChat('hello', {
+      apiKey: 'test-key',
+      sessionId: 'session-1',
+      delivery: { channel: 'slack', target: 'channel:C123' },
+    });
+
+    const transcriptCommand = String(execMock.mock.calls[0]?.[0]);
+    expect(transcriptCommand).toContain('openclaw "message" "send"');
+    expect(transcriptCommand).toContain('"--channel" "slack"');
+    expect(transcriptCommand).toContain('"--target" "channel:C123"');
+    expect(transcriptCommand).toContain(`"--message" ${JSON.stringify('> hello')}`);
+  });
+});
+
 describe('Discord transcript formatting and target derivation', () => {
   it('block-quotes each line of the user transcript without a header', () => {
     expect(quoteTranscript('one\ntwo')).toBe('> one\n> two');
