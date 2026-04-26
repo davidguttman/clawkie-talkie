@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from 'react';
 import { RtcClient, type ControlMessage, type RtcStatus } from './client';
+import { attachDaemonRemoteStream } from '../voice/tts';
 
 export interface RtcContextValue {
   status: RtcStatus;
@@ -20,6 +21,10 @@ export interface RtcContextValue {
   sendBinary: (bytes: ArrayBuffer | Uint8Array) => void;
   addControlListener: (fn: (msg: ControlMessage) => void) => () => void;
   addBinaryListener: (fn: (bytes: ArrayBuffer) => void) => () => void;
+  // Subscribe for the remote audio MediaStream from the daemon. Fires
+  // immediately with the existing stream if one is already attached, so
+  // late subscribers don't miss the daemon's first stream.
+  addRemoteStreamListener: (fn: (stream: MediaStream) => void) => () => void;
   hasClient: boolean;
 }
 
@@ -32,6 +37,7 @@ const Ctx = createContext<RtcContextValue>({
   sendBinary: noop,
   addControlListener: () => noop,
   addBinaryListener: () => noop,
+  addRemoteStreamListener: () => noop,
   hasClient: false,
 });
 
@@ -47,6 +53,8 @@ export function RtcProvider({
   const clientRef = useRef<RtcClient | null>(null);
   const controlListenersRef = useRef<Set<(msg: ControlMessage) => void>>(new Set());
   const binaryListenersRef = useRef<Set<(bytes: ArrayBuffer) => void>>(new Set());
+  const remoteStreamListenersRef = useRef<Set<(stream: MediaStream) => void>>(new Set());
+  const remoteStreamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
     if (!hostPeerId) return;
@@ -63,6 +71,15 @@ export function RtcProvider({
       onBinaryMessage: (bytes) => {
         for (const fn of binaryListenersRef.current) fn(bytes);
       },
+      onRemoteStream: (stream) => {
+        remoteStreamRef.current = stream;
+        // Attach to the hidden audio element immediately so playback
+        // can start the moment the daemon's first audio frame arrives.
+        // unlockDaemonTtsAudio() (called from the PTT gesture) has
+        // already primed the element with a play() call.
+        attachDaemonRemoteStream(stream);
+        for (const fn of remoteStreamListenersRef.current) fn(stream);
+      },
     });
     clientRef.current = client;
     client.connect();
@@ -70,6 +87,7 @@ export function RtcProvider({
     return () => {
       client.close();
       clientRef.current = null;
+      remoteStreamRef.current = null;
     };
   }, [hostPeerId]);
 
@@ -95,6 +113,20 @@ export function RtcProvider({
     };
   }, []);
 
+  const addRemoteStreamListener = useCallback((fn: (stream: MediaStream) => void) => {
+    remoteStreamListenersRef.current.add(fn);
+    if (remoteStreamRef.current) {
+      try {
+        fn(remoteStreamRef.current);
+      } catch (err) {
+        console.error('[rtc] remote stream listener threw on attach', err);
+      }
+    }
+    return () => {
+      remoteStreamListenersRef.current.delete(fn);
+    };
+  }, []);
+
   const value = useMemo<RtcContextValue>(
     () => ({
       status,
@@ -103,9 +135,19 @@ export function RtcProvider({
       sendBinary,
       addControlListener,
       addBinaryListener,
+      addRemoteStreamListener,
       hasClient: !!hostPeerId,
     }),
-    [status, detail, sendControl, sendBinary, addControlListener, addBinaryListener, hostPeerId],
+    [
+      status,
+      detail,
+      sendControl,
+      sendBinary,
+      addControlListener,
+      addBinaryListener,
+      addRemoteStreamListener,
+      hostPeerId,
+    ],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

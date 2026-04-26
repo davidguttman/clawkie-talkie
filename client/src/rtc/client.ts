@@ -25,6 +25,7 @@ export interface RtcClientOptions {
   onStatusChange?: (status: RtcStatus, detail?: string) => void;
   onControlMessage?: (msg: ControlMessage) => void;
   onBinaryMessage?: (bytes: ArrayBuffer) => void;
+  onRemoteStream?: (stream: MediaStream) => void;
 }
 
 const DEFAULT_SIGNAL_SERVER =
@@ -168,6 +169,14 @@ export class RtcClient {
 
     peer.on('connect', () => {
       this.setStatus('open');
+    });
+
+    peer.on('stream', (stream: MediaStream) => {
+      try {
+        this.opts.onRemoteStream?.(stream);
+      } catch (err) {
+        console.error('[rtc] onRemoteStream handler threw', err);
+      }
     });
 
     peer.on('data', (data: unknown) => {

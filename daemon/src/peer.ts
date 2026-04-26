@@ -6,10 +6,12 @@
 // simple-peer connection backed by @roamhq/wrtc.
 //
 // Orchestration: this module owns the full turn. Phone streams mic PCM
-// in; daemon runs xAI STT, then xAI chat on the final transcript, then
-// xAI TTS on the reply text, and streams the resulting PCM16 audio back
-// to the phone on the same DataChannel. The browser never holds an xAI
-// key.
+// in over the data channel; daemon runs xAI STT, then xAI chat on the
+// final transcript, then xAI TTS on the reply text. Reply audio is fed
+// into an outbound WebRTC MediaStream (RTCAudioSource → 48 kHz / 10 ms
+// frames) so the phone plays it as ordinary remote media — the same
+// shape Rambly's CLI uses, which is the only path that survives mobile
+// browser autoplay/suspend rules in practice.
 
 import wrtc from '@roamhq/wrtc';
 import SimplePeer from 'simple-peer';
@@ -20,6 +22,12 @@ import { XaiTtsSession, TTS_SAMPLE_RATE } from './ttsSession.js';
 import { daemonToPhone, type PhoneToDaemon } from './protocol.js';
 import { XaiSttSession } from './sttSession.js';
 import { SignalClient, type SignalData } from './signal.js';
+import {
+  FRAME_10MS,
+  WEBRTC_SAMPLE_RATE,
+  pcmToFrames,
+  resamplePcm,
+} from './audio.js';
 
 const execAsync = promisify(exec);
 
@@ -65,6 +73,23 @@ export class DaemonPeer {
   private chatAbort: AbortController | null = null;
   private turnInFlight = false;
   private readyAnnounced = false;
+
+  // Outbound audio: created once per phone connection and kept alive
+  // for the lifetime of that peer. Frames pushed during TTS are
+  // delivered as ordinary WebRTC remote media on the phone.
+  private audioSource: AudioSourceLike | null = null;
+  private outboundStream: unknown = null;
+  // Keepalive ping to keep the data channel + ICE/NAT path warm during
+  // the silent gap between STT close and TTS start. Without this,
+  // mobile clients on cellular have shown the peer dropping while the
+  // daemon is mid-`openclaw agent` exec.
+  private keepaliveInterval: NodeJS.Timeout | null = null;
+  // 10 ms TTS frame queue + drain pump.
+  private audioQueue: Int16Array[] = [];
+  private audioPumpInterval: NodeJS.Timeout | null = null;
+  private audioPumpAwaitingDone = false;
+  private rawRemainder: Buffer = Buffer.alloc(0);
+  private resampledRemainder: Buffer = Buffer.alloc(0);
 
   constructor(private readonly opts: DaemonPeerOptions) {
     this.iceServers = opts.iceServers ?? DEFAULT_ICE_SERVERS;
@@ -181,11 +206,14 @@ export class DaemonPeer {
 
     console.error(`[peer] establishing connection with phone=${remoteId} initiator=${initiator}`);
 
+    const { stream } = this.openOutboundAudio();
+
     const peer = new SimplePeer({
       initiator,
       trickle: true,
       wrtc: wrtc as unknown as SimplePeer.Options['wrtc'],
       config: { iceServers: this.iceServers },
+      streams: stream ? [stream as MediaStream] : undefined,
     });
     this.peer = peer;
     this.armConnectionTimeout(peer, remoteId);
@@ -204,6 +232,7 @@ export class DaemonPeer {
       this.clearConnectionTimeout();
       this.connected = true;
       console.error('[peer] data channel connected');
+      this.startKeepalive();
     });
 
     peer.on('data', (data: unknown) => {
@@ -250,18 +279,156 @@ export class DaemonPeer {
 
   private tearDownPeer(reason: string, peer?: SimplePeer.Instance): void {
     if (peer && this.peer !== peer) return;
+    console.error(`[peer] tearDownPeer reason=${reason}`);
     this.clearConnectionTimeout();
+    this.stopKeepalive();
     this.resetTurn(reason);
     try {
       this.peer?.destroy();
     } catch {
       // ignore
     }
+    this.closeOutboundAudio();
     this.peer = null;
     this.remoteId = null;
     this.connected = false;
     this.activeSessionId = null;
     this.activeThreadId = null;
+  }
+
+  private openOutboundAudio(): { stream: unknown | null } {
+    if (this.outboundStream) return { stream: this.outboundStream };
+    const nonstandard = (wrtc as { nonstandard?: { RTCAudioSource?: new () => AudioSourceLike } })
+      .nonstandard;
+    const Ctor = nonstandard?.RTCAudioSource;
+    const MediaStreamCtor = (wrtc as { MediaStream?: new () => MediaStreamLike }).MediaStream;
+    if (!Ctor || !MediaStreamCtor) {
+      console.error('[peer] wrtc.nonstandard.RTCAudioSource unavailable; outbound audio disabled');
+      return { stream: null };
+    }
+    try {
+      const source = new Ctor();
+      const track = source.createTrack();
+      const stream = new MediaStreamCtor();
+      stream.addTrack(track);
+      this.audioSource = source;
+      this.outboundStream = stream;
+      return { stream };
+    } catch (err) {
+      console.error(`[peer] failed to open outbound audio: ${err instanceof Error ? err.message : err}`);
+      this.audioSource = null;
+      this.outboundStream = null;
+      return { stream: null };
+    }
+  }
+
+  private closeOutboundAudio(): void {
+    this.stopAudioPump();
+    this.audioQueue = [];
+    this.rawRemainder = Buffer.alloc(0);
+    this.resampledRemainder = Buffer.alloc(0);
+    this.audioSource = null;
+    this.outboundStream = null;
+  }
+
+  private enqueueTtsPcm(pcm: Uint8Array): void {
+    if (!this.audioSource) return;
+    if (pcm.byteLength === 0) return;
+    const chunk = Buffer.concat([this.rawRemainder, Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength)]);
+    const evenLen = chunk.length & ~1;
+    this.rawRemainder = chunk.subarray(evenLen);
+    if (evenLen === 0) return;
+    const aligned = chunk.subarray(0, evenLen);
+
+    const resampled = resamplePcm(aligned, TTS_SAMPLE_RATE, WEBRTC_SAMPLE_RATE);
+    const merged = Buffer.concat([this.resampledRemainder, resampled]);
+    const frameBytes = FRAME_10MS * 2;
+    const wholeBytes = merged.length - (merged.length % frameBytes);
+    if (wholeBytes > 0) {
+      const framed = merged.subarray(0, wholeBytes);
+      const frames = pcmToFrames(framed, FRAME_10MS);
+      for (const f of frames) this.audioQueue.push(f);
+    }
+    this.resampledRemainder = merged.subarray(wholeBytes);
+    this.startAudioPump();
+  }
+
+  private flushTtsTail(): void {
+    // Flush any leftover raw bytes through the resampler, then any
+    // partial 48 kHz frame zero-padded to 10 ms.
+    if (this.rawRemainder.length >= 2) {
+      const evenLen = this.rawRemainder.length & ~1;
+      const aligned = this.rawRemainder.subarray(0, evenLen);
+      const resampled = resamplePcm(aligned, TTS_SAMPLE_RATE, WEBRTC_SAMPLE_RATE);
+      this.resampledRemainder = Buffer.concat([this.resampledRemainder, resampled]);
+      this.rawRemainder = Buffer.alloc(0);
+    }
+    if (this.resampledRemainder.length >= 2) {
+      const tailFrames = pcmToFrames(this.resampledRemainder, FRAME_10MS);
+      for (const f of tailFrames) this.audioQueue.push(f);
+      this.resampledRemainder = Buffer.alloc(0);
+    }
+  }
+
+  private startAudioPump(): void {
+    if (this.audioPumpInterval) return;
+    if (!this.audioSource) return;
+    this.audioPumpInterval = setInterval(() => {
+      const source = this.audioSource;
+      if (!source) {
+        this.stopAudioPump();
+        return;
+      }
+      const frame = this.audioQueue.shift();
+      if (!frame) {
+        if (this.audioPumpAwaitingDone) {
+          this.stopAudioPump();
+          this.audioPumpAwaitingDone = false;
+          this.send(daemonToPhone.ttsDone());
+          this.tts = null;
+          this.turnInFlight = false;
+          void this.sendDebugNotification('tts_done', 'audio playback complete');
+        }
+        return;
+      }
+      try {
+        source.onData({
+          samples: frame,
+          sampleRate: WEBRTC_SAMPLE_RATE,
+          channelCount: 1,
+        });
+      } catch (err) {
+        console.error(`[peer] audioSource.onData failed: ${err instanceof Error ? err.message : err}`);
+      }
+    }, 10);
+    this.audioPumpInterval.unref?.();
+  }
+
+  private stopAudioPump(): void {
+    if (this.audioPumpInterval) {
+      clearInterval(this.audioPumpInterval);
+      this.audioPumpInterval = null;
+    }
+  }
+
+  private startKeepalive(): void {
+    if (this.keepaliveInterval) return;
+    this.keepaliveInterval = setInterval(() => {
+      if (!this.connected || !this.peer) return;
+      try {
+        this.peer.send(JSON.stringify({ t: 'keepalive' }));
+      } catch (err) {
+        console.error(`[peer] keepalive send failed: ${err instanceof Error ? err.message : err}`);
+      }
+    }, 3_000);
+    this.keepaliveInterval.unref?.();
+  }
+
+  private stopKeepalive(): void {
+    if (this.keepaliveInterval) {
+      clearInterval(this.keepaliveInterval);
+      this.keepaliveInterval = null;
+    }
   }
 
   private handlePeerData(data: unknown): void {
@@ -387,23 +554,63 @@ export class DaemonPeer {
     try {
       await this.sendDebugNotification('tts_start', 'opening TTS stream');
 
+      this.audioQueue = [];
+      this.rawRemainder = Buffer.alloc(0);
+      this.resampledRemainder = Buffer.alloc(0);
+      this.audioPumpAwaitingDone = false;
+
+      const useTrack = !!this.audioSource;
       this.tts = new XaiTtsSession(
         { apiKey: this.opts.apiKey, text },
         {
           onOpen: () => {
-            this.send(daemonToPhone.ttsStart(TTS_SAMPLE_RATE));
-            void this.sendDebugNotification('tts_audio_start', 'TTS streaming PCM audio');
+            // When the outbound audio track is up, audio flows as
+            // ordinary WebRTC remote media; tts.start is just a turn
+            // marker. Without a track, fall back to PCM frames over
+            // the data channel and announce the source rate so the
+            // phone's WebAudio player can decode.
+            this.send(daemonToPhone.ttsStart(useTrack ? WEBRTC_SAMPLE_RATE : TTS_SAMPLE_RATE));
+            void this.sendDebugNotification(
+              'tts_audio_start',
+              useTrack ? 'TTS streaming via WebRTC track' : 'TTS streaming via data channel',
+            );
           },
           onAudio: (pcm) => {
-            this.sendBinary(pcm);
+            if (useTrack) {
+              this.enqueueTtsPcm(pcm);
+            } else {
+              this.sendBinary(pcm);
+            }
           },
           onDone: () => {
-            this.send(daemonToPhone.ttsDone());
-            this.tts = null;
-            this.turnInFlight = false;
-            void this.sendDebugNotification('tts_done', 'audio playback complete');
+            if (!useTrack) {
+              this.send(daemonToPhone.ttsDone());
+              this.tts = null;
+              this.turnInFlight = false;
+              void this.sendDebugNotification('tts_done', 'audio playback complete');
+              return;
+            }
+            // Track path: drain remaining buffered samples through the
+            // pump, then have the pump fire tts.done once the queue
+            // empties so the phone's UI doesn't snap out of "speaking"
+            // before audio actually finishes.
+            this.flushTtsTail();
+            this.audioPumpAwaitingDone = true;
+            this.startAudioPump();
+            if (this.audioQueue.length === 0) {
+              this.audioPumpAwaitingDone = false;
+              this.send(daemonToPhone.ttsDone());
+              this.tts = null;
+              this.turnInFlight = false;
+              void this.sendDebugNotification('tts_done', 'audio playback complete');
+            }
           },
           onError: (message) => {
+            this.stopAudioPump();
+            this.audioQueue = [];
+            this.rawRemainder = Buffer.alloc(0);
+            this.resampledRemainder = Buffer.alloc(0);
+            this.audioPumpAwaitingDone = false;
             this.send(daemonToPhone.ttsError(message));
             this.tts = null;
             this.turnInFlight = false;
@@ -433,6 +640,11 @@ export class DaemonPeer {
       // ignore
     }
     this.tts = null;
+    this.stopAudioPump();
+    this.audioQueue = [];
+    this.rawRemainder = Buffer.alloc(0);
+    this.resampledRemainder = Buffer.alloc(0);
+    this.audioPumpAwaitingDone = false;
     this.chatAbort?.abort();
     this.chatAbort = null;
   }
@@ -451,8 +663,6 @@ export class DaemonPeer {
     const peer = this.peer;
     if (!peer || !this.connected) return;
     try {
-      // Hand simple-peer a tightly-owned view so it doesn't surface a
-      // shared/larger buffer over the wire.
       const copy = new Uint8Array(pcm.byteLength);
       copy.set(pcm);
       peer.send(copy);
@@ -490,4 +700,13 @@ function tryDecodeJsonText(bytes: Uint8Array): string | null {
 
 function trimOrNull(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+interface AudioSourceLike {
+  createTrack(): unknown;
+  onData(frame: { samples: Int16Array; sampleRate: number; channelCount: number }): void;
+}
+
+interface MediaStreamLike {
+  addTrack(track: unknown): void;
 }

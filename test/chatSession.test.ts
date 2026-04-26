@@ -86,23 +86,68 @@ describe('runChat OpenClaw CLI integration', () => {
 
     const agentCommand = findAgentCommand();
     expect(agentCommand).toContain('"--session-id" "session-1"');
-    expect(agentCommand).toContain('"--reply-channel" "discord"');
-    expect(agentCommand).toContain('"--reply-to" "channel:thread-1"');
   });
 
-  it('does not add a reply-channel override without a reply target', async () => {
+  it('never invokes the agent with --deliver or an explicit reply target', async () => {
     execMock.mockResolvedValue({ stdout: 'ok\n', stderr: '' });
 
     await runChat('hello', {
       apiKey: 'test-key',
       sessionId: 'session-1',
+      threadId: 'thread-1',
       deliver: true,
     });
 
     const agentCommand = findAgentCommand();
-    expect(agentCommand).toContain('"--deliver"');
+    expect(agentCommand).not.toContain('"--deliver"');
     expect(agentCommand).not.toContain('"--reply-channel"');
     expect(agentCommand).not.toContain('"--reply-to"');
+  });
+
+  it('posts the agent reply text to Discord exactly once after the agent returns', async () => {
+    execMock
+      .mockResolvedValueOnce({ stdout: 'transcript posted\n', stderr: '' })
+      .mockResolvedValueOnce({ stdout: 'hello back\n', stderr: '' })
+      .mockResolvedValueOnce({ stdout: 'reply posted\n', stderr: '' })
+      .mockResolvedValueOnce({ stdout: 'ok\n', stderr: '' });
+
+    await runChat('hi', {
+      apiKey: 'test-key',
+      sessionId: 'session-1',
+      threadId: 'thread-1',
+      deliver: true,
+    });
+
+    const sendCommands = execMock.mock.calls
+      .map(([cmd]) => String(cmd))
+      .filter((cmd) => cmd.includes('openclaw "message" "send"'));
+    // Expect: transcript, reply, then debug notification — but only one
+    // contains the actual reply text and none use --deliver/--reply-to.
+    const replyCommand = sendCommands.find((cmd) =>
+      cmd.includes('"--message" "hello back"'),
+    );
+    expect(replyCommand).toBeDefined();
+    expect(replyCommand).toContain('"--target" "channel:thread-1"');
+    const replyMatches = sendCommands.filter((cmd) =>
+      cmd.includes('"--message" "hello back"'),
+    );
+    expect(replyMatches).toHaveLength(1);
+  });
+
+  it('skips reply-message delivery when no Discord target can be derived', async () => {
+    execMock.mockResolvedValue({ stdout: 'plain reply\n', stderr: '' });
+
+    await runChat('hi', {
+      apiKey: 'test-key',
+      sessionId: 'session-1',
+      deliver: true,
+    });
+
+    const sendCommands = execMock.mock.calls
+      .map(([cmd]) => String(cmd))
+      .filter((cmd) => cmd.includes('openclaw "message" "send"'));
+    // No transcript and no reply send when there's no Discord target.
+    expect(sendCommands).toHaveLength(0);
   });
 
   it('resolves OpenClaw session keys to stored session ids before agent runs', async () => {

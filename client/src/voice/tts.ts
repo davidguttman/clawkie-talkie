@@ -1,22 +1,34 @@
 // Daemon-backed TTS playback.
 //
-// The daemon terminates xAI TTS server-side and streams PCM16LE mono
-// audio back over the PeerJS DataConnection as binary frames, framed by:
+// Two paths, in priority order:
 //
-//   daemon → phone:
-//     { t: "tts.start", sample_rate: number }
-//     <binary>  // PCM16LE samples
-//     ...
-//     { t: "tts.done" | "tts.error", message? }
+//   1) Outbound WebRTC media track (matches the Rambly CLI). The daemon
+//      attaches an audio MediaStreamTrack to the peer connection and
+//      pushes 48 kHz / 10 ms frames during TTS. The phone gets the
+//      stream via `peer.on('stream')`, hands it to a hidden
+//      HTMLAudioElement, and `play()`s it from the user's PTT gesture
+//      so mobile autoplay rules are satisfied. Survives backgrounding
+//      and ICE keepalive better than data-channel buffer playback.
 //
-// The phone never touches an xAI API key or WebSocket. This file wires
-// incoming binary frames into the Web Audio graph at the sample rate
-// the daemon announces; playback paces itself via `nextStartTime` so
-// small fragments are stitched into a continuous stream.
+//   2) Data-channel PCM fallback. If the daemon couldn't open an
+//      RTCAudioSource (or the phone never saw `peer.on('stream')`), it
+//      falls back to PCM16LE binary frames over the data channel,
+//      stitched together via Web Audio buffer sources. Same shape as
+//      before:
+//
+//        daemon → phone:
+//          { t: "tts.start", sample_rate: number }
+//          <binary>  // PCM16LE samples
+//          ...
+//          { t: "tts.done" | "tts.error", message? }
+//
+// The phone never touches an xAI API key or WebSocket either way.
 
 const DEFAULT_SAMPLE_RATE = 24000;
 
 let sharedAudioCtx: AudioContext | null = null;
+let sharedAudioElement: HTMLAudioElement | null = null;
+let attachedRemoteStream: MediaStream | null = null;
 
 export interface TTSHandle {
   done: Promise<void>;
@@ -33,8 +45,15 @@ export interface TTSPlayerOptions {
 
 // Mobile browsers only allow playback after the user has unlocked audio from a
 // trusted gesture. Call this from the first tap/pointerdown path so the daemon's
-// later async TTS stream reuses an already-unlocked context.
+// later async TTS stream reuses an already-unlocked context AND so the hidden
+// HTMLAudioElement is permitted to play the daemon's outbound MediaStream.
 export function unlockDaemonTtsAudio(): Promise<void> {
+  // Prime the HTMLAudioElement used for the WebRTC remote-track path
+  // so it has a play() call inside the user gesture even if the
+  // daemon's stream hasn't arrived yet. Once srcObject is assigned
+  // later, mobile browsers will treat playback as gesture-authorized.
+  primeRemoteAudioElement();
+
   const audioCtx = getSharedAudioContext();
   if (!audioCtx) return Promise.resolve();
 
@@ -42,6 +61,91 @@ export function unlockDaemonTtsAudio(): Promise<void> {
   // gesture. Keep it silent with a zero-gain node to avoid clicks.
   playSilentUnlockPulse(audioCtx);
   return resumeAudioContext(audioCtx);
+}
+
+// Hand the daemon's outbound audio MediaStream to the hidden audio
+// element. Called from the RTC layer's `peer.on('stream')` handler.
+// Idempotent on the same stream; replacing the stream reattaches.
+export function attachDaemonRemoteStream(stream: MediaStream): void {
+  if (typeof document === 'undefined') return;
+  attachedRemoteStream = stream;
+  const el = ensureRemoteAudioElement();
+  if (!el) return;
+  if (el.srcObject !== stream) {
+    try {
+      el.srcObject = stream;
+    } catch {
+      // Some browsers reject reassignment if the element is mid-load.
+      // Best-effort: clear and retry.
+      try {
+        el.srcObject = null;
+        el.srcObject = stream;
+      } catch {
+        // Nothing to do — playback will simply not start until the
+        // next stream attachment succeeds.
+      }
+    }
+  }
+  void playRemoteAudioElement(el);
+}
+
+// True once a daemon stream has been attached AND playback has been
+// started (or attempted) on the audio element. The data-channel PCM
+// fallback consults this to know when to stay out of the way.
+export function isRemoteAudioActive(): boolean {
+  return !!attachedRemoteStream && !!sharedAudioElement;
+}
+
+function ensureRemoteAudioElement(): HTMLAudioElement | null {
+  if (sharedAudioElement) return sharedAudioElement;
+  if (typeof document === 'undefined') return null;
+  try {
+    const el = document.createElement('audio');
+    el.autoplay = true;
+    // Keep it off-screen but in the DOM so iOS schedules playback.
+    el.setAttribute('playsinline', 'true');
+    el.setAttribute('aria-hidden', 'true');
+    el.style.position = 'absolute';
+    el.style.width = '0';
+    el.style.height = '0';
+    el.style.opacity = '0';
+    document.body.appendChild(el);
+    sharedAudioElement = el;
+    return el;
+  } catch {
+    return null;
+  }
+}
+
+function primeRemoteAudioElement(): void {
+  const el = ensureRemoteAudioElement();
+  if (!el) return;
+  // If a stream has already been attached, kick off playback inside
+  // the gesture. If not, calling play() on an empty element is a
+  // no-op but still records the gesture context for later assignment.
+  if (attachedRemoteStream && el.srcObject !== attachedRemoteStream) {
+    try {
+      el.srcObject = attachedRemoteStream;
+    } catch {
+      // best-effort
+    }
+  }
+  void playRemoteAudioElement(el);
+}
+
+function playRemoteAudioElement(el: HTMLAudioElement): Promise<void> {
+  try {
+    const result = el.play();
+    if (result && typeof result.then === 'function') {
+      return result.then(
+        () => undefined,
+        () => undefined,
+      );
+    }
+  } catch {
+    // ignore
+  }
+  return Promise.resolve();
 }
 
 // Audible PTT confirmation tone. Doubles as proof that the audio path works
@@ -178,6 +282,10 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
 
   const detachBinary = opts.addBinaryListener((bytes) => {
     if (state.finished || state.stopped) return;
+    // When the daemon's WebRTC audio track is attached, the remote
+    // audio element is the source of truth. Ignore PCM frames so we
+    // don't double-play with subtle drift.
+    if (isRemoteAudioActive()) return;
     if (!state.audioCtx) initAudio(state.sampleRate);
     if (!state.audioCtx || !state.gain) return;
     schedulePcmChunk(state, bytes);
