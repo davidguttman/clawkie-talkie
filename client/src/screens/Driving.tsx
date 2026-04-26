@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { HIFI, type AccentKey } from '../tokens';
 import { ButtonAura, LiveWave } from '../components/Phone';
 import { useDrivingLoop, type DrivingState } from '../voice/drivingLoop';
+import { useMediaSessionControls } from '../voice/mediaSession';
 import { playPttPressTone, unlockDaemonTtsAudio } from '../voice/tts';
 import { useRtc } from '../rtc/RtcContext';
 import type { Settings } from '../storage';
@@ -61,6 +62,11 @@ export function DrivingScreen({
     daemonConnected,
     tap,
   } = loop;
+
+  // Wire AirPods / lock-screen play-pause buttons to the same tap()
+  // entrypoint the on-screen PTT button uses. Feature-detected and a
+  // no-op when navigator.mediaSession is unavailable.
+  useMediaSessionControls(state, tap);
 
   // Ambient idle waveform drift — keeps the panel feeling alive when no
   // turn is in flight. The driving loop owns intensities for non-idle
