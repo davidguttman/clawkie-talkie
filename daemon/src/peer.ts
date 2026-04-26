@@ -451,8 +451,11 @@ export class DaemonPeer {
   private handleControl(msg: PhoneToDaemon): void {
     if (msg.t === 'stt.start') {
       this.resetTurn('stt_restart');
-      this.activeSessionId = trimOrNull(msg.sessionId) ?? this.opts.sessionId;
-      this.activeThreadId = trimOrNull(msg.threadId) ?? this.opts.threadId ?? null;
+      // Routing is bound at rendezvous, not per-turn — fall back to the
+      // CLI-configured session/thread until the rendezvous refactor in
+      // task 6 wires per-room state.
+      this.activeSessionId = this.opts.sessionId;
+      this.activeThreadId = this.opts.threadId ?? null;
       this.turnInFlight = true;
       this.openStt();
       return;
@@ -696,10 +699,6 @@ function tryDecodeJsonText(bytes: Uint8Array): string | null {
   } catch {
     return null;
   }
-}
-
-function trimOrNull(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 interface AudioSourceLike {

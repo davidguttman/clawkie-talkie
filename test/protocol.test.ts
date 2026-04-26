@@ -1,4 +1,4 @@
-// Pins the wire shape of the PeerJS DataConnection messages between the
+// Pins the wire shape of the WebRTC DataChannel messages between the
 // phone and daemon. The client and daemon each have their own copy of
 // the protocol factories (no shared workspace); these tests make sure
 // the two stay in agreement on the serialized form.
@@ -16,27 +16,53 @@ import {
 describe('phone → daemon factories', () => {
   it('emits stable `t` tags', () => {
     expect(phoneClient.sttStart()).toEqual({ t: 'stt.start' });
-    expect(phoneClient.sttStart('session-1', 'thread-1')).toEqual({
-      t: 'stt.start',
-      sessionId: 'session-1',
-      threadId: 'thread-1',
-    });
     expect(phoneClient.sttAudioDone()).toEqual({ t: 'stt.audio.done' });
     expect(phoneClient.sttCancel()).toEqual({ t: 'stt.cancel' });
     expect(phoneClient.replyCancel()).toEqual({ t: 'reply.cancel' });
   });
 
+  it('emits a generic rendezvous join with delivery', () => {
+    expect(
+      phoneClient.rendezvousJoin({
+        sessionId: 'session-1',
+        delivery: { channel: 'discord', target: 'channel:thread-1' },
+      }),
+    ).toEqual({
+      t: 'rendezvous.join',
+      sessionId: 'session-1',
+      delivery: { channel: 'discord', target: 'channel:thread-1' },
+    });
+  });
+
   it('matches the daemon copy of the protocol', () => {
     expect(phoneClient.sttStart()).toEqual(phoneDaemon.sttStart());
-    expect(phoneClient.sttStart('s', 't')).toEqual(phoneDaemon.sttStart('s', 't'));
     expect(phoneClient.sttAudioDone()).toEqual(phoneDaemon.sttAudioDone());
     expect(phoneClient.sttCancel()).toEqual(phoneDaemon.sttCancel());
     expect(phoneClient.replyCancel()).toEqual(phoneDaemon.replyCancel());
+    expect(
+      phoneClient.rendezvousJoin({
+        sessionId: 's',
+        delivery: { channel: 'discord', target: 'channel:t' },
+      }),
+    ).toEqual(
+      phoneDaemon.rendezvousJoin({
+        sessionId: 's',
+        delivery: { channel: 'discord', target: 'channel:t' },
+      }),
+    );
   });
 });
 
 describe('daemon → phone factories', () => {
   it('emits stable `t` tags + payloads', () => {
+    expect(daemonClient.rendezvousAccept('host-1:session-1')).toEqual({
+      t: 'rendezvous.accept',
+      roomId: 'host-1:session-1',
+    });
+    expect(daemonClient.rendezvousError('missing_session')).toEqual({
+      t: 'rendezvous.error',
+      message: 'missing_session',
+    });
     expect(daemonClient.sttReady()).toEqual({ t: 'stt.ready' });
     expect(daemonClient.sttPartial('he', false)).toEqual({
       t: 'stt.partial',
@@ -63,6 +89,8 @@ describe('daemon → phone factories', () => {
   });
 
   it('matches the daemon copy of the protocol', () => {
+    expect(daemonClient.rendezvousAccept('r')).toEqual(daemonDaemon.rendezvousAccept('r'));
+    expect(daemonClient.rendezvousError('m')).toEqual(daemonDaemon.rendezvousError('m'));
     expect(daemonClient.sttReady()).toEqual(daemonDaemon.sttReady());
     expect(daemonClient.sttPartial('x', true)).toEqual(daemonDaemon.sttPartial('x', true));
     expect(daemonClient.sttDone('y')).toEqual(daemonDaemon.sttDone('y'));
@@ -78,6 +106,8 @@ describe('daemon → phone factories', () => {
 
   it('round-trips through JSON', () => {
     const messages = [
+      daemonClient.rendezvousAccept('host:s1'),
+      daemonClient.rendezvousError('bad'),
       daemonClient.sttReady(),
       daemonClient.sttPartial('hello', false),
       daemonClient.sttDone('hello world'),

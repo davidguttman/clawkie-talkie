@@ -1,14 +1,26 @@
-// Wire protocol for the PeerJS DataConnection between the phone and
-// daemon. Mirror of `daemon/src/protocol.ts`; the protocol test pins the
-// two to the same serialized shape.
+// Wire protocol for the WebRTC DataChannel between the phone and
+// daemon. Mirror of `daemon/src/protocol.ts`; the protocol test pins
+// the two copies to the same serialized shape.
+//
+// Routing (sessionId, delivery channel/target) is bound once at
+// rendezvous when the per-session voice room is created. `stt.start`
+// no longer carries routing per turn.
+
+export interface DeliveryTarget {
+  channel: string;
+  target: string;
+}
 
 export type PhoneToDaemon =
-  | { t: 'stt.start'; sessionId?: string; threadId?: string }
+  | { t: 'rendezvous.join'; sessionId: string; delivery: DeliveryTarget }
+  | { t: 'stt.start' }
   | { t: 'stt.audio.done' }
   | { t: 'stt.cancel' }
   | { t: 'reply.cancel' };
 
 export type DaemonToPhone =
+  | { t: 'rendezvous.accept'; roomId: string }
+  | { t: 'rendezvous.error'; message: string }
   | { t: 'stt.ready' }
   | { t: 'stt.partial'; text: string; is_final: boolean }
   | { t: 'stt.done'; text: string }
@@ -22,17 +34,20 @@ export type DaemonToPhone =
   | { t: 'tts.error'; message: string };
 
 export const phoneToDaemon = {
-  sttStart: (sessionId?: string, threadId?: string): PhoneToDaemon => ({
-    t: 'stt.start',
-    ...(sessionId ? { sessionId } : {}),
-    ...(threadId ? { threadId } : {}),
+  rendezvousJoin: (input: { sessionId: string; delivery: DeliveryTarget }): PhoneToDaemon => ({
+    t: 'rendezvous.join',
+    sessionId: input.sessionId,
+    delivery: input.delivery,
   }),
+  sttStart: (): PhoneToDaemon => ({ t: 'stt.start' }),
   sttAudioDone: (): PhoneToDaemon => ({ t: 'stt.audio.done' }),
   sttCancel: (): PhoneToDaemon => ({ t: 'stt.cancel' }),
   replyCancel: (): PhoneToDaemon => ({ t: 'reply.cancel' }),
 };
 
 export const daemonToPhone = {
+  rendezvousAccept: (roomId: string): DaemonToPhone => ({ t: 'rendezvous.accept', roomId }),
+  rendezvousError: (message: string): DaemonToPhone => ({ t: 'rendezvous.error', message }),
   sttReady: (): DaemonToPhone => ({ t: 'stt.ready' }),
   sttPartial: (text: string, isFinal: boolean): DaemonToPhone => ({
     t: 'stt.partial',

@@ -151,7 +151,7 @@ export async function startDaemonSTT(opts: STTStartOptions): Promise<STTHandle> 
     throw err;
   }
 
-  opts.sendControl(phoneToDaemon.sttStart(opts.sessionId, opts.threadId));
+  opts.sendControl(phoneToDaemon.sttStart());
 
   try {
     await ready;
