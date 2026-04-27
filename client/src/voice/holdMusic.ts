@@ -16,14 +16,14 @@ const MUSIC_MIDRANGE_GAIN_DB = 6;
 const MUSIC_MIDRANGE_Q = 1.2;
 const MUSIC_WOBBLE_HZ = 0.13;
 const MUSIC_WOBBLE_DEPTH = 0.045;
-const NOISE_BANDPASS_HZ = 2000;
-const NOISE_BANDPASS_Q = 0.5;
 const NOISE_BUFFER_SECONDS = 2;
-const STATIC_LOW_CUT_HZ = 650;
-const STATIC_HIGH_CUT_HZ = 4600;
-const STATIC_CRACKLES_PER_SECOND = 11;
-const STATIC_FLUTTER_DEPTH = 0.26;
-const STATIC_GAIN = 0.56;
+const CRACKLES_PER_SECOND = 11;
+const CRACKLE_MIN_AMPLITUDE = 0.62;
+const CRACKLE_EXTRA_AMPLITUDE = 0.38;
+const BITCRUSHER_WORKLET_URL = '/audio/bitcrusher-processor.js';
+const BITCRUSHER_PROCESSOR_NAME = 'hold-music-bitcrusher';
+const BITCRUSHER_BITS = 8;
+const BITCRUSHER_NORM_FREQ = 0.15;
 
 let sharedAudioCtx: AudioContext | null = null;
 
@@ -31,6 +31,7 @@ interface HoldMusicSession {
   audio: HTMLAudioElement;
   source: MediaElementAudioSourceNode;
   musicHighpass: BiquadFilterNode;
+  musicBitcrusher: AudioNode;
   musicLowpass: BiquadFilterNode;
   musicMidPeak: BiquadFilterNode;
   musicSaturation: WaveShaperNode;
@@ -39,8 +40,11 @@ interface HoldMusicSession {
   musicWobbleOscillator: OscillatorNode;
   musicWobbleDepth: GainNode;
   musicGain: GainNode;
-  noiseSource: AudioBufferSourceNode;
-  noiseBandpass: BiquadFilterNode;
+  hissSource: AudioBufferSourceNode;
+  crackleSource: AudioBufferSourceNode;
+  noiseHighpass: BiquadFilterNode;
+  noiseLowpass: BiquadFilterNode;
+  noiseMidPeak: BiquadFilterNode;
   noiseGain: GainNode;
   started: boolean;
   stopped: boolean;
@@ -71,6 +75,7 @@ export class HoldMusicController {
 
       const source = audioCtx.createMediaElementSource(audio);
       const musicHighpass = audioCtx.createBiquadFilter();
+      const musicBitcrusher = audioCtx.createGain();
       const musicLowpass = audioCtx.createBiquadFilter();
       const musicMidPeak = audioCtx.createBiquadFilter();
       const musicSaturation = audioCtx.createWaveShaper();
@@ -79,9 +84,13 @@ export class HoldMusicController {
       const musicWobbleOscillator = audioCtx.createOscillator();
       const musicWobbleDepth = audioCtx.createGain();
       const musicGain = audioCtx.createGain();
-      const noiseSource = createNoiseSource(audioCtx);
-      const noiseBandpass = audioCtx.createBiquadFilter();
+      const hissSource = createHissSource(audioCtx);
+      const crackleSource = createCrackleSource(audioCtx);
+      const noiseHighpass = audioCtx.createBiquadFilter();
+      const noiseLowpass = audioCtx.createBiquadFilter();
+      const noiseMidPeak = audioCtx.createBiquadFilter();
       const noiseGain = audioCtx.createGain();
+      let session: HoldMusicSession;
 
       musicHighpass.type = 'highpass';
       musicHighpass.frequency.value = MUSIC_HIGHPASS_HZ;
@@ -111,13 +120,24 @@ export class HoldMusicController {
       musicWobbleDepth.gain.value = MUSIC_WOBBLE_DEPTH;
       musicGain.gain.value = MUSIC_GAIN;
 
-      noiseBandpass.type = 'bandpass';
-      noiseBandpass.frequency.value = NOISE_BANDPASS_HZ;
-      noiseBandpass.Q.value = NOISE_BANDPASS_Q;
+      noiseHighpass.type = 'highpass';
+      noiseHighpass.frequency.value = MUSIC_HIGHPASS_HZ;
+      noiseHighpass.Q.value = 0.8;
+
+      noiseLowpass.type = 'lowpass';
+      noiseLowpass.frequency.value = MUSIC_LOWPASS_HZ;
+      noiseLowpass.Q.value = 0.7;
+
+      noiseMidPeak.type = 'peaking';
+      noiseMidPeak.frequency.value = MUSIC_MIDRANGE_HZ;
+      noiseMidPeak.Q.value = MUSIC_MIDRANGE_Q;
+      noiseMidPeak.gain.value = MUSIC_MIDRANGE_GAIN_DB;
+
       noiseGain.gain.value = NOISE_GAIN;
 
       source.connect(musicHighpass);
-      musicHighpass.connect(musicLowpass);
+      musicHighpass.connect(musicBitcrusher);
+      musicBitcrusher.connect(musicLowpass);
       musicLowpass.connect(musicMidPeak);
       musicMidPeak.connect(musicSaturation);
       musicSaturation.connect(musicCompressor);
@@ -127,14 +147,30 @@ export class HoldMusicController {
       musicWobbleOscillator.connect(musicWobbleDepth);
       musicWobbleDepth.connect(musicWobble.gain);
 
-      noiseSource.connect(noiseBandpass);
-      noiseBandpass.connect(noiseGain);
+      hissSource.connect(noiseHighpass);
+      crackleSource.connect(noiseHighpass);
+      noiseHighpass.connect(noiseLowpass);
+      noiseLowpass.connect(noiseMidPeak);
+      noiseMidPeak.connect(noiseGain);
       noiseGain.connect(audioCtx.destination);
 
-      const session: HoldMusicSession = {
+      void installBitcrusherWorklet(
+        audioCtx,
+        musicHighpass,
+        musicBitcrusher,
+        musicLowpass,
+        () => this.session === session && !session.stopped,
+      ).then((workletNode) => {
+        if (workletNode && this.session === session && !session.stopped) {
+          session.musicBitcrusher = workletNode;
+        }
+      });
+
+      session = {
         audio,
         source,
         musicHighpass,
+        musicBitcrusher,
         musicLowpass,
         musicMidPeak,
         musicSaturation,
@@ -143,8 +179,11 @@ export class HoldMusicController {
         musicWobbleOscillator,
         musicWobbleDepth,
         musicGain,
-        noiseSource,
-        noiseBandpass,
+        hissSource,
+        crackleSource,
+        noiseHighpass,
+        noiseLowpass,
+        noiseMidPeak,
         noiseGain,
         started: false,
         stopped: false,
@@ -183,7 +222,13 @@ export class HoldMusicController {
     }
 
     try {
-      session.noiseSource.stop();
+      session.hissSource.stop();
+    } catch {
+      // already stopped or never started
+    }
+
+    try {
+      session.crackleSource.stop();
     } catch {
       // already stopped or never started
     }
@@ -197,6 +242,7 @@ export class HoldMusicController {
     for (const node of [
       session.source,
       session.musicHighpass,
+      session.musicBitcrusher,
       session.musicLowpass,
       session.musicMidPeak,
       session.musicSaturation,
@@ -205,8 +251,11 @@ export class HoldMusicController {
       session.musicWobbleOscillator,
       session.musicWobbleDepth,
       session.musicGain,
-      session.noiseSource,
-      session.noiseBandpass,
+      session.hissSource,
+      session.crackleSource,
+      session.noiseHighpass,
+      session.noiseLowpass,
+      session.noiseMidPeak,
       session.noiseGain,
     ]) {
       try {
@@ -224,7 +273,8 @@ export class HoldMusicController {
     session.started = true;
     session.audio.currentTime = pickRandomStartTime(session.audio.duration);
     session.musicWobbleOscillator.start(0);
-    session.noiseSource.start(0);
+    session.hissSource.start(0);
+    session.crackleSource.start(0);
     void session.audio.play().catch(() => {
       this.stop();
     });
@@ -301,7 +351,7 @@ export interface RadioStaticOptions {
   random?: () => number;
 }
 
-export function generateRadioStaticSamples({
+export function generateRadioHissSamples({
   sampleRate,
   durationSeconds = NOISE_BUFFER_SECONDS,
   random = Math.random,
@@ -309,35 +359,26 @@ export function generateRadioStaticSamples({
   const safeSampleRate = Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : 48000;
   const length = Math.max(1, Math.floor(safeSampleRate * Math.max(0.001, durationSeconds)));
   const samples = new Float32Array(length);
-  const lowCutCoeff = 1 - Math.exp((-2 * Math.PI * STATIC_LOW_CUT_HZ) / safeSampleRate);
-  const highCutCoeff = 1 - Math.exp((-2 * Math.PI * STATIC_HIGH_CUT_HZ) / safeSampleRate);
-  const crackleChance = STATIC_CRACKLES_PER_SECOND / safeSampleRate;
-  const flutterPhaseA = random() * Math.PI * 2;
-  const flutterPhaseB = random() * Math.PI * 2;
+  for (let i = 0; i < length; i += 1) {
+    samples[i] = random() * 2 - 1;
+  }
+  return samples;
+}
 
-  let lowCutState = 0;
-  let highCutState = 0;
-  let crackle = 0;
+export function generateRadioCrackleSamples({
+  sampleRate,
+  durationSeconds = NOISE_BUFFER_SECONDS,
+  random = Math.random,
+}: RadioStaticOptions): Float32Array {
+  const safeSampleRate = Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : 48000;
+  const length = Math.max(1, Math.floor(safeSampleRate * Math.max(0.001, durationSeconds)));
+  const samples = new Float32Array(length);
+  const crackleChance = CRACKLES_PER_SECOND / safeSampleRate;
 
   for (let i = 0; i < length; i += 1) {
-    const t = i / safeSampleRate;
-    const white = random() * 2 - 1;
-    lowCutState += lowCutCoeff * (white - lowCutState);
-    highCutState += highCutCoeff * (white - lowCutState - highCutState);
-
-    if (random() < crackleChance) {
-      const polarity = random() < 0.5 ? -1 : 1;
-      crackle += polarity * (0.42 + random() * 0.5);
-    }
-    crackle *= 0.82;
-
-    const flutter =
-      1 -
-      STATIC_FLUTTER_DEPTH * 0.5 +
-      Math.sin(t * Math.PI * 2 * 0.19 + flutterPhaseA) * STATIC_FLUTTER_DEPTH * 0.34 +
-      Math.sin(t * Math.PI * 2 * 0.071 + flutterPhaseB) * STATIC_FLUTTER_DEPTH * 0.16;
-    const sample = (highCutState * 0.82 + crackle * 0.18) * flutter * STATIC_GAIN;
-    samples[i] = clamp(sample, -0.92, 0.92);
+    if (random() >= crackleChance) continue;
+    const polarity = random() < 0.5 ? -1 : 1;
+    samples[i] = polarity * (CRACKLE_MIN_AMPLITUDE + random() * CRACKLE_EXTRA_AMPLITUDE);
   }
 
   return samples;
@@ -356,17 +397,53 @@ export function createGentleSaturationCurve(
   return curve;
 }
 
-function createNoiseSource(audioCtx: AudioContext): AudioBufferSourceNode {
+function createHissSource(audioCtx: AudioContext): AudioBufferSourceNode {
   const length = Math.max(1, Math.floor((audioCtx.sampleRate || 48000) * NOISE_BUFFER_SECONDS));
   const buffer = audioCtx.createBuffer(1, length, audioCtx.sampleRate || 48000);
   const samples = buffer.getChannelData(0);
-  samples.set(generateRadioStaticSamples({ sampleRate: audioCtx.sampleRate || 48000 }));
+  samples.set(generateRadioHissSamples({ sampleRate: audioCtx.sampleRate || 48000 }));
   const source = audioCtx.createBufferSource();
   source.buffer = buffer;
   source.loop = true;
   return source;
 }
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
+function createCrackleSource(audioCtx: AudioContext): AudioBufferSourceNode {
+  const length = Math.max(1, Math.floor((audioCtx.sampleRate || 48000) * NOISE_BUFFER_SECONDS));
+  const buffer = audioCtx.createBuffer(1, length, audioCtx.sampleRate || 48000);
+  const samples = buffer.getChannelData(0);
+  samples.set(generateRadioCrackleSamples({ sampleRate: audioCtx.sampleRate || 48000 }));
+  const source = audioCtx.createBufferSource();
+  source.buffer = buffer;
+  source.loop = true;
+  return source;
+}
+
+async function installBitcrusherWorklet(
+  audioCtx: AudioContext,
+  upstream: AudioNode,
+  fallback: AudioNode,
+  downstream: AudioNode,
+  shouldInstall: () => boolean,
+): Promise<AudioWorkletNode | null> {
+  if (!audioCtx.audioWorklet || typeof AudioWorkletNode === 'undefined') return null;
+
+  try {
+    await audioCtx.audioWorklet.addModule(BITCRUSHER_WORKLET_URL);
+    if (!shouldInstall()) return null;
+
+    const workletNode = new AudioWorkletNode(audioCtx, BITCRUSHER_PROCESSOR_NAME);
+    workletNode.parameters.get('bits')?.setValueAtTime(BITCRUSHER_BITS, audioCtx.currentTime);
+    workletNode.parameters
+      .get('normFreq')
+      ?.setValueAtTime(BITCRUSHER_NORM_FREQ, audioCtx.currentTime);
+
+    upstream.disconnect(fallback);
+    fallback.disconnect(downstream);
+    upstream.connect(workletNode);
+    workletNode.connect(downstream);
+    return workletNode;
+  } catch {
+    return null;
+  }
 }

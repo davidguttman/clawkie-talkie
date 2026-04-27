@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 class FakeAudioParam {
   value = 0;
+  setValueAtTime = vi.fn((value: number) => {
+    this.value = value;
+    return this;
+  });
 }
 
 class FakeAudioNode {
@@ -43,7 +47,7 @@ class FakeOscillatorNode extends FakeAudioNode {
 class FakeMediaElementSourceNode extends FakeAudioNode {}
 
 class FakeAudioBufferSourceNode extends FakeAudioNode {
-  buffer: AudioBuffer | null = null;
+  buffer: FakeAudioBuffer | null = null;
   loop = false;
   onended: (() => void) | null = null;
   start = vi.fn();
@@ -64,10 +68,13 @@ class FakeAudioBuffer {
 
 class FakeAudioContext {
   static instances: FakeAudioContext[] = [];
+  static audioWorkletAddModule: ReturnType<typeof vi.fn> | null = null;
 
   state: AudioContextState = 'suspended';
   sampleRate = 48000;
+  currentTime = 0;
   destination = {};
+  audioWorklet?: { addModule: ReturnType<typeof vi.fn> };
   mediaElementSources: FakeMediaElementSourceNode[] = [];
   biquads: FakeBiquadFilterNode[] = [];
   gains: FakeGainNode[] = [];
@@ -81,6 +88,9 @@ class FakeAudioContext {
   });
 
   constructor() {
+    if (FakeAudioContext.audioWorkletAddModule) {
+      this.audioWorklet = { addModule: FakeAudioContext.audioWorkletAddModule };
+    }
     FakeAudioContext.instances.push(this);
   }
 
@@ -131,6 +141,23 @@ class FakeAudioContext {
   }
 }
 
+class FakeAudioWorkletNode extends FakeAudioNode {
+  static instances: FakeAudioWorkletNode[] = [];
+
+  parameters = new Map([
+    ['bits', new FakeAudioParam()],
+    ['normFreq', new FakeAudioParam()],
+  ]);
+
+  constructor(
+    public context: AudioContext,
+    public name: string,
+  ) {
+    super();
+    FakeAudioWorkletNode.instances.push(this);
+  }
+}
+
 class FakeAudioElement {
   static instances: FakeAudioElement[] = [];
 
@@ -167,6 +194,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.resetModules();
   FakeAudioContext.instances = [];
+  FakeAudioContext.audioWorkletAddModule = null;
+  FakeAudioWorkletNode.instances = [];
   FakeAudioElement.instances = [];
 });
 
@@ -188,27 +217,28 @@ describe('hold music selection', () => {
 });
 
 describe('radio static generation', () => {
-  it('creates deterministic fluttering static with bounded crackles', async () => {
-    const { generateRadioStaticSamples } = await import('../client/src/voice/holdMusic');
-    const random = seededRandom(12345);
-    const samples = generateRadioStaticSamples({
+  it('creates separate dense hiss and sparse impulse crackle buffers', async () => {
+    const { generateRadioCrackleSamples, generateRadioHissSamples } = await import(
+      '../client/src/voice/holdMusic'
+    );
+    const hiss = generateRadioHissSamples({
       sampleRate: 8000,
       durationSeconds: 2,
-      random,
+      random: seededRandom(12345),
+    });
+    const crackle = generateRadioCrackleSamples({
+      sampleRate: 8000,
+      durationSeconds: 2,
+      random: seededRandom(12345),
     });
 
-    expect(samples).toHaveLength(16000);
-    expect(Math.max(...samples)).toBeLessThanOrEqual(0.92);
-    expect(Math.min(...samples)).toBeGreaterThanOrEqual(-0.92);
-    expect(countSamplesAbove(samples, 0.35)).toBeGreaterThan(0);
-
-    const windowRms = [
-      rms(samples.slice(0, 2000)),
-      rms(samples.slice(2000, 4000)),
-      rms(samples.slice(4000, 6000)),
-      rms(samples.slice(6000, 8000)),
-    ];
-    expect(Math.max(...windowRms) - Math.min(...windowRms)).toBeGreaterThan(0.01);
+    expect(hiss).toHaveLength(16000);
+    expect(crackle).toHaveLength(16000);
+    expect(hiss).not.toEqual(crackle);
+    expect(countSamplesAbove(hiss, 0)).toBeGreaterThan(15000);
+    expect(countSamplesAbove(crackle, 0)).toBeGreaterThan(0);
+    expect(countSamplesAbove(crackle, 0)).toBeLessThan(100);
+    expect(countSamplesAbove(crackle, 0.6)).toBe(countSamplesAbove(crackle, 0));
   });
 
   it('builds a symmetrical gentle saturation curve', async () => {
@@ -257,38 +287,104 @@ describe('HoldMusicController', () => {
     expect(ctx.waveShapers[0].curve).toBeInstanceOf(Float32Array);
     expect(ctx.waveShapers[0].oversample).toBe('2x');
     expect(ctx.compressors[0].threshold.value).toBe(-24);
-    expect(ctx.gains[0].gain.value).toBe(1);
-    expect(ctx.gains[1].gain.value).toBeCloseTo(0.045);
-    expect(ctx.gains[2].gain.value).toBeCloseTo(0.15);
+    expect(ctx.gains[1].gain.value).toBe(1);
+    expect(ctx.gains[2].gain.value).toBeCloseTo(0.045);
+    expect(ctx.gains[3].gain.value).toBeCloseTo(0.15);
     expect(ctx.oscillators[0].type).toBe('sine');
     expect(ctx.oscillators[0].frequency.value).toBeCloseTo(0.13);
-    expect(ctx.biquads[3].type).toBe('bandpass');
-    expect(ctx.biquads[3].frequency.value).toBe(2000);
-    expect(ctx.biquads[3].Q.value).toBe(0.5);
+    expect(ctx.biquads[3].type).toBe('highpass');
+    expect(ctx.biquads[3].frequency.value).toBe(320);
+    expect(ctx.biquads[4].type).toBe('lowpass');
+    expect(ctx.biquads[4].frequency.value).toBe(3600);
+    expect(ctx.biquads[5].type).toBe('peaking');
+    expect(ctx.biquads[5].frequency.value).toBe(1500);
+    expect(ctx.biquads[5].gain.value).toBe(6);
     expect(ctx.mediaElementSources[0].connect).toHaveBeenCalledWith(ctx.biquads[0]);
-    expect(ctx.biquads[0].connect).toHaveBeenCalledWith(ctx.biquads[1]);
+    expect(ctx.biquads[0].connect).toHaveBeenCalledWith(ctx.gains[0]);
+    expect(ctx.gains[0].connect).toHaveBeenCalledWith(ctx.biquads[1]);
     expect(ctx.biquads[1].connect).toHaveBeenCalledWith(ctx.biquads[2]);
     expect(ctx.biquads[2].connect).toHaveBeenCalledWith(ctx.waveShapers[0]);
     expect(ctx.waveShapers[0].connect).toHaveBeenCalledWith(ctx.compressors[0]);
-    expect(ctx.compressors[0].connect).toHaveBeenCalledWith(ctx.gains[0]);
-    expect(ctx.gains[0].connect).toHaveBeenCalledWith(ctx.gains[2]);
-    expect(ctx.gains[2].connect).toHaveBeenCalledWith(ctx.destination);
-    expect(ctx.oscillators[0].connect).toHaveBeenCalledWith(ctx.gains[1]);
-    expect(ctx.gains[1].connect).toHaveBeenCalledWith(ctx.gains[0].gain);
-    expect(ctx.bufferSources[0].connect).toHaveBeenCalledWith(ctx.biquads[3]);
-    expect(ctx.biquads[3].connect).toHaveBeenCalledWith(ctx.gains[3]);
-    expect(ctx.gains[3].gain.value).toBeCloseTo(0.035);
+    expect(ctx.compressors[0].connect).toHaveBeenCalledWith(ctx.gains[1]);
+    expect(ctx.gains[1].connect).toHaveBeenCalledWith(ctx.gains[3]);
     expect(ctx.gains[3].connect).toHaveBeenCalledWith(ctx.destination);
+    expect(ctx.oscillators[0].connect).toHaveBeenCalledWith(ctx.gains[2]);
+    expect(ctx.gains[2].connect).toHaveBeenCalledWith(ctx.gains[1].gain);
+    expect(ctx.bufferSources[0].connect).toHaveBeenCalledWith(ctx.biquads[3]);
+    expect(ctx.bufferSources[1].connect).toHaveBeenCalledWith(ctx.biquads[3]);
+    expect(ctx.biquads[3].connect).toHaveBeenCalledWith(ctx.biquads[4]);
+    expect(ctx.biquads[4].connect).toHaveBeenCalledWith(ctx.biquads[5]);
+    expect(ctx.biquads[5].connect).toHaveBeenCalledWith(ctx.gains[4]);
+    expect(ctx.gains[4].gain.value).toBeCloseTo(0.035);
+    expect(ctx.gains[4].connect).toHaveBeenCalledWith(ctx.destination);
+    expect(ctx.bufferSources[0].buffer).not.toBe(ctx.bufferSources[1].buffer);
+    expect(countSamplesAbove(ctx.bufferSources[0].buffer?.getChannelData(0) ?? new Float32Array(), 0))
+      .toBeGreaterThan(90000);
+    expect(countSamplesAbove(ctx.bufferSources[1].buffer?.getChannelData(0) ?? new Float32Array(), 0))
+      .toBeLessThan(200);
     expect(ctx.bufferSources[0].loop).toBe(true);
+    expect(ctx.bufferSources[1].loop).toBe(true);
     expect(ctx.oscillators[0].start).toHaveBeenCalledWith(0);
     expect(ctx.bufferSources[0].start).toHaveBeenCalledWith(0);
+    expect(ctx.bufferSources[1].start).toHaveBeenCalledWith(0);
 
     controller.stop();
 
     expect(audio.pause).toHaveBeenCalled();
     expect(ctx.bufferSources[0].stop).toHaveBeenCalled();
+    expect(ctx.bufferSources[1].stop).toHaveBeenCalled();
     expect(ctx.oscillators[0].stop).toHaveBeenCalled();
     expect(ctx.mediaElementSources[0].disconnect).toHaveBeenCalled();
+  });
+
+  it('loads the bitcrusher worklet and inserts it before the music lowpass when supported', async () => {
+    const addModule = vi.fn(() => Promise.resolve());
+    FakeAudioContext.audioWorkletAddModule = addModule;
+    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+    vi.stubGlobal('Audio', FakeAudioElement);
+    vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode);
+    const { HoldMusicController } = await import('../client/src/voice/holdMusic');
+
+    const controller = new HoldMusicController();
+    controller.start();
+    await flushPromises();
+
+    const ctx = FakeAudioContext.instances[0];
+    const worklet = FakeAudioWorkletNode.instances[0];
+    expect(addModule).toHaveBeenCalledWith('/audio/bitcrusher-processor.js');
+    expect(worklet.name).toBe('hold-music-bitcrusher');
+    expect(worklet.parameters.get('bits')?.value).toBe(8);
+    expect(worklet.parameters.get('normFreq')?.value).toBe(0.15);
+    expect(ctx.biquads[0].disconnect).toHaveBeenCalledWith(ctx.gains[0]);
+    expect(ctx.gains[0].disconnect).toHaveBeenCalledWith(ctx.biquads[1]);
+    expect(ctx.biquads[0].connect).toHaveBeenCalledWith(worklet);
+    expect(worklet.connect).toHaveBeenCalledWith(ctx.biquads[1]);
+
+    controller.stop();
+    expect(worklet.disconnect).toHaveBeenCalled();
+  });
+
+  it('keeps the fallback bitcrusher slot when the worklet fails to load', async () => {
+    const addModule = vi.fn(() => Promise.reject(new Error('no worklet')));
+    FakeAudioContext.audioWorkletAddModule = addModule;
+    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+    vi.stubGlobal('Audio', FakeAudioElement);
+    vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode);
+    const { HoldMusicController } = await import('../client/src/voice/holdMusic');
+
+    const controller = new HoldMusicController();
+    controller.start();
+    const ctx = FakeAudioContext.instances[0];
+    const audio = FakeAudioElement.instances[0];
+    audio.duration = 100;
+    audio.dispatch('loadedmetadata');
+    await flushPromises();
+
+    expect(addModule).toHaveBeenCalledWith('/audio/bitcrusher-processor.js');
+    expect(FakeAudioWorkletNode.instances).toHaveLength(0);
+    expect(ctx.biquads[0].connect).toHaveBeenCalledWith(ctx.gains[0]);
+    expect(ctx.gains[0].connect).toHaveBeenCalledWith(ctx.biquads[1]);
+    expect(audio.play).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -300,16 +396,16 @@ function seededRandom(seed: number): () => number {
   };
 }
 
-function rms(samples: Float32Array): number {
-  let total = 0;
-  for (const sample of samples) total += sample * sample;
-  return Math.sqrt(total / samples.length);
-}
-
 function countSamplesAbove(samples: Float32Array, threshold: number): number {
   let count = 0;
   for (const sample of samples) {
     if (Math.abs(sample) > threshold) count += 1;
   }
   return count;
+}
+
+async function flushPromises(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
 }
