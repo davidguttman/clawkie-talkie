@@ -27,11 +27,20 @@
 import { startMediaSessionKeeper } from './mediaSessionKeeper';
 
 const DEFAULT_SAMPLE_RATE = 24000;
+const VISUALIZER_FFT_SIZE = 512;
+const VISUALIZER_SMOOTHING = 0.72;
 
 let sharedAudioCtx: AudioContext | null = null;
 let sharedAudioElement: HTMLAudioElement | null = null;
 let attachedRemoteStream: MediaStream | null = null;
 let backgroundStaticState: { source: AudioBufferSourceNode; gain: GainNode } | null = null;
+let backgroundStaticAnalyser: AnalyserNode | null = null;
+let remoteStreamAnalyserState: {
+  stream: MediaStream;
+  source: MediaStreamAudioSourceNode;
+  analyser: AnalyserNode;
+  sink: GainNode;
+} | null = null;
 
 // Pink-shaped noise sits below the agent voice in the mix; this
 // multiplier is intentionally low and was halved from the previous
@@ -93,6 +102,7 @@ export interface TTSHandle {
   done: Promise<void>;
   stop(): void;
   readonly error?: string;
+  readonly analyser?: AnalyserNode | null;
 }
 
 export interface TTSPlayerOptions {
@@ -135,6 +145,7 @@ export function unlockDaemonTtsAudio(): Promise<void> {
 export function attachDaemonRemoteStream(stream: MediaStream): void {
   if (typeof document === 'undefined') return;
   attachedRemoteStream = stream;
+  attachRemoteStreamAnalyser(stream);
   const el = ensureRemoteAudioElement();
   if (!el) return;
   if (el.srcObject !== stream) {
@@ -155,11 +166,34 @@ export function attachDaemonRemoteStream(stream: MediaStream): void {
   void playRemoteAudioElement(el);
 }
 
+export function detachDaemonRemoteStream(stream?: MediaStream): void {
+  if (stream && attachedRemoteStream !== stream) return;
+  attachedRemoteStream = null;
+  if (sharedAudioElement) {
+    try {
+      sharedAudioElement.pause();
+      sharedAudioElement.srcObject = null;
+    } catch {
+      // best-effort
+    }
+  }
+  detachRemoteStreamAnalyser();
+}
+
 // True once a daemon stream has been attached AND playback has been
 // started (or attempted) on the audio element. The data-channel PCM
 // fallback consults this to know when to stay out of the way.
 export function isRemoteAudioActive(): boolean {
   return !!attachedRemoteStream && !!sharedAudioElement;
+}
+
+export function getActiveOutputAnalysers(): AnalyserNode[] {
+  const out: AnalyserNode[] = [];
+  if (backgroundStaticAnalyser) out.push(backgroundStaticAnalyser);
+  if (remoteStreamAnalyserState?.stream.getTracks().some((t) => t.readyState === 'live')) {
+    out.push(remoteStreamAnalyserState.analyser);
+  }
+  return out;
 }
 
 function ensureRemoteAudioElement(): HTMLAudioElement | null {
@@ -264,6 +298,7 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
     error: undefined as string | undefined,
     audioCtx: null as AudioContext | null,
     gain: null as GainNode | null,
+    analyser: null as AnalyserNode | null,
     sources: [] as AudioBufferSourceNode[],
     nextStartTime: 0,
     sampleRate: DEFAULT_SAMPLE_RATE,
@@ -288,6 +323,11 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
       }
     }
     state.sources = [];
+    try {
+      state.analyser?.disconnect();
+    } catch {
+      // already disconnected
+    }
     try {
       state.gain?.disconnect();
     } catch {
@@ -321,10 +361,13 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
       return;
     }
     const gain = audioCtx.createGain();
+    const analyser = createVisualizerAnalyser(audioCtx);
     gain.gain.value = 1;
-    gain.connect(audioCtx.destination);
+    gain.connect(analyser);
+    analyser.connect(audioCtx.destination);
     state.audioCtx = audioCtx;
     state.gain = gain;
+    state.analyser = analyser;
     void resumeAudioContext(audioCtx);
   };
 
@@ -371,6 +414,9 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
     },
     get error() {
       return state.error;
+    },
+    get analyser() {
+      return state.analyser;
     },
   };
 }
@@ -463,13 +509,17 @@ export function startBackgroundStatic(): void {
     source.buffer = buffer;
     (source as AudioBufferSourceNode & { loop: boolean }).loop = true;
     const gain = audioCtx.createGain();
+    const analyser = createVisualizerAnalyser(audioCtx);
     gain.gain.value = BACKGROUND_STATIC_GAIN;
     source.connect(gain);
-    gain.connect(audioCtx.destination);
+    gain.connect(analyser);
+    analyser.connect(audioCtx.destination);
     source.start(0);
     backgroundStaticState = { source, gain };
+    backgroundStaticAnalyser = analyser;
   } catch {
     backgroundStaticState = null;
+    backgroundStaticAnalyser = null;
   }
 }
 
@@ -492,6 +542,12 @@ export function stopBackgroundStatic(): void {
   } catch {
     // already disconnected
   }
+  try {
+    backgroundStaticAnalyser?.disconnect();
+  } catch {
+    // already disconnected
+  }
+  backgroundStaticAnalyser = null;
 }
 
 export function isBackgroundStaticActive(): boolean {
@@ -519,5 +575,53 @@ function playSilentUnlockPulse(audioCtx: AudioContext): void {
   } catch {
     // Unlock is best-effort; playDaemonTts will report audio_unsupported if
     // real playback setup fails later.
+  }
+}
+
+function createVisualizerAnalyser(audioCtx: AudioContext): AnalyserNode {
+  const analyser = audioCtx.createAnalyser();
+  analyser.fftSize = VISUALIZER_FFT_SIZE;
+  analyser.smoothingTimeConstant = VISUALIZER_SMOOTHING;
+  return analyser;
+}
+
+function attachRemoteStreamAnalyser(stream: MediaStream): void {
+  const audioCtx = getSharedAudioContext();
+  if (!audioCtx) return;
+  if (remoteStreamAnalyserState?.stream === stream) return;
+  detachRemoteStreamAnalyser();
+  try {
+    const source = audioCtx.createMediaStreamSource(stream);
+    const analyser = createVisualizerAnalyser(audioCtx);
+    const sink = audioCtx.createGain();
+    sink.gain.value = 0;
+    source.connect(analyser);
+    analyser.connect(sink);
+    sink.connect(audioCtx.destination);
+    remoteStreamAnalyserState = { stream, source, analyser, sink };
+    void resumeAudioContext(audioCtx);
+  } catch {
+    remoteStreamAnalyserState = null;
+  }
+}
+
+function detachRemoteStreamAnalyser(): void {
+  const state = remoteStreamAnalyserState;
+  remoteStreamAnalyserState = null;
+  if (!state) return;
+  try {
+    state.source.disconnect();
+  } catch {
+    // already disconnected
+  }
+  try {
+    state.analyser.disconnect();
+  } catch {
+    // already disconnected
+  }
+  try {
+    state.sink.disconnect();
+  } catch {
+    // already disconnected
   }
 }

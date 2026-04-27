@@ -21,6 +21,30 @@ class FakeGainNode {
   disconnect = vi.fn();
 }
 
+class FakeAnalyserNode {
+  fftSize = 2048;
+  smoothingTimeConstant = 0;
+  frequencyBinCount = 1024;
+  connect = vi.fn();
+  disconnect = vi.fn();
+  getByteFrequencyData = vi.fn((data: Uint8Array) => {
+    data.fill(0);
+  });
+}
+
+class FakeMediaStreamSource {
+  connect = vi.fn();
+  disconnect = vi.fn();
+}
+
+class FakeMediaStream {
+  private tracks: Array<{ readyState: 'live' | 'ended' }> = [{ readyState: 'live' }];
+
+  getTracks() {
+    return this.tracks;
+  }
+}
+
 class FakeOscillatorNode {
   type: OscillatorType = 'sine';
   frequency = new FakeAudioParam();
@@ -56,6 +80,8 @@ class FakeAudioContext {
   sources: FakeBufferSourceNode[] = [];
   oscillators: FakeOscillatorNode[] = [];
   gains: FakeGainNode[] = [];
+  analysers: FakeAnalyserNode[] = [];
+  mediaStreamSources: FakeMediaStreamSource[] = [];
 
   constructor() {
     FakeAudioContext.instances.push(this);
@@ -77,6 +103,18 @@ class FakeAudioContext {
     const gain = new FakeGainNode();
     this.gains.push(gain);
     return gain;
+  }
+
+  createAnalyser(): FakeAnalyserNode {
+    const analyser = new FakeAnalyserNode();
+    this.analysers.push(analyser);
+    return analyser;
+  }
+
+  createMediaStreamSource(): FakeMediaStreamSource {
+    const source = new FakeMediaStreamSource();
+    this.mediaStreamSources.push(source);
+    return source;
   }
 
   createBuffer(channels: number, length: number, sampleRate: number): FakeAudioBuffer {
@@ -293,5 +331,48 @@ describe('daemon TTS playback audio context', () => {
 
     expect(FakeAudioContext.instances).toHaveLength(1);
     expect(FakeAudioContext.instances[0].resumeCalls).toBe(1);
+  });
+
+  it('connects the remote stream analyser to a silent sink and disconnects it on detach', async () => {
+    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+    const audioEl = {
+      autoplay: false,
+      pause: vi.fn(),
+      play: vi.fn(() => Promise.resolve()),
+      setAttribute: vi.fn(),
+      srcObject: null as MediaStream | null,
+      style: {},
+    };
+    vi.stubGlobal('document', {
+      body: { appendChild: vi.fn() },
+      createElement: vi.fn(() => audioEl),
+    });
+    const { attachDaemonRemoteStream, detachDaemonRemoteStream, getActiveOutputAnalysers } =
+      await import('../client/src/voice/tts');
+    const stream = new FakeMediaStream() as unknown as MediaStream;
+
+    attachDaemonRemoteStream(stream);
+
+    expect(FakeAudioContext.instances).toHaveLength(1);
+    const ctx = FakeAudioContext.instances[0];
+    expect(ctx.mediaStreamSources).toHaveLength(1);
+    expect(ctx.analysers).toHaveLength(1);
+    const source = ctx.mediaStreamSources[0];
+    const analyser = ctx.analysers[0];
+    const sink = ctx.gains[0];
+    expect(source.connect).toHaveBeenCalledWith(analyser);
+    expect(analyser.connect).toHaveBeenCalledWith(sink);
+    expect(sink.gain.value).toBe(0);
+    expect(sink.connect).toHaveBeenCalledWith(ctx.destination);
+    expect(getActiveOutputAnalysers()).toEqual([analyser]);
+
+    detachDaemonRemoteStream(stream);
+
+    expect(source.disconnect).toHaveBeenCalled();
+    expect(analyser.disconnect).toHaveBeenCalled();
+    expect(sink.disconnect).toHaveBeenCalled();
+    expect(audioEl.pause).toHaveBeenCalled();
+    expect(audioEl.srcObject).toBeNull();
+    expect(getActiveOutputAnalysers()).toEqual([]);
   });
 });
