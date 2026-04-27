@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   _resetMediaSessionForTests,
+  getMediaSessionDebugSnapshot,
   getMediaSession,
   installMediaSessionControls,
   playbackStateFor,
@@ -19,6 +20,7 @@ class FakeMediaSession {
   setActionHandler = vi.fn((action: string, handler: (() => void) | null) => {
     this.handlers[action] = handler;
   });
+  setMicrophoneActive = vi.fn();
 }
 
 beforeEach(() => {
@@ -80,7 +82,7 @@ describe('installMediaSessionControls', () => {
     expect(onTrigger).not.toHaveBeenCalled();
   });
 
-  it('registers play/pause/stop handlers and publishes playbackState', () => {
+  it('registers play/pause/stop/togglemicrophone handlers and publishes playbackState', () => {
     const ms = new FakeMediaSession();
     vi.stubGlobal('navigator', { mediaSession: ms });
 
@@ -92,7 +94,25 @@ describe('installMediaSessionControls', () => {
     expect(ms.setActionHandler).toHaveBeenCalledWith('play', expect.any(Function));
     expect(ms.setActionHandler).toHaveBeenCalledWith('pause', expect.any(Function));
     expect(ms.setActionHandler).toHaveBeenCalledWith('stop', expect.any(Function));
+    expect(ms.setActionHandler).toHaveBeenCalledWith('togglemicrophone', expect.any(Function));
     expect(ms.playbackState).toBe('paused');
+    expect(getMediaSessionDebugSnapshot()).toMatchObject({
+      available: true,
+      playbackState: 'paused',
+      actionHandlers: {
+        play: 'registered',
+        pause: 'registered',
+        stop: 'registered',
+        togglemicrophone: 'registered',
+      },
+      microphone: {
+        available: true,
+        desiredActive: false,
+        lastSetActive: false,
+        status: 'set',
+        error: null,
+      },
+    });
   });
 
   it('reports playing while recording', () => {
@@ -105,6 +125,13 @@ describe('installMediaSessionControls', () => {
     });
 
     expect(ms.playbackState).toBe('playing');
+    expect(ms.setMicrophoneActive).toHaveBeenCalledWith(true);
+    expect(getMediaSessionDebugSnapshot().microphone).toMatchObject({
+      available: true,
+      desiredActive: true,
+      lastSetActive: true,
+      status: 'set',
+    });
   });
 
   it('routes a hardware play press to onTrigger when state allows', () => {
@@ -119,6 +146,35 @@ describe('installMediaSessionControls', () => {
     ms.handlers.play?.();
 
     expect(onTrigger).toHaveBeenCalledTimes(1);
+    expect(getMediaSessionDebugSnapshot().actions).toMatchObject({
+      count: 1,
+      last: {
+        action: 'play',
+        state: 'idle',
+        result: 'triggered_ptt',
+        triggeredPtt: true,
+      },
+    });
+  });
+
+  it('routes a microphone toggle to onTrigger when state allows', () => {
+    const ms = new FakeMediaSession();
+    vi.stubGlobal('navigator', { mediaSession: ms });
+    const onTrigger = vi.fn();
+
+    installMediaSessionControls({
+      state: 'recording' as DrivingState,
+      onTrigger,
+    });
+    ms.handlers.togglemicrophone?.();
+
+    expect(onTrigger).toHaveBeenCalledTimes(1);
+    expect(getMediaSessionDebugSnapshot().actions.last).toMatchObject({
+      action: 'togglemicrophone',
+      state: 'recording',
+      result: 'triggered_ptt',
+      triggeredPtt: true,
+    });
   });
 
   it('drops the action when state is thinking (no surprise mic restart)', () => {
@@ -133,8 +189,18 @@ describe('installMediaSessionControls', () => {
     ms.handlers.play?.();
     ms.handlers.pause?.();
     ms.handlers.stop?.();
+    ms.handlers.togglemicrophone?.();
 
     expect(onTrigger).not.toHaveBeenCalled();
+    expect(getMediaSessionDebugSnapshot().actions).toMatchObject({
+      count: 4,
+      last: {
+        action: 'togglemicrophone',
+        state: 'thinking',
+        result: 'ignored_due_state',
+        triggeredPtt: false,
+      },
+    });
   });
 
   it('cleanup removes handlers (sets them to null) and clears playbackState', () => {
@@ -150,7 +216,36 @@ describe('installMediaSessionControls', () => {
     expect(ms.handlers.play).toBeNull();
     expect(ms.handlers.pause).toBeNull();
     expect(ms.handlers.stop).toBeNull();
+    expect(ms.handlers.togglemicrophone).toBeNull();
     expect(ms.playbackState).toBe('none');
+    expect(ms.setMicrophoneActive).toHaveBeenLastCalledWith(false);
+    expect(getMediaSessionDebugSnapshot().actionHandlers).toEqual({
+      play: 'cleared',
+      pause: 'cleared',
+      stop: 'cleared',
+      togglemicrophone: 'cleared',
+    });
+  });
+
+  it('surfaces setMicrophoneActive errors in the debug snapshot', () => {
+    const ms = new FakeMediaSession();
+    ms.setMicrophoneActive = vi.fn(() => {
+      throw new Error('mic unavailable');
+    });
+    vi.stubGlobal('navigator', { mediaSession: ms });
+
+    installMediaSessionControls({
+      state: 'recording' as DrivingState,
+      onTrigger: () => {},
+    });
+
+    expect(getMediaSessionDebugSnapshot().microphone).toMatchObject({
+      available: true,
+      desiredActive: true,
+      lastSetActive: null,
+      status: 'error',
+      error: 'mic unavailable',
+    });
   });
 
   it('keeps going when one setActionHandler call throws (e.g. unsupported action)', () => {

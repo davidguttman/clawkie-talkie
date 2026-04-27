@@ -1,5 +1,4 @@
-// Design tokens ported from docs/design/hifi-tokens.js.
-// Dark OLED-first. Accent switchable.
+// Dark OLED-first runtime tokens. Accent switchable.
 
 export type AccentKey = 'amber' | 'red' | 'cyan' | 'green' | 'magenta';
 

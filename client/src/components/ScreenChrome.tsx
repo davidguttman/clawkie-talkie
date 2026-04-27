@@ -1,8 +1,6 @@
 import type { ReactNode } from 'react';
 import { HIFI } from '../tokens';
 
-// Ported from docs/design/hifi-screens.jsx: shared phone-viewport chrome.
-
 export function ScreenHeader({
   title,
   right,
@@ -103,31 +101,6 @@ export function ScrollBody({
       }}
     >
       {children}
-    </div>
-  );
-}
-
-export function DisabledRibbon({ label = 'PREVIEW — NOT LIVE IN V1' }: { label?: string }) {
-  return (
-    <div
-      style={{
-        padding: '9px 14px',
-        margin: '10px 14px 0',
-        borderRadius: 10,
-        border: `1px dashed ${HIFI.strokeStrong}`,
-        background: HIFI.surface,
-        fontFamily: HIFI.fonts.mono,
-        fontSize: 10,
-        letterSpacing: 1.1,
-        fontWeight: 700,
-        color: HIFI.ink2,
-        textAlign: 'center',
-        whiteSpace: 'nowrap',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-      }}
-    >
-      {label}
     </div>
   );
 }

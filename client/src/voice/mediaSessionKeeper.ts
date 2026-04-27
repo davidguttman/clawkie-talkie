@@ -31,6 +31,93 @@ let cachedSilentWavDataUrl: string | null = null;
 const SILENT_WAV_DURATION_SECONDS = 0.5;
 const SILENT_WAV_SAMPLE_RATE = 8000;
 
+export interface AudioElementDebugSnapshot {
+  present: boolean;
+  paused: boolean | null;
+  currentTime: number | null;
+  readyState: number | null;
+  src: string | null;
+  events: {
+    playCount: number;
+    pauseCount: number;
+    last: {
+      type: 'play' | 'pause';
+      timestampMs: number;
+      ageMs: number;
+    } | null;
+  };
+}
+
+let keeperEventDebug: {
+  playCount: number;
+  pauseCount: number;
+  last: { type: 'play' | 'pause'; timestampMs: number } | null;
+} = {
+  playCount: 0,
+  pauseCount: 0,
+  last: null,
+};
+
+function snapshotAudioElement(el: HTMLAudioElement | null): AudioElementDebugSnapshot {
+  const now = Date.now();
+  return {
+    present: !!el,
+    paused: el ? el.paused : null,
+    currentTime: el ? el.currentTime : null,
+    readyState: el ? el.readyState : null,
+    src: el ? el.currentSrc || el.src || null : null,
+    events: {
+      playCount: keeperEventDebug.playCount,
+      pauseCount: keeperEventDebug.pauseCount,
+      last: keeperEventDebug.last
+        ? {
+            ...keeperEventDebug.last,
+            ageMs: Math.max(0, now - keeperEventDebug.last.timestampMs),
+          }
+        : null,
+    },
+  };
+}
+
+export function getMediaSessionKeeperDebugSnapshot(): AudioElementDebugSnapshot {
+  return snapshotAudioElement(keeperEl);
+}
+
+export function attachMediaSessionKeeperDebugHost(host: HTMLElement): () => void {
+  const el = keeperEl;
+  if (!el) return () => {};
+
+  const previousParent = el.parentNode;
+  const previousNextSibling = el.nextSibling;
+  const previousCssText = el.style.cssText;
+  const previousControls = el.controls;
+  const previousAriaHidden = el.getAttribute('aria-hidden');
+
+  el.controls = true;
+  el.setAttribute('aria-hidden', 'false');
+  el.style.position = 'static';
+  el.style.width = '100%';
+  el.style.height = '32px';
+  el.style.opacity = '1';
+  el.style.pointerEvents = 'auto';
+  el.style.display = 'block';
+  host.appendChild(el);
+
+  return () => {
+    if (keeperEl !== el) return;
+    el.controls = previousControls;
+    if (previousAriaHidden === null) el.removeAttribute('aria-hidden');
+    else el.setAttribute('aria-hidden', previousAriaHidden);
+    el.style.cssText = previousCssText;
+    try {
+      if (previousParent) previousParent.insertBefore(el, previousNextSibling);
+      else if (typeof document !== 'undefined') document.body.appendChild(el);
+    } catch {
+      if (typeof document !== 'undefined') document.body.appendChild(el);
+    }
+  };
+}
+
 // Build a 0.5 s mono PCM16 8 kHz WAV of all-zero samples and base64
 // encode it as a data URL. Cached at module scope so we only do the
 // (small) build once. Exported for tests.
@@ -94,6 +181,17 @@ function pokePlay(el: HTMLAudioElement): Promise<void> {
   return Promise.resolve();
 }
 
+function recordKeeperEvent(type: 'play' | 'pause'): void {
+  if (type === 'play') keeperEventDebug.playCount += 1;
+  else keeperEventDebug.pauseCount += 1;
+  keeperEventDebug.last = { type, timestampMs: Date.now() };
+}
+
+function attachKeeperEventDebug(el: HTMLAudioElement): void {
+  el.addEventListener('play', () => recordKeeperEvent('play'));
+  el.addEventListener('pause', () => recordKeeperEvent('pause'));
+}
+
 // Idempotent. Safe to call from every PTT tap; the second+ call just
 // re-pokes play() (browsers can auto-pause silent media in the
 // background, and a re-poke from a fresh gesture re-establishes it).
@@ -123,6 +221,7 @@ export function startMediaSessionKeeper(): void {
     el.muted = false;
     el.setAttribute('playsinline', 'true');
     el.setAttribute('aria-hidden', 'true');
+    attachKeeperEventDebug(el);
     el.style.position = 'absolute';
     el.style.width = '0';
     el.style.height = '0';
@@ -166,4 +265,9 @@ export function isMediaSessionKeeperActive(): boolean {
 export function _resetMediaSessionKeeperForTests(): void {
   keeperEl = null;
   cachedSilentWavDataUrl = null;
+  keeperEventDebug = {
+    playCount: 0,
+    pauseCount: 0,
+    last: null,
+  };
 }

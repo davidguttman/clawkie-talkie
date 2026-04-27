@@ -1,8 +1,9 @@
 // Hardware / lock-screen media controls (AirPods play-pause, Bluetooth
 // headset buttons, the iOS lock-screen and Android notification
 // transport, etc.) reach the page via the `navigator.mediaSession`
-// API. The same handler fires for play, pause, and stop, so we map all
-// three to the existing PTT tap so a single AirPods pinch toggles
+// API. The same handler fires for play, pause, stop, and on newer
+// browsers microphone toggles, so we map all supported actions to the
+// existing PTT tap so a single AirPods pinch toggles
 // recording the same way tapping the on-screen button does.
 //
 // Mapping (matches DrivingState semantics):
@@ -22,17 +23,78 @@
 // naturally: paused while idle, playing while recording / thinking /
 // ai. Some platforms use the state to decide whether the next press
 // fires `play` vs `pause`; we register a handler for both either way.
+// iOS can also classify the page as a microphone media session while
+// recording, so we register `togglemicrophone` and publish
+// `setMicrophoneActive()` when available.
 
 import { useEffect } from 'react';
 import type { DrivingState } from './drivingReducer';
 
-const HANDLED_ACTIONS = ['play', 'pause', 'stop'] as const;
+const HANDLED_ACTIONS = ['play', 'pause', 'stop', 'togglemicrophone'] as const;
 type HandledAction = (typeof HANDLED_ACTIONS)[number];
+type ActionHandlerDebugStatus = 'unknown' | 'registered' | 'cleared' | 'error';
+type MicrophoneActiveStatus = 'unknown' | 'unavailable' | 'set' | 'error';
+type MediaActionResult = 'triggered_ptt' | 'ignored_due_state';
+
+let actionHandlerDebugStatus: Record<HandledAction, ActionHandlerDebugStatus> = {
+  play: 'unknown',
+  pause: 'unknown',
+  stop: 'unknown',
+  togglemicrophone: 'unknown',
+};
+let lastActionDebug: {
+  action: HandledAction;
+  count: number;
+  timestampMs: number;
+  state: DrivingState;
+  result: MediaActionResult;
+} | null = null;
+let mediaActionCount = 0;
+let microphoneDebug: {
+  available: boolean;
+  desiredActive: boolean | null;
+  lastSetActive: boolean | null;
+  status: MicrophoneActiveStatus;
+  error: string | null;
+} = {
+  available: false,
+  desiredActive: null,
+  lastSetActive: null,
+  status: 'unknown',
+  error: null,
+};
 
 export interface MediaSessionLike {
   setActionHandler(action: string, handler: (() => void) | null): void;
+  setMicrophoneActive?: (active: boolean) => void;
   playbackState?: 'none' | 'paused' | 'playing';
   metadata?: unknown;
+}
+
+export interface MediaSessionDebugSnapshot {
+  available: boolean;
+  playbackState: 'none' | 'paused' | 'playing' | 'unknown';
+  metadataInstalled: boolean;
+  actionHandlers: Record<HandledAction, ActionHandlerDebugStatus>;
+  microphone: {
+    available: boolean;
+    desiredActive: boolean | null;
+    lastSetActive: boolean | null;
+    status: MicrophoneActiveStatus;
+    error: string | null;
+  };
+  actions: {
+    count: number;
+    last: {
+      action: HandledAction;
+      count: number;
+      timestampMs: number;
+      ageMs: number;
+      state: DrivingState;
+      result: MediaActionResult;
+      triggeredPtt: boolean;
+    } | null;
+  };
 }
 
 // Pure decision: what should a hardware media-control press do given
@@ -62,6 +124,35 @@ export function getMediaSession(): MediaSessionLike | null {
   return ms;
 }
 
+export function getMediaSessionDebugSnapshot(): MediaSessionDebugSnapshot {
+  const ms = getMediaSession();
+  const playbackState = ms?.playbackState;
+  const now = Date.now();
+  return {
+    available: !!ms,
+    playbackState:
+      playbackState === 'none' || playbackState === 'paused' || playbackState === 'playing'
+        ? playbackState
+        : 'unknown',
+    metadataInstalled,
+    actionHandlers: { ...actionHandlerDebugStatus },
+    microphone: {
+      ...microphoneDebug,
+      available: !!ms && typeof ms.setMicrophoneActive === 'function',
+    },
+    actions: {
+      count: mediaActionCount,
+      last: lastActionDebug
+        ? {
+            ...lastActionDebug,
+            ageMs: Math.max(0, now - lastActionDebug.timestampMs),
+            triggeredPtt: lastActionDebug.result === 'triggered_ptt',
+          }
+        : null,
+    },
+  };
+}
+
 // Optional metadata. Set lazily and only once per page; we don't
 // change it across turns so iOS doesn't flicker the now-playing card.
 let metadataInstalled = false;
@@ -84,6 +175,21 @@ function ensureMetadata(ms: MediaSessionLike): void {
 // modules start clean.
 export function _resetMediaSessionForTests(): void {
   metadataInstalled = false;
+  actionHandlerDebugStatus = {
+    play: 'unknown',
+    pause: 'unknown',
+    stop: 'unknown',
+    togglemicrophone: 'unknown',
+  };
+  lastActionDebug = null;
+  mediaActionCount = 0;
+  microphoneDebug = {
+    available: false,
+    desiredActive: null,
+    lastSetActive: null,
+    status: 'unknown',
+    error: null,
+  };
 }
 
 // Install handlers + publish playbackState. Returns a cleanup that
@@ -99,14 +205,18 @@ export function installMediaSessionControls(opts: {
 
   ensureMetadata(ms);
 
-  const handler = () => {
-    if (shouldStartOrStopOnMediaControl(opts.state)) opts.onTrigger();
-  };
+  publishMicrophoneActive(ms, opts.state === 'recording');
 
   for (const action of HANDLED_ACTIONS) {
     try {
-      ms.setActionHandler(action, handler);
+      ms.setActionHandler(action, () => {
+        const shouldTrigger = shouldStartOrStopOnMediaControl(opts.state);
+        recordMediaAction(action, opts.state, shouldTrigger);
+        if (shouldTrigger) opts.onTrigger();
+      });
+      actionHandlerDebugStatus[action] = 'registered';
     } catch {
+      actionHandlerDebugStatus[action] = 'error';
       // Some browsers throw on unsupported actions even when the API
       // is otherwise present. Skip those and keep going.
     }
@@ -122,7 +232,9 @@ export function installMediaSessionControls(opts: {
     for (const action of HANDLED_ACTIONS) {
       try {
         ms.setActionHandler(action, null);
+        actionHandlerDebugStatus[action] = 'cleared';
       } catch {
+        actionHandlerDebugStatus[action] = 'error';
         // ignore
       }
     }
@@ -131,7 +243,42 @@ export function installMediaSessionControls(opts: {
     } catch {
       // ignore
     }
+    publishMicrophoneActive(ms, false);
   };
+}
+
+function recordMediaAction(
+  action: HandledAction,
+  state: DrivingState,
+  shouldTrigger: boolean,
+): void {
+  mediaActionCount += 1;
+  lastActionDebug = {
+    action,
+    count: mediaActionCount,
+    timestampMs: Date.now(),
+    state,
+    result: shouldTrigger ? 'triggered_ptt' : 'ignored_due_state',
+  };
+}
+
+function publishMicrophoneActive(ms: MediaSessionLike, active: boolean): void {
+  microphoneDebug.available = typeof ms.setMicrophoneActive === 'function';
+  microphoneDebug.desiredActive = active;
+  if (!microphoneDebug.available || !ms.setMicrophoneActive) {
+    microphoneDebug.status = 'unavailable';
+    microphoneDebug.error = null;
+    return;
+  }
+  try {
+    ms.setMicrophoneActive(active);
+    microphoneDebug.lastSetActive = active;
+    microphoneDebug.status = 'set';
+    microphoneDebug.error = null;
+  } catch (err) {
+    microphoneDebug.status = 'error';
+    microphoneDebug.error = err instanceof Error ? err.message : String(err);
+  }
 }
 
 // React hook wrapping installMediaSessionControls. Re-installs on

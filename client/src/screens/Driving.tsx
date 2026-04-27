@@ -2,16 +2,25 @@ import { useEffect, useRef, useState } from 'react';
 import { HIFI, type AccentKey } from '../tokens';
 import { ButtonAura, LiveWave } from '../components/Phone';
 import { useDrivingLoop, type DrivingState } from '../voice/drivingLoop';
-import { useMediaSessionControls } from '../voice/mediaSession';
-import { stopMediaSessionKeeper } from '../voice/mediaSessionKeeper';
-import { playPttPressTone, unlockDaemonTtsAudio } from '../voice/tts';
+import { getMediaSessionDebugSnapshot, useMediaSessionControls } from '../voice/mediaSession';
+import {
+  attachMediaSessionKeeperDebugHost,
+  getMediaSessionKeeperDebugSnapshot,
+  startMediaSessionKeeper,
+  stopMediaSessionKeeper,
+} from '../voice/mediaSessionKeeper';
+import {
+  getRemoteTtsAudioDebugSnapshot,
+  playPttPressTone,
+  unlockDaemonTtsAudio,
+} from '../voice/tts';
 import { useRtc } from '../rtc/RtcContext';
 import type { Settings } from '../storage';
 
-// Visual layout ported from docs/design/hifi-driving.jsx, driven by the
-// daemon-owned state machine in ../voice/drivingLoop.ts. The phone only
-// captures mic PCM and plays daemon-streamed TTS audio; STT, reply
-// generation, and TTS all terminate on the daemon side.
+// Runtime driving surface driven by the daemon-owned state machine in
+// ../voice/drivingLoop.ts. The phone only captures mic PCM and plays
+// daemon-streamed TTS audio; STT, reply generation, and TTS all terminate
+// on the daemon side.
 
 export function DrivingScreen({
   accent = 'amber',
@@ -37,6 +46,7 @@ export function DrivingScreen({
   threadId?: string;
 }) {
   const accentCfg = HIFI.accents[accent] || HIFI.accents.amber;
+  const debugMode = useDebugMode();
 
   const rtc = useRtc();
 
@@ -149,7 +159,9 @@ export function DrivingScreen({
         // room above and below regardless of transcript length. Rows are
         // fr-based, not content-based, which is why streaming text in the
         // bounded caption cannot push the button around.
-        gridTemplateRows: `auto minmax(0, 1fr) auto minmax(0, 1.2fr) auto`,
+        gridTemplateRows: debugMode
+          ? `auto minmax(0, 0.9fr) auto minmax(0, 1fr) auto auto`
+          : `auto minmax(0, 1fr) auto minmax(0, 1.2fr) auto`,
         rowGap,
         padding: compact ? `8px ${sidePad}px 10px` : `12px ${sidePad}px 14px`,
         color: HIFI.ink,
@@ -316,6 +328,15 @@ export function DrivingScreen({
         />
       </div>
 
+      {debugMode && (
+        <MediaSessionDebugPanel
+          baseFont={baseFont}
+          compact={compact}
+          state={state}
+          rtcStatus={rtc.status}
+        />
+      )}
+
       {/* footer — REPLAY and HISTORY side-by-side. Settings (compact) is
           intentionally not duplicated here; gear lives in header on desktop. */}
       <div
@@ -331,6 +352,291 @@ export function DrivingScreen({
       </div>
     </div>
   );
+}
+
+function useDebugMode(): boolean {
+  const [enabled] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return new URLSearchParams(window.location.search).get('debug') === 'true';
+  });
+  return enabled;
+}
+
+interface DebugSnapshot {
+  mediaSession: ReturnType<typeof getMediaSessionDebugSnapshot>;
+  keeper: ReturnType<typeof getMediaSessionKeeperDebugSnapshot>;
+  remoteTts: ReturnType<typeof getRemoteTtsAudioDebugSnapshot>;
+}
+
+function readDebugSnapshot(): DebugSnapshot {
+  return {
+    mediaSession: getMediaSessionDebugSnapshot(),
+    keeper: getMediaSessionKeeperDebugSnapshot(),
+    remoteTts: getRemoteTtsAudioDebugSnapshot(),
+  };
+}
+
+function MediaSessionDebugPanel({
+  baseFont,
+  compact,
+  state,
+  rtcStatus,
+}: {
+  baseFont: string;
+  compact: boolean;
+  state: DrivingState;
+  rtcStatus: string;
+}) {
+  const audioHostRef = useRef<HTMLDivElement | null>(null);
+  const [snapshot, setSnapshot] = useState<DebugSnapshot>(() => readDebugSnapshot());
+
+  useEffect(() => {
+    startMediaSessionKeeper();
+
+    let detachKeeperControls: (() => void) | null = null;
+    const sync = () => {
+      const host = audioHostRef.current;
+      if (host && !host.querySelector('audio') && getMediaSessionKeeperDebugSnapshot().present) {
+        detachKeeperControls?.();
+        detachKeeperControls = attachMediaSessionKeeperDebugHost(host);
+      }
+      setSnapshot(readDebugSnapshot());
+    };
+
+    sync();
+    const timer = window.setInterval(sync, 500);
+    return () => {
+      window.clearInterval(timer);
+      detachKeeperControls?.();
+    };
+  }, []);
+
+  const mediaSessionRows = [
+    ['mediaSession', snapshot.mediaSession.available ? 'available' : 'missing'],
+    ['playbackState', snapshot.mediaSession.playbackState],
+    ['handlers', formatActionHandlers(snapshot.mediaSession.actionHandlers)],
+    ['micControl', formatMicrophoneDebug(snapshot.mediaSession.microphone)],
+    ['actions', `${snapshot.mediaSession.actions.count}`],
+    ['lastAction', formatLastMediaAction(snapshot.mediaSession.actions.last)],
+    ['metadata', snapshot.mediaSession.metadataInstalled ? 'installed' : 'not installed'],
+    ['drivingState', state],
+    ['rtc', rtcStatus],
+  ];
+  const keeperRows = [
+    ['present', boolLabel(snapshot.keeper.present)],
+    ['paused', nullableBoolLabel(snapshot.keeper.paused)],
+    ['currentTime', formatNumber(snapshot.keeper.currentTime)],
+    ['readyState', formatNullable(snapshot.keeper.readyState)],
+    ['events', `play=${snapshot.keeper.events.playCount} pause=${snapshot.keeper.events.pauseCount}`],
+    ['lastEvent', formatLastKeeperEvent(snapshot.keeper.events.last)],
+    ['src', formatSrc(snapshot.keeper.src)],
+  ];
+  const remoteRows = [
+    ['present', boolLabel(snapshot.remoteTts.present)],
+    ['paused', nullableBoolLabel(snapshot.remoteTts.paused)],
+    ['currentTime', formatNumber(snapshot.remoteTts.currentTime)],
+    ['readyState', formatNullable(snapshot.remoteTts.readyState)],
+    ['srcObject', formatRemoteSrcObject(snapshot.remoteTts.srcObject)],
+    ['src', formatSrc(snapshot.remoteTts.src)],
+  ];
+
+  return (
+    <section
+      style={{
+        minWidth: 0,
+        maxWidth: '100%',
+        borderTop: `1px solid ${HIFI.stroke}`,
+        paddingTop: compact ? 7 : 9,
+        overflow: 'hidden',
+        color: HIFI.ink2,
+      }}
+      aria-label="Media session debug"
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+          marginBottom: 6,
+          fontFamily: HIFI.fonts.mono,
+          fontSize: 10,
+          fontWeight: 700,
+          letterSpacing: 1.2,
+          color: HIFI.ink,
+        }}
+      >
+        <span>MEDIA DEBUG</span>
+        <span style={{ color: snapshot.keeper.present ? HIFI.ai : '#ef6155' }}>
+          KEEPER {snapshot.keeper.present ? 'READY' : 'MISSING'}
+        </span>
+      </div>
+
+      <div
+        ref={audioHostRef}
+        style={{
+          minHeight: 36,
+          display: 'flex',
+          alignItems: 'center',
+          marginBottom: 7,
+          borderRadius: 8,
+          border: `1px solid ${HIFI.stroke}`,
+          background: 'rgba(255,255,255,0.04)',
+          padding: 4,
+        }}
+      >
+        {!snapshot.keeper.present && (
+          <div
+            style={{
+              width: '100%',
+              fontFamily: HIFI.fonts.mono,
+              fontSize: 10,
+              color: HIFI.ink3,
+              textAlign: 'center',
+            }}
+          >
+            keeper audio element not created
+          </div>
+        )}
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: compact ? '1fr' : '1fr 1fr 1fr',
+          gap: compact ? 5 : 8,
+          maxHeight: compact ? 118 : 132,
+          overflowY: 'auto',
+          paddingRight: 4,
+          fontFamily: baseFont,
+        }}
+      >
+        <DebugGroup title="mediaSession" rows={mediaSessionRows} />
+        <DebugGroup title="keeperAudio" rows={keeperRows} />
+        <DebugGroup title="remoteTtsAudio" rows={remoteRows} />
+      </div>
+    </section>
+  );
+}
+
+function DebugGroup({ title, rows }: { title: string; rows: string[][] }) {
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div
+        style={{
+          fontFamily: HIFI.fonts.mono,
+          fontSize: 9,
+          fontWeight: 700,
+          letterSpacing: 1,
+          color: HIFI.ink3,
+          marginBottom: 3,
+        }}
+      >
+        {title}
+      </div>
+      {rows.map(([label, value]) => (
+        <div
+          key={label}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '82px minmax(0, 1fr)',
+            gap: 6,
+            minWidth: 0,
+            fontSize: 10,
+            lineHeight: 1.35,
+            marginBottom: 2,
+          }}
+        >
+          <span style={{ color: HIFI.ink4, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {label}
+          </span>
+          <span
+            style={{
+              color: HIFI.ink2,
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+            title={value}
+          >
+            {value}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function boolLabel(value: boolean): string {
+  return value ? 'true' : 'false';
+}
+
+function nullableBoolLabel(value: boolean | null): string {
+  return value === null ? 'n/a' : boolLabel(value);
+}
+
+function formatNullable(value: string | number | null): string {
+  return value === null ? 'n/a' : String(value);
+}
+
+function formatNumber(value: number | null): string {
+  return value === null ? 'n/a' : value.toFixed(2);
+}
+
+function formatSrc(src: string | null): string {
+  if (!src) return 'none';
+  if (src.length <= 58) return src;
+  return `${src.slice(0, 46)}... (${src.length} chars)`;
+}
+
+function formatActionHandlers(
+  handlers: ReturnType<typeof getMediaSessionDebugSnapshot>['actionHandlers'],
+): string {
+  return Object.entries(handlers)
+    .map(([action, status]) => `${action}:${status}`)
+    .join(' ');
+}
+
+function formatMicrophoneDebug(
+  microphone: ReturnType<typeof getMediaSessionDebugSnapshot>['microphone'],
+): string {
+  const availability = microphone.available ? 'available' : 'missing';
+  const desired = microphone.desiredActive === null ? 'n/a' : boolLabel(microphone.desiredActive);
+  const last = microphone.lastSetActive === null ? 'n/a' : boolLabel(microphone.lastSetActive);
+  const error = microphone.error ? ` error=${microphone.error}` : '';
+  return `${availability} status=${microphone.status} desired=${desired} last=${last}${error}`;
+}
+
+function formatLastMediaAction(
+  action: ReturnType<typeof getMediaSessionDebugSnapshot>['actions']['last'],
+): string {
+  if (!action) return 'none';
+  return `${action.action} #${action.count} ${action.result} state=${action.state} ${formatAge(
+    action.ageMs,
+  )} ago`;
+}
+
+function formatLastKeeperEvent(
+  event: ReturnType<typeof getMediaSessionKeeperDebugSnapshot>['events']['last'],
+): string {
+  if (!event) return 'none';
+  return `${event.type} ${formatAge(event.ageMs)} ago`;
+}
+
+function formatAge(ageMs: number): string {
+  if (ageMs < 1000) return `${Math.round(ageMs)}ms`;
+  return `${(ageMs / 1000).toFixed(1)}s`;
+}
+
+function formatRemoteSrcObject(
+  srcObject: ReturnType<typeof getRemoteTtsAudioDebugSnapshot>['srcObject'],
+): string {
+  if (!srcObject) return 'none';
+  const tracks = srcObject.audioTrackStates.length ? ` ${srcObject.audioTrackStates.join(',')}` : '';
+  return `${srcObject.type} audio=${srcObject.audioTrackCount ?? 'n/a'} live=${
+    srcObject.liveAudioTrackCount ?? 'n/a'
+  }${tracks}`;
 }
 
 interface CaptionData {

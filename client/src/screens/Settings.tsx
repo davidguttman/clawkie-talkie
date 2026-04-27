@@ -3,9 +3,9 @@ import { HIFI } from '../tokens';
 import { ScreenHeader, ScrollBody } from '../components/ScreenChrome';
 import type { Settings } from '../storage';
 
-// Ported from docs/design/hifi-screens.jsx. xAI API keys are NOT stored
-// on the phone — the daemon holds the key via the repo-root `.env`.
-// This screen only edits on-device voice / export preferences.
+// xAI API keys are NOT stored on the phone — the daemon holds the key via
+// the repo-root `.env`. This screen only edits on-device voice / export
+// preferences.
 
 export function SettingsScreen({
   onBack,

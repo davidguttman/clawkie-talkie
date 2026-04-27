@@ -15,11 +15,12 @@ describe('client URL parsing (legacy query)', () => {
     expect(parseInitialSearch('?screen=driving').hostPeerId).toBeNull();
   });
 
-  it('preserves handoff host, session, and thread params', () => {
+  it('ignores legacy demo screen selection while preserving route params', () => {
     expect(
       parseInitialSearch('?screen=driving&host=peer-1&session=session-1&threadId=thread-1'),
     ).toMatchObject({
-      screen: 'driving',
+      screen: 'error',
+      errorKind: 'bad_session',
       hostPeerId: 'peer-1',
       sessionId: 'session-1',
       threadId: 'thread-1',

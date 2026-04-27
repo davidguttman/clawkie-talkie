@@ -1,9 +1,6 @@
 import { HIFI } from '../tokens';
 
-// Ported from docs/design/hifi-errors.jsx. Five error kinds match the Phase 0
-// requirement from the kickoff: invalid/expired join token (bad_session),
-// mic permission denied, STT failure, TTS/playback failure, daemon/session
-// connectivity failure (offline).
+// Invalid handoff and runtime failure states surfaced by the voice app.
 
 export type ErrorKind =
   | 'mic_denied'

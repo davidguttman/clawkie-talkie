@@ -71,17 +71,41 @@ export function HiFiPhone({
           }}
         >
           <span>9:41</span>
-          <span style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, opacity: 0.85 }}>
+          <span
+            style={{
+              display: 'flex',
+              gap: 6,
+              alignItems: 'center',
+              fontSize: 12,
+              opacity: 0.85,
+            }}
+          >
             <svg width="16" height="11" viewBox="0 0 16 11">
-              <path d="M1 10V8 M5 10V6 M9 10V4 M13 10V1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              <path
+                d="M1 10V8 M5 10V6 M9 10V4 M13 10V1"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
             </svg>
             <svg width="22" height="11" viewBox="0 0 22 11">
-              <rect x="0.5" y="0.5" width="18" height="10" rx="2.5" fill="none" stroke="currentColor" opacity="0.5" />
+              <rect
+                x="0.5"
+                y="0.5"
+                width="18"
+                height="10"
+                rx="2.5"
+                fill="none"
+                stroke="currentColor"
+                opacity="0.5"
+              />
               <rect x="2" y="2" width="15" height="7" rx="1.2" fill="currentColor" />
             </svg>
           </span>
         </div>
-        <div style={{ position: 'absolute', inset: 0, paddingTop: 54, paddingBottom: 20 }}>{children}</div>
+        <div style={{ position: 'absolute', inset: 0, paddingTop: 54, paddingBottom: 20 }}>
+          {children}
+        </div>
         {/* home indicator */}
         <div
           style={{

@@ -40,6 +40,48 @@ let remoteStreamAnalyserState: {
   sink: GainNode;
 } | null = null;
 
+export interface RemoteTtsAudioDebugSnapshot {
+  present: boolean;
+  paused: boolean | null;
+  currentTime: number | null;
+  readyState: number | null;
+  src: string | null;
+  srcObject: {
+    present: boolean;
+    type: string;
+    audioTrackCount: number | null;
+    liveAudioTrackCount: number | null;
+    audioTrackStates: string[];
+  } | null;
+}
+
+export function getRemoteTtsAudioDebugSnapshot(): RemoteTtsAudioDebugSnapshot {
+  const el = sharedAudioElement;
+  const srcObject = el?.srcObject ?? null;
+  const stream =
+    typeof MediaStream !== 'undefined' && srcObject instanceof MediaStream ? srcObject : null;
+  return {
+    present: !!el,
+    paused: el ? el.paused : null,
+    currentTime: el ? el.currentTime : null,
+    readyState: el ? el.readyState : null,
+    src: el ? el.currentSrc || el.src || null : null,
+    srcObject: srcObject
+      ? {
+          present: true,
+          type: srcObject.constructor?.name || typeof srcObject,
+          audioTrackCount: stream ? stream.getAudioTracks().length : null,
+          liveAudioTrackCount: stream
+            ? stream.getAudioTracks().filter((track) => track.readyState === 'live').length
+            : null,
+          audioTrackStates: stream
+            ? stream.getAudioTracks().map((track) => `${track.kind}:${track.readyState}`)
+            : [],
+        }
+      : null,
+  };
+}
+
 export interface TTSHandle {
   done: Promise<void>;
   stop(): void;

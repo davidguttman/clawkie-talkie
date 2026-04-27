@@ -12,23 +12,6 @@ import { parseHandoffUrl, type HandoffRoute } from './voice/handoffUrl';
 
 type ScreenId = 'driving' | 'history' | 'transcript' | 'settings' | 'error';
 
-const SCREEN_IDS: ScreenId[] = [
-  'driving',
-  'history',
-  'transcript',
-  'settings',
-  'error',
-];
-
-const ERROR_KINDS: ErrorKind[] = [
-  'mic_denied',
-  'offline',
-  'stt_failed',
-  'tts_failed',
-  'bad_session',
-  'replaced',
-];
-
 export function parseInitialSearch(search: string): {
   screen: ScreenId;
   errorKind: ErrorKind;
@@ -37,18 +20,12 @@ export function parseInitialSearch(search: string): {
   threadId?: string;
 } {
   const params = new URLSearchParams(search);
-  const rawScreen = params.get('screen');
-  const screen: ScreenId = (SCREEN_IDS as string[]).includes(rawScreen || '')
-    ? (rawScreen as ScreenId)
-    : 'error';
-  const rawKind = params.get('errorKind');
-  const errorKind: ErrorKind = (ERROR_KINDS as string[]).includes(rawKind || '')
-    ? (rawKind as ErrorKind)
-    : 'bad_session';
+  const errorKind: ErrorKind =
+    params.get('errorKind') === 'replaced' ? 'replaced' : 'bad_session';
   const hostPeerId = params.get('host')?.trim() || null;
   const sessionId = params.get('session') || undefined;
   const threadId = params.get('threadId') || undefined;
-  return { screen, errorKind, hostPeerId, sessionId, threadId };
+  return { screen: 'error', errorKind, hostPeerId, sessionId, threadId };
 }
 
 export function parseInitialLocation(location: { search: string; hash: string }) {
@@ -73,17 +50,9 @@ function parseInitial() {
   return parseInitialLocation(window.location);
 }
 
-function setUrlParam(key: string, value: string | null) {
-  const url = new URL(window.location.href);
-  if (value === null) url.searchParams.delete(key);
-  else url.searchParams.set(key, value);
-  window.history.replaceState(null, '', url.toString());
-}
-
 export function App() {
   const initial = useMemo(parseInitial, []);
   const [screen, setScreen] = useState<ScreenId>(initial.screen);
-  const [errorKind, setErrorKind] = useState<ErrorKind>(initial.errorKind);
   const [openSession, setOpenSession] = useState<string | undefined>(initial.sessionId);
   const [settings, setSettingsState] = useState<Settings>(() => loadSettings());
   const [isNarrow, setIsNarrow] = useState(
@@ -102,18 +71,8 @@ export function App() {
 
   const go = useCallback((s: ScreenId) => {
     setScreen(s);
-    setUrlParam('screen', s);
   }, []);
 
-  const goErrorKind = useCallback((k: ErrorKind) => {
-    setErrorKind(k);
-    setUrlParam('errorKind', k);
-  }, []);
-
-  // `compact` is the "real phone" layout mode: stacked rows, smaller chrome,
-  // more gutter — used whenever we're not rendering inside the desktop phone
-  // mockup. Threshold matches the MobileShell switch so they're never out of
-  // sync.
   const compact = isNarrow;
   const currentSessionId = openSession || initial.sessionId;
 
@@ -169,7 +128,7 @@ export function App() {
       )}
       {screen === 'error' && (
         <ErrorScreen
-          kind={errorKind}
+          kind={initial.errorKind}
           onDismiss={() => go('driving')}
           onRetry={() => go('driving')}
           onBack={() => go('driving')}
@@ -178,24 +137,9 @@ export function App() {
     </>
   );
 
-  const rendered = isNarrow ? (
-    <MobileShell>{screenContent}</MobileShell>
-  ) : (
-    <div style={{ display: 'flex', gap: 32, alignItems: 'flex-start' }}>
-      <SideNav
-        screen={screen}
-        onScreen={go}
-        errorKind={errorKind}
-        onErrorKind={goErrorKind}
-        canOpenTranscript={!!currentSessionId}
-      />
-      <HiFiPhone>{screenContent}</HiFiPhone>
-    </div>
-  );
-
   return (
     <RtcProvider
-      hostPeerId={initial.hostPeerId ?? undefined}
+      hostPeerId={initial.handoff ? (initial.hostPeerId ?? undefined) : undefined}
       rendezvous={
         initial.handoff
           ? {
@@ -205,7 +149,9 @@ export function App() {
           : null
       }
     >
-      <RtcDisconnectGate isNarrow={isNarrow}>{rendered}</RtcDisconnectGate>
+      <RtcDisconnectGate isNarrow={isNarrow}>
+        <ResponsiveRuntime isNarrow={isNarrow}>{screenContent}</ResponsiveRuntime>
+      </RtcDisconnectGate>
     </RtcProvider>
   );
 }
@@ -233,19 +179,53 @@ function RtcDisconnectGate({
     />
   );
 
-  return isNarrow ? (
-    <MobileShell>{replaced}</MobileShell>
-  ) : (
-    <div style={{ display: 'flex', gap: 32, alignItems: 'flex-start' }}>
-      <HiFiPhone>{replaced}</HiFiPhone>
+  return <ResponsiveRuntime isNarrow={isNarrow}>{replaced}</ResponsiveRuntime>;
+}
+
+function ResponsiveRuntime({
+  isNarrow,
+  children,
+}: {
+  isNarrow: boolean;
+  children: ReactNode;
+}) {
+  if (isNarrow) {
+    return <RuntimeShell>{children}</RuntimeShell>;
+  }
+
+  return (
+    <DesktopPhoneShell>
+      <HiFiPhone>{children}</HiFiPhone>
+    </DesktopPhoneShell>
+  );
+}
+
+function DesktopPhoneShell({ children }: { children: ReactNode }) {
+  return (
+    <div
+      style={{
+        minHeight: '100dvh',
+        width: '100%',
+        background: HIFI.bg,
+        color: HIFI.ink,
+        fontFamily: HIFI.fonts.sans,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'auto',
+        padding: 24,
+        boxSizing: 'border-box',
+      }}
+    >
+      {children}
     </div>
   );
 }
 
-function MobileShell({ children }: { children: ReactNode }) {
+function RuntimeShell({ children }: { children: ReactNode }) {
   return (
     <div
-      className="mobile-scroll"
+      className="runtime-scroll"
       style={{
         minHeight: '100dvh',
         height: '100dvh',
@@ -268,185 +248,6 @@ function MobileShell({ children }: { children: ReactNode }) {
       }}
     >
       {children}
-    </div>
-  );
-}
-
-function SideNav({
-  screen,
-  onScreen,
-  errorKind,
-  onErrorKind,
-  canOpenTranscript,
-}: {
-  screen: ScreenId;
-  onScreen: (s: ScreenId) => void;
-  errorKind: ErrorKind;
-  onErrorKind: (k: ErrorKind) => void;
-  canOpenTranscript: boolean;
-}) {
-  const screens: { id: ScreenId; label: string; hint: string }[] = [
-    { id: 'driving', label: 'Driving mode', hint: 'main voice screen' },
-    { id: 'history', label: 'History', hint: 'past sessions (disabled)' },
-    { id: 'transcript', label: 'Transcript', hint: 'session detail (disabled)' },
-    { id: 'settings', label: 'Settings', hint: 'xAI key · voice' },
-    { id: 'error', label: 'Error states', hint: '5 scenarios' },
-  ];
-
-  const kinds: { id: ErrorKind; label: string; hint: string }[] = [
-    { id: 'mic_denied', label: 'Mic blocked', hint: 'first tap, no permission' },
-    { id: 'offline', label: 'No connection', hint: 'daemon/session failure' },
-    { id: 'stt_failed', label: 'Transcription failed', hint: 'spoke, got nothing' },
-    { id: 'tts_failed', label: 'Audio failed', hint: 'text ok, no sound' },
-    { id: 'bad_session', label: 'Bad handoff link', hint: 'expired or invalid' },
-    { id: 'replaced', label: 'Replaced phone', hint: 'newer phone connected' },
-  ];
-
-  return (
-    <div style={{ width: 220, paddingTop: 40 }}>
-      <div
-        style={{
-          fontFamily: HIFI.fonts.mono,
-          fontSize: 24,
-          fontWeight: 600,
-          color: HIFI.ink,
-          lineHeight: 1.2,
-          marginBottom: 14,
-        }}
-      >
-        Clawkie<span style={{ color: HIFI.accents.amber.rec }}>-Talkie</span>
-      </div>
-
-      <div style={{ marginTop: 26, paddingTop: 16, borderTop: `1px solid ${HIFI.stroke}` }}>
-        <div
-          style={{
-            fontFamily: HIFI.fonts.mono,
-            fontSize: 10,
-            letterSpacing: 1.6,
-            color: HIFI.ink3,
-            fontWeight: 700,
-            marginBottom: 10,
-          }}
-        >
-          SCREENS
-        </div>
-        {screens.map((s) => {
-          const on = screen === s.id;
-          const accent = HIFI.accents.amber.rec;
-          const disabled = s.id === 'transcript' && !canOpenTranscript;
-          return (
-            <button
-              key={s.id}
-              onClick={() => {
-                if (!disabled) onScreen(s.id);
-              }}
-              disabled={disabled}
-              style={{
-                display: 'block',
-                width: '100%',
-                textAlign: 'left',
-                padding: '9px 10px 9px 12px',
-                marginBottom: 3,
-                borderRadius: 8,
-                background: on ? HIFI.surface2 : 'transparent',
-                border: `1px solid ${on ? HIFI.strokeStrong : 'transparent'}`,
-                borderLeft: `3px solid ${on ? accent : 'transparent'}`,
-                color: disabled ? HIFI.ink4 : on ? HIFI.ink : HIFI.ink2,
-                cursor: disabled ? 'default' : 'pointer',
-                fontFamily: 'inherit',
-                boxShadow: on ? `inset 0 0 24px ${accent}18` : 'none',
-                opacity: disabled ? 0.55 : 1,
-              }}
-            >
-              <div
-                style={{
-                  fontFamily: HIFI.fonts.sans,
-                  fontSize: 12,
-                  fontWeight: on ? 700 : 500,
-                  color: disabled ? HIFI.ink4 : on ? HIFI.ink : HIFI.ink2,
-                }}
-              >
-                {s.label}
-              </div>
-              <div
-                style={{
-                  fontFamily: HIFI.fonts.mono,
-                  fontSize: 9,
-                  color: disabled ? HIFI.ink4 : on ? HIFI.ink2 : HIFI.ink3,
-                  letterSpacing: 0.6,
-                  marginTop: 2,
-                }}
-              >
-                {s.hint}
-              </div>
-            </button>
-          );
-        })}
-      </div>
-
-      {screen === 'error' && (
-        <div style={{ marginTop: 18, paddingTop: 14, borderTop: `1px solid ${HIFI.stroke}` }}>
-          <div
-            style={{
-              fontFamily: HIFI.fonts.mono,
-              fontSize: 10,
-              letterSpacing: 1.6,
-              color: HIFI.ink3,
-              fontWeight: 700,
-              marginBottom: 10,
-            }}
-          >
-            ERROR KIND
-          </div>
-          {kinds.map((e) => {
-            const on = errorKind === e.id;
-            const accent = HIFI.accents.amber.rec;
-            return (
-              <button
-                key={e.id}
-                onClick={() => onErrorKind(e.id)}
-                style={{
-                  display: 'block',
-                  width: '100%',
-                  textAlign: 'left',
-                  padding: '8px 10px 8px 12px',
-                  marginBottom: 3,
-                  borderRadius: 8,
-                  background: on ? HIFI.surface2 : 'transparent',
-                  border: `1px solid ${on ? HIFI.strokeStrong : 'transparent'}`,
-                  borderLeft: `3px solid ${on ? accent : 'transparent'}`,
-                  color: on ? HIFI.ink : HIFI.ink2,
-                  cursor: 'pointer',
-                  fontFamily: 'inherit',
-                  boxShadow: on ? `inset 0 0 24px ${accent}18` : 'none',
-                }}
-              >
-                <div
-                  style={{
-                    fontFamily: HIFI.fonts.sans,
-                    fontSize: 11,
-                    fontWeight: on ? 700 : 500,
-                    color: on ? HIFI.ink : HIFI.ink2,
-                  }}
-                >
-                  {e.label}
-                </div>
-                <div
-                  style={{
-                    fontFamily: HIFI.fonts.mono,
-                    fontSize: 9,
-                    color: on ? HIFI.ink2 : HIFI.ink3,
-                    letterSpacing: 0.5,
-                    marginTop: 2,
-                  }}
-                >
-                  {e.hint}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      )}
     </div>
   );
 }
