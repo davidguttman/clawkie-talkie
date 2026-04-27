@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   analyserToBandIntensities,
+  BandNormalizer,
   byteFrequencyDataToBands,
   OUTPUT_BAND_SMOOTHING,
   pcm16ToBandIntensities,
@@ -41,6 +42,37 @@ describe('audio band helpers', () => {
     expect(bands).toHaveLength(6);
     expect(Math.max(...bands)).toBeGreaterThan(0.9);
     for (const band of bands) {
+      expect(band).toBeGreaterThanOrEqual(0.08);
+      expect(band).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('boosts higher analyser bins before grouping into bars', () => {
+    const lowBins = new Uint8Array(64);
+    const highBins = new Uint8Array(64);
+    lowBins[6] = 12;
+    highBins[52] = 12;
+
+    const low = byteFrequencyDataToBands(lowBins, 8, new BandNormalizer());
+    const high = byteFrequencyDataToBands(highBins, 8, new BandNormalizer());
+
+    expect(dominantBand(high)).toBeGreaterThan(dominantBand(low));
+    expect(Math.max(...high)).toBeGreaterThan(Math.max(...low));
+  });
+
+  it('adapts analyser range so speech-level changes stay visible', () => {
+    const normalizer = new BandNormalizer();
+    const quiet = new Uint8Array(64);
+    const speech = new Uint8Array(64);
+    quiet[18] = 5;
+    speech[18] = 24;
+
+    const quietBands = byteFrequencyDataToBands(quiet, 10, normalizer);
+    const speechBands = byteFrequencyDataToBands(speech, 10, normalizer);
+
+    expect(Math.max(...quietBands)).toBeGreaterThan(0.08);
+    expect(Math.max(...speechBands)).toBeGreaterThan(Math.max(...quietBands) + 0.12);
+    for (const band of speechBands) {
       expect(band).toBeGreaterThanOrEqual(0.08);
       expect(band).toBeLessThanOrEqual(1);
     }

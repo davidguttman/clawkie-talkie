@@ -23,12 +23,14 @@ import {
 } from './tts';
 import {
   analyserToBandIntensities,
+  BandNormalizer,
   mergeBandIntensities,
   pcm16ToBandIntensities,
   OUTPUT_BAND_SMOOTHING,
   RECORDING_BAND_SMOOTHING,
   smoothBandIntensities,
 } from './audioBands';
+import { getActiveMicAnalyser } from './audioSource';
 import {
   initialContext,
   reduce,
@@ -55,6 +57,12 @@ interface CurrentTurnTranscript {
 const WAVE_BARS = 28;
 const IDLE_INTENSITIES = Array(WAVE_BARS).fill(0.12);
 const QUIET_INTENSITIES = Array(WAVE_BARS).fill(0.08);
+
+export interface AnalyserScratch {
+  frequency: Uint8Array<ArrayBuffer>;
+  time: Uint8Array<ArrayBuffer>;
+  normalizer: BandNormalizer;
+}
 
 export interface DrivingLoop {
   state: DrivingState;
@@ -208,9 +216,11 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [side]);
 
-  // Audio visualization: recording reads the same PCM frames sent to
-  // STT; thinking/AI reads analyser nodes from audible static, daemon
-  // TTS fallback playback, and any attached WebRTC remote audio stream.
+  // Audio visualization: recording samples the live mic analyser every
+  // RAF; STT PCM frames remain only as the daemon transport and as a
+  // short fallback before the analyser exists. Thinking/AI reads
+  // analyser nodes from audible static, daemon TTS fallback playback,
+  // and any attached WebRTC remote audio stream.
   useEffect(() => {
     if (ctx.state === 'idle') {
       renderedBandsRef.current = [...IDLE_INTENSITIES];
@@ -218,10 +228,7 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
       return;
     }
     let raf = 0;
-    const analyserScratch = new WeakMap<
-      AnalyserNode,
-      { frequency: Uint8Array<ArrayBuffer>; time: Uint8Array<ArrayBuffer> }
-    >();
+    const analyserScratch = new WeakMap<AnalyserNode, AnalyserScratch>();
     const tick = () => {
       const target = readTargetBands(ctx.state, micBandsRef.current, ttsRef.current, analyserScratch);
       const smoothing =
@@ -394,38 +401,50 @@ function runCancelReply(
   tts?.stop();
 }
 
-function readTargetBands(
+export function readTargetBands(
   state: DrivingState,
   micBands: number[],
   tts: TTSHandle | null,
-  analyserScratch: WeakMap<
-    AnalyserNode,
-    { frequency: Uint8Array<ArrayBuffer>; time: Uint8Array<ArrayBuffer> }
-  >,
+  analyserScratch: WeakMap<AnalyserNode, AnalyserScratch>,
 ): number[] {
-  if (state === 'recording') return micBands;
+  if (state === 'recording') {
+    const micAnalyser = getActiveMicAnalyser();
+    return micAnalyser ? readAnalyserBands(micAnalyser, analyserScratch) : micBands;
+  }
   if (state !== 'thinking' && state !== 'ai') return QUIET_INTENSITIES;
 
   const analysers = getActiveOutputAnalysers();
   if (tts?.analyser) analysers.push(tts.analyser);
   if (analysers.length === 0) return QUIET_INTENSITIES;
 
-  const bands = analysers.map((analyser) => {
-    let scratch = analyserScratch.get(analyser);
-    if (
-      !scratch ||
-      scratch.frequency.length !== analyser.frequencyBinCount ||
-      scratch.time.length !== analyser.fftSize
-    ) {
-      scratch = {
-        frequency: new Uint8Array(analyser.frequencyBinCount),
-        time: new Uint8Array(analyser.fftSize),
-      };
-      analyserScratch.set(analyser, scratch);
-    }
-    return analyserToBandIntensities(analyser, WAVE_BARS, scratch.frequency, scratch.time);
-  });
+  const bands = analysers.map((analyser) => readAnalyserBands(analyser, analyserScratch));
   return mergeBandIntensities(bands, WAVE_BARS);
+}
+
+function readAnalyserBands(
+  analyser: AnalyserNode,
+  analyserScratch: WeakMap<AnalyserNode, AnalyserScratch>,
+): number[] {
+  let scratch = analyserScratch.get(analyser);
+  if (
+    !scratch ||
+    scratch.frequency.length !== analyser.frequencyBinCount ||
+    scratch.time.length !== analyser.fftSize
+  ) {
+    scratch = {
+      frequency: new Uint8Array(analyser.frequencyBinCount),
+      time: new Uint8Array(analyser.fftSize),
+      normalizer: new BandNormalizer(),
+    };
+    analyserScratch.set(analyser, scratch);
+  }
+  return analyserToBandIntensities(
+    analyser,
+    WAVE_BARS,
+    scratch.frequency,
+    scratch.time,
+    scratch.normalizer,
+  );
 }
 
 export function displayedCaptionText(ctx: DrivingContext, liveText: string): string {
