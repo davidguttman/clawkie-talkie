@@ -13,10 +13,31 @@ class FakeBiquadFilterNode extends FakeAudioNode {
   type: BiquadFilterType = 'lowpass';
   frequency = new FakeAudioParam();
   Q = new FakeAudioParam();
+  gain = new FakeAudioParam();
 }
 
 class FakeGainNode extends FakeAudioNode {
   gain = new FakeAudioParam();
+}
+
+class FakeWaveShaperNode extends FakeAudioNode {
+  curve: Float32Array | null = null;
+  oversample: OverSampleType = 'none';
+}
+
+class FakeDynamicsCompressorNode extends FakeAudioNode {
+  threshold = new FakeAudioParam();
+  knee = new FakeAudioParam();
+  ratio = new FakeAudioParam();
+  attack = new FakeAudioParam();
+  release = new FakeAudioParam();
+}
+
+class FakeOscillatorNode extends FakeAudioNode {
+  type: OscillatorType = 'sine';
+  frequency = new FakeAudioParam();
+  start = vi.fn();
+  stop = vi.fn();
 }
 
 class FakeMediaElementSourceNode extends FakeAudioNode {}
@@ -50,6 +71,9 @@ class FakeAudioContext {
   mediaElementSources: FakeMediaElementSourceNode[] = [];
   biquads: FakeBiquadFilterNode[] = [];
   gains: FakeGainNode[] = [];
+  waveShapers: FakeWaveShaperNode[] = [];
+  compressors: FakeDynamicsCompressorNode[] = [];
+  oscillators: FakeOscillatorNode[] = [];
   bufferSources: FakeAudioBufferSourceNode[] = [];
   resume = vi.fn(() => {
     this.state = 'running';
@@ -76,6 +100,24 @@ class FakeAudioContext {
     const gain = new FakeGainNode();
     this.gains.push(gain);
     return gain;
+  }
+
+  createWaveShaper(): FakeWaveShaperNode {
+    const shaper = new FakeWaveShaperNode();
+    this.waveShapers.push(shaper);
+    return shaper;
+  }
+
+  createDynamicsCompressor(): FakeDynamicsCompressorNode {
+    const compressor = new FakeDynamicsCompressorNode();
+    this.compressors.push(compressor);
+    return compressor;
+  }
+
+  createOscillator(): FakeOscillatorNode {
+    const oscillator = new FakeOscillatorNode();
+    this.oscillators.push(oscillator);
+    return oscillator;
   }
 
   createBuffer(_channels: number, length: number): FakeAudioBuffer {
@@ -145,6 +187,43 @@ describe('hold music selection', () => {
   });
 });
 
+describe('radio static generation', () => {
+  it('creates deterministic fluttering static with bounded crackles', async () => {
+    const { generateRadioStaticSamples } = await import('../client/src/voice/holdMusic');
+    const random = seededRandom(12345);
+    const samples = generateRadioStaticSamples({
+      sampleRate: 8000,
+      durationSeconds: 2,
+      random,
+    });
+
+    expect(samples).toHaveLength(16000);
+    expect(Math.max(...samples)).toBeLessThanOrEqual(0.92);
+    expect(Math.min(...samples)).toBeGreaterThanOrEqual(-0.92);
+    expect(countSamplesAbove(samples, 0.35)).toBeGreaterThan(0);
+
+    const windowRms = [
+      rms(samples.slice(0, 2000)),
+      rms(samples.slice(2000, 4000)),
+      rms(samples.slice(4000, 6000)),
+      rms(samples.slice(6000, 8000)),
+    ];
+    expect(Math.max(...windowRms) - Math.min(...windowRms)).toBeGreaterThan(0.01);
+  });
+
+  it('builds a symmetrical gentle saturation curve', async () => {
+    const { createGentleSaturationCurve } = await import('../client/src/voice/holdMusic');
+
+    const curve = createGentleSaturationCurve(9, 1.8);
+
+    expect(curve).toHaveLength(9);
+    expect(curve[0]).toBeCloseTo(-1);
+    expect(curve[4]).toBeCloseTo(0);
+    expect(curve[8]).toBeCloseTo(1);
+    expect(curve[2]).toBeCloseTo(-curve[6]);
+  });
+});
+
 describe('HoldMusicController', () => {
   it('waits for metadata, seeks into the middle of the track, loops, and routes through Web Audio', async () => {
     vi.stubGlobal('window', { AudioContext: FakeAudioContext });
@@ -168,18 +247,69 @@ describe('HoldMusicController', () => {
     expect(audio.play).toHaveBeenCalledTimes(1);
     expect(ctx.mediaElementSources).toHaveLength(1);
     expect(ctx.biquads[0].type).toBe('highpass');
-    expect(ctx.biquads[0].frequency.value).toBeGreaterThan(0);
+    expect(ctx.biquads[0].frequency.value).toBe(320);
+    expect(ctx.biquads[1].type).toBe('lowpass');
+    expect(ctx.biquads[1].frequency.value).toBe(3600);
+    expect(ctx.biquads[2].type).toBe('peaking');
+    expect(ctx.biquads[2].frequency.value).toBe(1500);
+    expect(ctx.biquads[2].gain.value).toBe(6);
+    expect(ctx.biquads[2].Q.value).toBe(1.2);
+    expect(ctx.waveShapers[0].curve).toBeInstanceOf(Float32Array);
+    expect(ctx.waveShapers[0].oversample).toBe('2x');
+    expect(ctx.compressors[0].threshold.value).toBe(-24);
+    expect(ctx.gains[0].gain.value).toBe(1);
+    expect(ctx.gains[1].gain.value).toBeCloseTo(0.045);
+    expect(ctx.gains[2].gain.value).toBeCloseTo(0.15);
+    expect(ctx.oscillators[0].type).toBe('sine');
+    expect(ctx.oscillators[0].frequency.value).toBeCloseTo(0.13);
+    expect(ctx.biquads[3].type).toBe('bandpass');
+    expect(ctx.biquads[3].frequency.value).toBe(2000);
+    expect(ctx.biquads[3].Q.value).toBe(0.5);
     expect(ctx.mediaElementSources[0].connect).toHaveBeenCalledWith(ctx.biquads[0]);
-    expect(ctx.biquads[0].connect).toHaveBeenCalledWith(ctx.gains[0]);
-    expect(ctx.gains[0].connect).toHaveBeenCalledWith(ctx.destination);
-    expect(ctx.gains[1].gain.value).toBeLessThan(0.02);
+    expect(ctx.biquads[0].connect).toHaveBeenCalledWith(ctx.biquads[1]);
+    expect(ctx.biquads[1].connect).toHaveBeenCalledWith(ctx.biquads[2]);
+    expect(ctx.biquads[2].connect).toHaveBeenCalledWith(ctx.waveShapers[0]);
+    expect(ctx.waveShapers[0].connect).toHaveBeenCalledWith(ctx.compressors[0]);
+    expect(ctx.compressors[0].connect).toHaveBeenCalledWith(ctx.gains[0]);
+    expect(ctx.gains[0].connect).toHaveBeenCalledWith(ctx.gains[2]);
+    expect(ctx.gains[2].connect).toHaveBeenCalledWith(ctx.destination);
+    expect(ctx.oscillators[0].connect).toHaveBeenCalledWith(ctx.gains[1]);
+    expect(ctx.gains[1].connect).toHaveBeenCalledWith(ctx.gains[0].gain);
+    expect(ctx.bufferSources[0].connect).toHaveBeenCalledWith(ctx.biquads[3]);
+    expect(ctx.biquads[3].connect).toHaveBeenCalledWith(ctx.gains[3]);
+    expect(ctx.gains[3].gain.value).toBeCloseTo(0.035);
+    expect(ctx.gains[3].connect).toHaveBeenCalledWith(ctx.destination);
     expect(ctx.bufferSources[0].loop).toBe(true);
+    expect(ctx.oscillators[0].start).toHaveBeenCalledWith(0);
     expect(ctx.bufferSources[0].start).toHaveBeenCalledWith(0);
 
     controller.stop();
 
     expect(audio.pause).toHaveBeenCalled();
     expect(ctx.bufferSources[0].stop).toHaveBeenCalled();
+    expect(ctx.oscillators[0].stop).toHaveBeenCalled();
     expect(ctx.mediaElementSources[0].disconnect).toHaveBeenCalled();
   });
 });
+
+function seededRandom(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return state / 0x100000000;
+  };
+}
+
+function rms(samples: Float32Array): number {
+  let total = 0;
+  for (const sample of samples) total += sample * sample;
+  return Math.sqrt(total / samples.length);
+}
+
+function countSamplesAbove(samples: Float32Array, threshold: number): number {
+  let count = 0;
+  for (const sample of samples) {
+    if (Math.abs(sample) > threshold) count += 1;
+  }
+  return count;
+}
