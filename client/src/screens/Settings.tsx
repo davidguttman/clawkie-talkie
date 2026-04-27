@@ -1,7 +1,7 @@
 import { type ReactNode } from 'react';
 import { HIFI } from '../tokens';
 import { ScreenHeader, ScrollBody } from '../components/ScreenChrome';
-import type { Settings } from '../storage';
+import { VOICE_IDS, VOICE_LABELS, type Settings } from '../storage';
 
 // xAI API keys are NOT stored on the phone — the daemon holds the key via
 // the repo-root `.env`. This screen only edits on-device voice / export
@@ -25,12 +25,14 @@ export function SettingsScreen({
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', color: HIFI.ink }}>
       <ScreenHeader title="Settings" onBack={onBack} />
       <ScrollBody pad={compact ? 2 : 22}>
-        <SettingsSection title="API KEY">
-          <DaemonKeyNotice />
-        </SettingsSection>
-
         <SettingsSection title="VOICE">
-          <SettingsRow label="AI voice" value={settings.voice} compact={compact} />
+          <SegmentedRow
+            label="AI voice"
+            value={settings.voice}
+            setValue={(v) => update('voice', v)}
+            options={VOICE_IDS.map((id) => ({ id, label: VOICE_LABELS[id] }))}
+            compact={compact}
+          />
           <SliderRow
             label="Speaking speed"
             value={settings.speed}
@@ -87,50 +89,6 @@ export function SettingsScreen({
   );
 }
 
-function DaemonKeyNotice() {
-  return (
-    <div style={{ padding: '14px 14px 12px' }}>
-      <div
-        style={{
-          fontFamily: HIFI.fonts.mono,
-          fontSize: 9,
-          letterSpacing: 1.2,
-          fontWeight: 700,
-          color: '#4ed29a',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 5,
-          marginBottom: 10,
-        }}
-      >
-        <span
-          style={{
-            width: 5,
-            height: 5,
-            borderRadius: '50%',
-            background: '#4ed29a',
-            boxShadow: '0 0 6px #4ed29a',
-          }}
-        />
-        DAEMON-HELD
-      </div>
-      <div
-        style={{
-          fontFamily: HIFI.fonts.sans,
-          fontSize: 12,
-          color: HIFI.ink2,
-          lineHeight: 1.55,
-          wordBreak: 'break-word',
-        }}
-      >
-        The xAI API key lives on the machine running the Clawkie-Talkie daemon
-        (from its repo-root <code style={{ color: HIFI.ink }}>.env</code>). The
-        phone never touches it. STT, reply, and TTS all terminate on the daemon.
-      </div>
-    </div>
-  );
-}
-
 function SettingsSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div style={{ marginBottom: 22 }}>
@@ -156,56 +114,6 @@ function SettingsSection({ title, children }: { title: string; children: ReactNo
         }}
       >
         {children}
-      </div>
-    </div>
-  );
-}
-
-function SettingsRow({
-  label,
-  value,
-  compact: _compact = false,
-}: {
-  label: string;
-  value: string;
-  compact?: boolean;
-}) {
-  return (
-    <div
-      style={{
-        padding: '13px 14px',
-        borderBottom: `1px solid ${HIFI.stroke}`,
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        gap: 12,
-        minWidth: 0,
-      }}
-    >
-      <div
-        style={{
-          fontSize: 13,
-          color: HIFI.ink,
-          fontFamily: HIFI.fonts.sans,
-          flexShrink: 0,
-        }}
-      >
-        {label}
-      </div>
-      <div
-        style={{
-          fontSize: 12,
-          color: HIFI.ink2,
-          fontFamily: HIFI.fonts.mono,
-          letterSpacing: 0.4,
-          textAlign: 'right',
-          minWidth: 0,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {value}
       </div>
     </div>
   );

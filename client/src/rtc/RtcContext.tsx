@@ -13,7 +13,7 @@ import {
 } from 'react';
 import { RtcClient, type ControlMessage, type RtcStatus } from './client';
 import { attachDaemonRemoteStream, detachDaemonRemoteStream } from '../voice/tts';
-import { phoneToDaemon, type DeliveryTarget } from '../voice/protocol';
+import { phoneToDaemon, type DeliveryTarget, type VoiceSettings } from '../voice/protocol';
 
 export interface RtcContextValue {
   status: RtcStatus;
@@ -50,10 +50,12 @@ export interface RtcRendezvous {
 export function RtcProvider({
   hostPeerId,
   rendezvous,
+  voiceSettings,
   children,
 }: {
   hostPeerId?: string;
   rendezvous?: RtcRendezvous | null;
+  voiceSettings?: VoiceSettings | null;
   children: ReactNode;
 }) {
   const [status, setStatus] = useState<RtcStatus>('idle');
@@ -126,9 +128,29 @@ export function RtcProvider({
       phoneToDaemon.rendezvousJoin({
         sessionId: rendezvous.sessionId,
         delivery: rendezvous.delivery,
+        ...(voiceSettings ? { settings: voiceSettings } : {}),
       }),
     );
-  }, [rendezvous, hostPeerId, activeRoomId, status]);
+  }, [rendezvous, hostPeerId, activeRoomId, status, voiceSettings]);
+
+  // Once the voice room is open, push subsequent voice-setting changes
+  // so the next TTS turn picks them up without reconnecting.
+  const lastSentVoiceRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!rendezvous || !hostPeerId) return;
+    if (activeRoomId === hostPeerId) return;
+    if (status !== 'open') return;
+    if (!voiceSettings?.voice) return;
+    if (lastSentVoiceRef.current === voiceSettings.voice) return;
+    lastSentVoiceRef.current = voiceSettings.voice;
+    clientRef.current?.sendControl(phoneToDaemon.settingsUpdate(voiceSettings));
+  }, [voiceSettings, rendezvous, hostPeerId, activeRoomId, status]);
+
+  useEffect(() => {
+    // Reset the dedupe state when the voice room is torn down, so the
+    // next room re-sends the current voice on first open.
+    if (activeRoomId === hostPeerId) lastSentVoiceRef.current = null;
+  }, [activeRoomId, hostPeerId]);
 
   useEffect(() => {
     if (!rendezvous) return;
