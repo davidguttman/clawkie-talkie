@@ -237,8 +237,8 @@ describe('radio static generation', () => {
     expect(hiss).not.toEqual(crackle);
     expect(countSamplesAbove(hiss, 0)).toBeGreaterThan(15000);
     expect(countSamplesAbove(crackle, 0)).toBeGreaterThan(0);
-    expect(countSamplesAbove(crackle, 0)).toBeLessThan(100);
-    expect(countSamplesAbove(crackle, 0.6)).toBe(countSamplesAbove(crackle, 0));
+    expect(countSamplesAbove(crackle, 0)).toBeLessThan(40);
+    expect(countSamplesAbove(crackle, 0.25)).toBe(countSamplesAbove(crackle, 0));
   });
 
   it('builds a symmetrical gentle saturation curve', async () => {
@@ -315,7 +315,8 @@ describe('HoldMusicController', () => {
     expect(ctx.biquads[3].connect).toHaveBeenCalledWith(ctx.biquads[4]);
     expect(ctx.biquads[4].connect).toHaveBeenCalledWith(ctx.biquads[5]);
     expect(ctx.biquads[5].connect).toHaveBeenCalledWith(ctx.gains[4]);
-    expect(ctx.gains[4].gain.value).toBeCloseTo(0.035);
+    expect(ctx.gains[4].gain.value).toBeCloseTo(0.012);
+    expect(ctx.gains[4].gain.value).toBeLessThan(ctx.gains[3].gain.value / 10);
     expect(ctx.gains[4].connect).toHaveBeenCalledWith(ctx.destination);
     expect(ctx.bufferSources[0].buffer).not.toBe(ctx.bufferSources[1].buffer);
     expect(countSamplesAbove(ctx.bufferSources[0].buffer?.getChannelData(0) ?? new Float32Array(), 0))
