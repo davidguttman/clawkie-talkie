@@ -8,7 +8,7 @@ const HOLD_MUSIC_TRACKS = [
 ] as const;
 
 const MUSIC_GAIN = 0.15;
-const NOISE_GAIN = 0.035;
+const NOISE_GAIN = 0.012;
 const MUSIC_HIGHPASS_HZ = 320;
 const MUSIC_LOWPASS_HZ = 3600;
 const MUSIC_MIDRANGE_HZ = 1500;
@@ -17,9 +17,9 @@ const MUSIC_MIDRANGE_Q = 1.2;
 const MUSIC_WOBBLE_HZ = 0.13;
 const MUSIC_WOBBLE_DEPTH = 0.045;
 const NOISE_BUFFER_SECONDS = 2;
-const CRACKLES_PER_SECOND = 11;
-const CRACKLE_MIN_AMPLITUDE = 0.62;
-const CRACKLE_EXTRA_AMPLITUDE = 0.38;
+const CRACKLES_PER_SECOND = 5;
+const CRACKLE_MIN_AMPLITUDE = 0.28;
+const CRACKLE_EXTRA_AMPLITUDE = 0.22;
 const BITCRUSHER_WORKLET_URL = '/audio/bitcrusher-processor.js';
 const BITCRUSHER_PROCESSOR_NAME = 'hold-music-bitcrusher';
 const BITCRUSHER_BITS = 8;
