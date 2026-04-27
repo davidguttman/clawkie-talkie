@@ -28,7 +28,7 @@ import { startMediaSessionKeeper } from './mediaSessionKeeper';
 
 const DEFAULT_SAMPLE_RATE = 24000;
 const VISUALIZER_FFT_SIZE = 512;
-const VISUALIZER_SMOOTHING = 0.72;
+const VISUALIZER_SMOOTHING = 0.45;
 
 let sharedAudioCtx: AudioContext | null = null;
 let sharedAudioElement: HTMLAudioElement | null = null;

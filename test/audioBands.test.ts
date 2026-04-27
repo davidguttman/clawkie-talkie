@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   analyserToBandIntensities,
   byteFrequencyDataToBands,
+  OUTPUT_BAND_SMOOTHING,
   pcm16ToBandIntensities,
+  RECORDING_BAND_SMOOTHING,
   smoothBandIntensities,
 } from '../client/src/voice/audioBands';
 
@@ -71,11 +73,41 @@ describe('audio band helpers', () => {
   });
 
   it('smooths rises faster than falls', () => {
-    const rising = smoothBandIntensities([0.1], [0.9], { attack: 0.5, release: 0.1 });
-    const falling = smoothBandIntensities([0.9], [0.1], { attack: 0.5, release: 0.1 });
+    const rising = smoothBandIntensities([0.1], [0.9], { attack: 0.6, release: 0.1 });
+    const falling = smoothBandIntensities([0.9], [0.1], { attack: 0.6, release: 0.1 });
 
-    expect(rising[0]).toBeCloseTo(0.5);
+    expect(rising[0]).toBeCloseTo(0.58);
     expect(falling[0]).toBeCloseTo(0.82);
+  });
+
+  it('production smoothing reaches speech changes faster than the previous tuning', () => {
+    const previousRecordingRise = smoothBandIntensities([0.1], [0.9], {
+      attack: 0.5,
+      release: 0.18,
+    });
+    const previousRecordingFall = smoothBandIntensities([0.9], [0.1], {
+      attack: 0.5,
+      release: 0.18,
+    });
+    const recordingRise = smoothBandIntensities([0.1], [0.9], RECORDING_BAND_SMOOTHING);
+    const recordingFall = smoothBandIntensities([0.9], [0.1], RECORDING_BAND_SMOOTHING);
+
+    expect(recordingRise[0]).toBeGreaterThan(previousRecordingRise[0]);
+    expect(recordingFall[0]).toBeLessThan(previousRecordingFall[0]);
+
+    const previousOutputRise = smoothBandIntensities([0.1], [0.9], {
+      attack: 0.38,
+      release: 0.12,
+    });
+    const previousOutputFall = smoothBandIntensities([0.9], [0.1], {
+      attack: 0.38,
+      release: 0.12,
+    });
+    const outputRise = smoothBandIntensities([0.1], [0.9], OUTPUT_BAND_SMOOTHING);
+    const outputFall = smoothBandIntensities([0.9], [0.1], OUTPUT_BAND_SMOOTHING);
+
+    expect(outputRise[0]).toBeGreaterThan(previousOutputRise[0]);
+    expect(outputFall[0]).toBeLessThan(previousOutputFall[0]);
   });
 });
 

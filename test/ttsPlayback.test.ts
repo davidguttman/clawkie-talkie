@@ -363,6 +363,8 @@ describe('daemon TTS playback audio context', () => {
     const source = ctx.mediaStreamSources[0];
     const analyser = ctx.analysers[0];
     const sink = ctx.gains[0];
+    expect(analyser.fftSize).toBe(512);
+    expect(analyser.smoothingTimeConstant).toBe(0.45);
     expect(source.connect).toHaveBeenCalledWith(analyser);
     expect(analyser.connect).toHaveBeenCalledWith(sink);
     expect(sink.gain.value).toBe(0);

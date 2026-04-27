@@ -23,8 +23,9 @@ export interface AudioSource {
   stop(): Promise<void>;
 }
 
-const SAMPLE_RATE = 16000;
-const MIC_BUFFER_SIZE = 4096;
+export const SAMPLE_RATE = 16000;
+export const MIC_BUFFER_SIZE = 1024;
+export const MIC_FRAME_DURATION_MS = (MIC_BUFFER_SIZE / SAMPLE_RATE) * 1000;
 const FIXTURE_FRAME_MS = 100;
 const FIXTURE_FRAME_BYTES = Math.floor(
   (FIXTURE_FRAME_MS * SAMPLE_RATE * 2) / 1000,
