@@ -5,3 +5,5 @@ dist/
 .DS_Store
 .env
 .env.local
+
+.development-state.json
