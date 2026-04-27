@@ -14,3 +14,14 @@ describe('DrivingScreen waveform wiring', () => {
     expect(source).toContain('intensities={intensities}');
   });
 });
+
+describe('DrivingScreen media debug surface', () => {
+  it('keeps the hardware-event conclusion and keeper counters visible in debug mode', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    expect(source).toContain('hardwareEvent=');
+    expect(source).toContain('probableLayer=');
+    expect(source).toContain('keeperEvents play=');
+    expect(source).toContain('ios_mic_session_before_js');
+  });
+});

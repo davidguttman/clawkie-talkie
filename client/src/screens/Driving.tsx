@@ -439,6 +439,7 @@ function MediaSessionDebugPanel({
     ['srcObject', formatRemoteSrcObject(snapshot.remoteTts.srcObject)],
     ['src', formatSrc(snapshot.remoteTts.src)],
   ];
+  const conclusion = buildDebugConclusion(snapshot, state);
 
   return (
     <section
@@ -470,6 +471,42 @@ function MediaSessionDebugPanel({
         <span style={{ color: snapshot.keeper.present ? HIFI.ai : '#ef6155' }}>
           KEEPER {snapshot.keeper.present ? 'READY' : 'MISSING'}
         </span>
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: compact ? '1fr' : '1fr 1fr',
+          gap: 5,
+          marginBottom: 6,
+          fontFamily: HIFI.fonts.mono,
+          fontSize: 10,
+          lineHeight: 1.35,
+          color: HIFI.ink2,
+        }}
+      >
+        <div
+          style={{
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+          title={conclusion.hardwareLine}
+        >
+          {conclusion.hardwareLine}
+        </div>
+        <div
+          style={{
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+          title={conclusion.keeperLine}
+        >
+          {conclusion.keeperLine}
+        </div>
       </div>
 
       <div
@@ -517,6 +554,29 @@ function MediaSessionDebugPanel({
       </div>
     </section>
   );
+}
+
+function buildDebugConclusion(snapshot: DebugSnapshot, state: DrivingState): {
+  hardwareLine: string;
+  keeperLine: string;
+} {
+  const hardwareEvent = snapshot.mediaSession.actions.count > 0 ? 'yes' : 'no';
+  return {
+    hardwareLine: `hardwareEvent=${hardwareEvent} probableLayer=${probableLayerFor(snapshot, state)}`,
+    keeperLine: `keeperEvents play=${snapshot.keeper.events.playCount} pause=${
+      snapshot.keeper.events.pauseCount
+    } last=${formatLastKeeperEvent(snapshot.keeper.events.last)}`,
+  };
+}
+
+function probableLayerFor(snapshot: DebugSnapshot, state: DrivingState): string {
+  if (snapshot.mediaSession.actions.count > 0) return 'js_media_session';
+  if (snapshot.keeper.events.pauseCount > 0) return 'keeper_audio_element';
+  if (state === 'recording' && snapshot.mediaSession.microphone.desiredActive === true) {
+    return 'ios_mic_session_before_js';
+  }
+  if (snapshot.mediaSession.available) return 'platform_before_js';
+  return 'media_session_unavailable';
 }
 
 function DebugGroup({ title, rows }: { title: string; rows: string[][] }) {
