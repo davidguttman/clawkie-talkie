@@ -12,7 +12,7 @@ import {
   type ReactNode,
 } from 'react';
 import { RtcClient, type ControlMessage, type RtcStatus } from './client';
-import { attachDaemonRemoteStream } from '../voice/tts';
+import { attachDaemonRemoteStream, detachDaemonRemoteStream } from '../voice/tts';
 import { phoneToDaemon, type DeliveryTarget } from '../voice/protocol';
 
 export interface RtcContextValue {
@@ -103,6 +103,7 @@ export function RtcProvider({
     return () => {
       client.close();
       clientRef.current = null;
+      if (remoteStreamRef.current) detachDaemonRemoteStream(remoteStreamRef.current);
       remoteStreamRef.current = null;
     };
   }, [activeRoomId]);

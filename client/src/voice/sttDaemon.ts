@@ -54,6 +54,7 @@ export interface STTStartOptions {
   isConnected: () => boolean;
   onPartial?: (text: string, isFinal: boolean) => void;
   onError?: (reason: string) => void;
+  onAudioFrame?: (pcm: ArrayBuffer) => void;
   // Override the audio source. Defaults to `selectAudioSource()` which
   // picks mic or fixture from the `?audio-fixture=` query param.
   audioSource?: AudioSource;
@@ -134,6 +135,7 @@ export async function startDaemonSTT(opts: STTStartOptions): Promise<STTHandle> 
   let forwarding = false;
   const preReady: ArrayBuffer[] = [];
   const onFrame = (pcm: ArrayBuffer) => {
+    opts.onAudioFrame?.(pcm);
     if (!forwarding) {
       preReady.push(pcm);
       while (preReady.length > PRE_READY_CAP_FRAMES) preReady.shift();

@@ -16,10 +16,17 @@ import {
 } from './sttDaemon';
 import {
   playDaemonTts,
+  getActiveOutputAnalysers,
   startBackgroundStatic,
   stopBackgroundStatic,
   type TTSHandle,
 } from './tts';
+import {
+  analyserToBandIntensities,
+  mergeBandIntensities,
+  pcm16ToBandIntensities,
+  smoothBandIntensities,
+} from './audioBands';
 import {
   initialContext,
   reduce,
@@ -45,6 +52,7 @@ interface CurrentTurnTranscript {
 
 const WAVE_BARS = 28;
 const IDLE_INTENSITIES = Array(WAVE_BARS).fill(0.12);
+const QUIET_INTENSITIES = Array(WAVE_BARS).fill(0.08);
 
 export interface DrivingLoop {
   state: DrivingState;
@@ -70,6 +78,7 @@ export interface DrivingLoopOptions {
     sendBinary: (bytes: ArrayBuffer | Uint8Array) => void;
     addControlListener: (fn: (msg: ControlMessage) => void) => () => void;
     addBinaryListener: (fn: (bytes: ArrayBuffer) => void) => () => void;
+    addRemoteStreamListener?: (fn: (stream: MediaStream) => void) => () => void;
   };
 }
 
@@ -98,6 +107,8 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
 
   const sttRef = useRef<STTHandle | null>(null);
   const ttsRef = useRef<TTSHandle | null>(null);
+  const micBandsRef = useRef<number[]>([...QUIET_INTENSITIES]);
+  const renderedBandsRef = useRef<number[]>([...IDLE_INTENSITIES]);
   // Accumulator for non-empty final partials. Used as fallback for
   // `stt.done` when xAI ships an empty final transcript despite having
   // committed real words during the turn.
@@ -184,7 +195,7 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     if (!side.length) return;
     for (const s of side) {
       if (s.kind === 'startMic') {
-        runStartMic(rtcRef, sttRef, dispatch);
+        runStartMic(rtcRef, sttRef, micBandsRef, dispatch);
       }
       else if (s.kind === 'stopMic') runStopMic(sttRef);
       else if (s.kind === 'cancelMic') runCancelMic(sttRef);
@@ -195,23 +206,24 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [side]);
 
-  // Waveform animation — behavior preserved from the previous hook.
+  // Audio visualization: recording reads the same PCM frames sent to
+  // STT; thinking/AI reads analyser nodes from audible static, daemon
+  // TTS fallback playback, and any attached WebRTC remote audio stream.
   useEffect(() => {
     if (ctx.state === 'idle') {
+      renderedBandsRef.current = [...IDLE_INTENSITIES];
       setIntensities([...IDLE_INTENSITIES]);
       return;
     }
     let raf = 0;
-    const tick = (t: number) => {
-      const base = ctx.state === 'thinking' ? 0.22 : 0.55;
-      const variance = ctx.state === 'thinking' ? 0.07 : 0.4;
-      const next = Array.from({ length: WAVE_BARS }, (_, i) => {
-        const v =
-          base +
-          Math.sin(t / 120 + i * 0.8) * variance +
-          Math.sin(t / 80 + i * 1.7) * variance * 0.5;
-        return Math.max(0.08, Math.min(1, Math.abs(v)));
+    const analyserScratch = new WeakMap<AnalyserNode, Uint8Array<ArrayBuffer>>();
+    const tick = () => {
+      const target = readTargetBands(ctx.state, micBandsRef.current, ttsRef.current, analyserScratch);
+      const next = smoothBandIntensities(renderedBandsRef.current, target, {
+        attack: ctx.state === 'recording' ? 0.5 : 0.38,
+        release: ctx.state === 'recording' ? 0.18 : 0.12,
       });
+      renderedBandsRef.current = next;
       setIntensities(next);
       raf = requestAnimationFrame(tick);
     };
@@ -247,6 +259,7 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
         return;
       }
       accumulatedRef.current = [];
+      micBandsRef.current = [...QUIET_INTENSITIES];
       setCurrentTurnTranscript({ active: true, sttDone: false, text: '' });
     }
     dispatch({ type: 'tap' });
@@ -285,16 +298,21 @@ type Dispatch = (e: DrivingEvent) => void;
 function runStartMic(
   rtcRef: React.MutableRefObject<DrivingLoopOptions['rtc']>,
   sttRef: React.MutableRefObject<STTHandle | null>,
+  micBandsRef: React.MutableRefObject<number[]>,
   dispatch: Dispatch,
 ): void {
   void (async () => {
     try {
+      micBandsRef.current = [...QUIET_INTENSITIES];
       const handle = await startDaemonSTT({
         sendControl: rtcRef.current.sendControl,
         sendBinary: rtcRef.current.sendBinary,
         addControlListener: rtcRef.current.addControlListener,
         isConnected: () => rtcRef.current.status === 'open',
         onError: (reason) => dispatch({ type: 'stt.error', reason }),
+        onAudioFrame: (pcm) => {
+          micBandsRef.current = pcm16ToBandIntensities(pcm, WAVE_BARS);
+        },
       });
       sttRef.current = handle;
     } catch (err) {
@@ -367,6 +385,30 @@ function runCancelReply(
   const tts = ttsRef.current;
   ttsRef.current = null;
   tts?.stop();
+}
+
+function readTargetBands(
+  state: DrivingState,
+  micBands: number[],
+  tts: TTSHandle | null,
+  analyserScratch: WeakMap<AnalyserNode, Uint8Array<ArrayBuffer>>,
+): number[] {
+  if (state === 'recording') return micBands;
+  if (state !== 'thinking' && state !== 'ai') return QUIET_INTENSITIES;
+
+  const analysers = getActiveOutputAnalysers();
+  if (tts?.analyser) analysers.push(tts.analyser);
+  if (analysers.length === 0) return QUIET_INTENSITIES;
+
+  const bands = analysers.map((analyser) => {
+    let scratch = analyserScratch.get(analyser);
+    if (!scratch || scratch.length !== analyser.frequencyBinCount) {
+      scratch = new Uint8Array(analyser.frequencyBinCount);
+      analyserScratch.set(analyser, scratch);
+    }
+    return analyserToBandIntensities(analyser, WAVE_BARS, scratch);
+  });
+  return mergeBandIntensities(bands, WAVE_BARS);
 }
 
 export function displayedCaptionText(ctx: DrivingContext, liveText: string): string {
