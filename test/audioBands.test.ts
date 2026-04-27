@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  analyserToBandIntensities,
   byteFrequencyDataToBands,
   pcm16ToBandIntensities,
   smoothBandIntensities,
@@ -21,6 +22,13 @@ describe('audio band helpers', () => {
     expect(Math.max(...high)).toBeGreaterThan(0.4);
   });
 
+  it('lifts low-amplitude speech-like PCM visibly above the floor', () => {
+    const bands = pcm16ToBandIntensities(sinePcm(440, 0.05), 12);
+
+    expect(Math.max(...bands)).toBeGreaterThan(0.3);
+    expect(dominantBand(bands)).toBeGreaterThanOrEqual(0);
+  });
+
   it('converts analyser byte bins into bounded log-spaced bands', () => {
     const bins = new Uint8Array(64);
     bins[4] = 255;
@@ -36,6 +44,32 @@ describe('audio band helpers', () => {
     }
   });
 
+  it('uses analyser time-domain audio when frequency bins are empty', () => {
+    const analyser = {
+      fftSize: 64,
+      frequencyBinCount: 32,
+      getByteFrequencyData(data: Uint8Array) {
+        data.fill(0);
+      },
+      getByteTimeDomainData(data: Uint8Array) {
+        for (let i = 0; i < data.length; i++) {
+          data[i] = 128 + Math.round(Math.sin((2 * Math.PI * i) / data.length) * 8);
+        }
+      },
+    } as unknown as AnalyserNode;
+
+    const bands = analyserToBandIntensities(
+      analyser,
+      8,
+      new Uint8Array(32),
+      new Uint8Array(64),
+    );
+
+    expect(bands).toHaveLength(8);
+    expect(Math.min(...bands)).toBeGreaterThan(0.25);
+    expect(Math.max(...bands)).toBeLessThanOrEqual(1);
+  });
+
   it('smooths rises faster than falls', () => {
     const rising = smoothBandIntensities([0.1], [0.9], { attack: 0.5, release: 0.1 });
     const falling = smoothBandIntensities([0.9], [0.1], { attack: 0.5, release: 0.1 });
@@ -45,11 +79,16 @@ describe('audio band helpers', () => {
   });
 });
 
-function sinePcm(frequency: number, sampleRate = 16000, samples = 4096): ArrayBuffer {
+function sinePcm(
+  frequency: number,
+  amplitude = 0.8,
+  sampleRate = 16000,
+  samples = 4096,
+): ArrayBuffer {
   const buffer = new ArrayBuffer(samples * 2);
   const view = new DataView(buffer);
   for (let i = 0; i < samples; i++) {
-    const value = Math.sin((2 * Math.PI * frequency * i) / sampleRate) * 0.8;
+    const value = Math.sin((2 * Math.PI * frequency * i) / sampleRate) * amplitude;
     view.setInt16(i * 2, value * 0x7fff, true);
   }
   return buffer;

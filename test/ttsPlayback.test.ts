@@ -30,6 +30,9 @@ class FakeAnalyserNode {
   getByteFrequencyData = vi.fn((data: Uint8Array) => {
     data.fill(0);
   });
+  getByteTimeDomainData = vi.fn((data: Uint8Array) => {
+    data.fill(128);
+  });
 }
 
 class FakeMediaStreamSource {

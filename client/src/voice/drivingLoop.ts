@@ -216,7 +216,10 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
       return;
     }
     let raf = 0;
-    const analyserScratch = new WeakMap<AnalyserNode, Uint8Array<ArrayBuffer>>();
+    const analyserScratch = new WeakMap<
+      AnalyserNode,
+      { frequency: Uint8Array<ArrayBuffer>; time: Uint8Array<ArrayBuffer> }
+    >();
     const tick = () => {
       const target = readTargetBands(ctx.state, micBandsRef.current, ttsRef.current, analyserScratch);
       const next = smoothBandIntensities(renderedBandsRef.current, target, {
@@ -391,7 +394,10 @@ function readTargetBands(
   state: DrivingState,
   micBands: number[],
   tts: TTSHandle | null,
-  analyserScratch: WeakMap<AnalyserNode, Uint8Array<ArrayBuffer>>,
+  analyserScratch: WeakMap<
+    AnalyserNode,
+    { frequency: Uint8Array<ArrayBuffer>; time: Uint8Array<ArrayBuffer> }
+  >,
 ): number[] {
   if (state === 'recording') return micBands;
   if (state !== 'thinking' && state !== 'ai') return QUIET_INTENSITIES;
@@ -402,11 +408,18 @@ function readTargetBands(
 
   const bands = analysers.map((analyser) => {
     let scratch = analyserScratch.get(analyser);
-    if (!scratch || scratch.length !== analyser.frequencyBinCount) {
-      scratch = new Uint8Array(analyser.frequencyBinCount);
+    if (
+      !scratch ||
+      scratch.frequency.length !== analyser.frequencyBinCount ||
+      scratch.time.length !== analyser.fftSize
+    ) {
+      scratch = {
+        frequency: new Uint8Array(analyser.frequencyBinCount),
+        time: new Uint8Array(analyser.fftSize),
+      };
       analyserScratch.set(analyser, scratch);
     }
-    return analyserToBandIntensities(analyser, WAVE_BARS, scratch);
+    return analyserToBandIntensities(analyser, WAVE_BARS, scratch.frequency, scratch.time);
   });
   return mergeBandIntensities(bands, WAVE_BARS);
 }

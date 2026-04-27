@@ -1,5 +1,13 @@
 const MIN_DISPLAY_INTENSITY = 0.08;
 const DEFAULT_MIN_FREQUENCY = 80;
+const PCM_RMS_FLOOR = 0.0025;
+const PCM_PEAK_FLOOR = 0.006;
+const PCM_REFERENCE_RMS = 0.09;
+const PCM_REFERENCE_PEAK = 0.22;
+const ANALYSER_RMS_FLOOR = 0.004;
+const ANALYSER_PEAK_FLOOR = 0.01;
+const ANALYSER_REFERENCE_RMS = 0.08;
+const ANALYSER_REFERENCE_PEAK = 0.22;
 
 export interface SmoothBandOptions {
   attack?: number;
@@ -24,36 +32,73 @@ export function pcm16ToBandIntensities(
   const real = new Float32Array(fftSize);
   const imag = new Float32Array(fftSize);
   const offsetSamples = sampleCount - fftSize;
+  let sumSquares = 0;
+  let peak = 0;
   for (let i = 0; i < fftSize; i++) {
     const s = view.getInt16((offsetSamples + i) * 2, true);
     const normalized = s < 0 ? s / 0x8000 : s / 0x7fff;
+    const abs = Math.abs(normalized);
+    sumSquares += normalized * normalized;
+    if (abs > peak) peak = abs;
     real[i] = normalized * hann(i, fftSize);
   }
+
+  const rms = Math.sqrt(sumSquares / fftSize);
+  const envelope = envelopeToIntensity(rms, peak, {
+    rmsFloor: PCM_RMS_FLOOR,
+    peakFloor: PCM_PEAK_FLOOR,
+    rmsReference: PCM_REFERENCE_RMS,
+    peakReference: PCM_REFERENCE_PEAK,
+  });
+  if (envelope <= MIN_DISPLAY_INTENSITY) return Array(count).fill(MIN_DISPLAY_INTENSITY);
 
   fft(real, imag);
   const bins = fftSize >> 1;
   const magnitudes = new Float32Array(bins);
+  let spectralPeak = 0;
   for (let i = 1; i < bins; i++) {
-    magnitudes[i] = Math.hypot(real[i], imag[i]) / (fftSize / 4);
+    const magnitude = Math.hypot(real[i], imag[i]) / (fftSize / 4);
+    magnitudes[i] = magnitude;
+    if (magnitude > spectralPeak) spectralPeak = magnitude;
   }
 
-  return frequencyMagnitudesToBands(magnitudes, count, {
+  if (spectralPeak <= 0) return Array(count).fill(envelope);
+  const normalizedMagnitudes = new Float32Array(bins);
+  for (let i = 1; i < bins; i++) normalizedMagnitudes[i] = magnitudes[i] / spectralPeak;
+
+  const spectralShape = frequencyMagnitudesToBands(normalizedMagnitudes, count, {
     minFrequency: DEFAULT_MIN_FREQUENCY,
     maxFrequency: sampleRate / 2,
     sampleRate,
   });
+  return applyEnvelopeToBands(spectralShape, envelope);
 }
 
 export function analyserToBandIntensities(
   analyser: AnalyserNode,
   bandCount: number,
-  scratch?: Uint8Array<ArrayBuffer>,
+  frequencyScratch?: Uint8Array<ArrayBuffer>,
+  timeScratch?: Uint8Array<ArrayBuffer>,
 ): number[] {
-  const bins = scratch && scratch.length === analyser.frequencyBinCount
-    ? scratch
+  const bins = frequencyScratch && frequencyScratch.length === analyser.frequencyBinCount
+    ? frequencyScratch
     : new Uint8Array(analyser.frequencyBinCount);
   analyser.getByteFrequencyData(bins);
-  return byteFrequencyDataToBands(bins, bandCount);
+  const frequencyBands = byteFrequencyDataToBands(bins, bandCount);
+
+  if (typeof analyser.getByteTimeDomainData !== 'function') return frequencyBands;
+  const time = timeScratch && timeScratch.length === analyser.fftSize
+    ? timeScratch
+    : new Uint8Array(analyser.fftSize);
+  analyser.getByteTimeDomainData(time);
+  const envelope = byteTimeDomainDataToIntensity(time);
+  if (envelope <= MIN_DISPLAY_INTENSITY) return frequencyBands;
+
+  const frequencyPeak = Math.max(...frequencyBands);
+  if (frequencyPeak <= MIN_DISPLAY_INTENSITY + 0.01) {
+    return Array(Math.max(0, Math.floor(bandCount))).fill(envelope);
+  }
+  return frequencyBands.map((band) => Math.max(band, envelopeScaledBand(band, envelope)));
 }
 
 export function byteFrequencyDataToBands(
@@ -146,6 +191,50 @@ function frequencyMagnitudesToBands(
     out[band] = clampIntensity(shaped);
   }
   return out;
+}
+
+function byteTimeDomainDataToIntensity(data: Uint8Array<ArrayBufferLike>): number {
+  if (data.length === 0) return MIN_DISPLAY_INTENSITY;
+  let sumSquares = 0;
+  let peak = 0;
+  for (let i = 0; i < data.length; i++) {
+    const sample = (data[i] - 128) / 128;
+    const abs = Math.abs(sample);
+    sumSquares += sample * sample;
+    if (abs > peak) peak = abs;
+  }
+  return envelopeToIntensity(Math.sqrt(sumSquares / data.length), peak, {
+    rmsFloor: ANALYSER_RMS_FLOOR,
+    peakFloor: ANALYSER_PEAK_FLOOR,
+    rmsReference: ANALYSER_REFERENCE_RMS,
+    peakReference: ANALYSER_REFERENCE_PEAK,
+  });
+}
+
+function applyEnvelopeToBands(bands: readonly number[], envelope: number): number[] {
+  return bands.map((band) => envelopeScaledBand(band, envelope));
+}
+
+function envelopeScaledBand(band: number, envelope: number): number {
+  const shape = Math.max(0, (band - MIN_DISPLAY_INTENSITY) / (1 - MIN_DISPLAY_INTENSITY));
+  return clampIntensity(MIN_DISPLAY_INTENSITY + Math.pow(shape, 0.65) * (envelope - MIN_DISPLAY_INTENSITY));
+}
+
+function envelopeToIntensity(
+  rms: number,
+  peak: number,
+  opts: { rmsFloor: number; peakFloor: number; rmsReference: number; peakReference: number },
+): number {
+  const rmsAmount = normalizedAboveFloor(rms, opts.rmsFloor, opts.rmsReference);
+  const peakAmount = normalizedAboveFloor(peak, opts.peakFloor, opts.peakReference);
+  const compressed = Math.max(Math.sqrt(rmsAmount), Math.sqrt(peakAmount) * 0.75);
+  if (compressed <= 0) return MIN_DISPLAY_INTENSITY;
+  return clampIntensity(MIN_DISPLAY_INTENSITY + compressed * 0.82);
+}
+
+function normalizedAboveFloor(value: number, floor: number, reference: number): number {
+  if (!Number.isFinite(value) || value <= floor) return 0;
+  return Math.min(1, (value - floor) / Math.max(reference - floor, Number.EPSILON));
 }
 
 function fft(real: Float32Array, imag: Float32Array): void {
