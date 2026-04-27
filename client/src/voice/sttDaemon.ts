@@ -37,6 +37,32 @@ import { phoneToDaemon } from './protocol';
 
 export { MicPermissionError } from './audioSource';
 
+export const STT_CHUNK_MIN_MS = 64;
+export const STT_CHUNK_MAX_MS = 3000;
+
+export interface SttChunkConfig {
+  chunkMs: number;
+  chunkBytes: number;
+}
+
+// Parses `?sttChunkMs=` debug param. Returns null for missing/invalid/
+// out-of-bounds values so callers fall back to default per-frame send.
+export function parseSttChunkMs(raw: string | null | undefined): SttChunkConfig | null {
+  if (raw == null) return null;
+  if (!/^\d+$/.test(raw)) return null;
+  const ms = Number(raw);
+  if (!Number.isFinite(ms)) return null;
+  if (ms < STT_CHUNK_MIN_MS || ms > STT_CHUNK_MAX_MS) return null;
+  const chunkBytes = Math.round((ms * SAMPLE_RATE * 2) / 1000);
+  return { chunkMs: ms, chunkBytes };
+}
+
+export function readSttChunkConfigFromLocation(): SttChunkConfig | null {
+  if (typeof window === 'undefined') return null;
+  const raw = new URLSearchParams(window.location.search).get('sttChunkMs');
+  return parseSttChunkMs(raw);
+}
+
 export class DaemonNotConnectedError extends Error {
   constructor() {
     super('daemon_not_connected');
@@ -60,6 +86,12 @@ export interface STTStartOptions {
   // Override the audio source. Defaults to `selectAudioSource()` which
   // picks mic or fixture from the `?audio-fixture=` query param.
   audioSource?: AudioSource;
+  // Debug-only batching of PCM frames before forwarding. When omitted,
+  // each PCM frame is sent individually (the production default). When
+  // provided, frames are accumulated until total bytes >= chunkBytes,
+  // then flushed as a single binary message. Read from `?sttChunkMs=`
+  // by default; pass explicitly in tests.
+  chunkConfig?: SttChunkConfig | null;
 }
 
 // Rolling cap on pre-ready frames — bounded memory, enough to preserve
@@ -132,6 +164,14 @@ export async function startDaemonSTT(opts: STTStartOptions): Promise<STTHandle> 
     }
   });
 
+  const chunkConfig =
+    opts.chunkConfig === undefined ? readSttChunkConfigFromLocation() : opts.chunkConfig;
+  const batcher = chunkConfig ? createChunkBatcher(chunkConfig.chunkBytes, opts.sendBinary) : null;
+  const sendOne = (pcm: ArrayBuffer) => {
+    if (batcher) batcher.push(pcm);
+    else opts.sendBinary(pcm);
+  };
+
   let forwarding = false;
   const preReady: ArrayBuffer[] = [];
   const onFrame = (pcm: ArrayBuffer) => {
@@ -141,7 +181,7 @@ export async function startDaemonSTT(opts: STTStartOptions): Promise<STTHandle> 
       while (preReady.length > PRE_READY_CAP_FRAMES) preReady.shift();
       return;
     }
-    opts.sendBinary(pcm);
+    sendOne(pcm);
   };
 
   try {
@@ -166,7 +206,7 @@ export async function startDaemonSTT(opts: STTStartOptions): Promise<STTHandle> 
   // then switch to live forwarding. Fixture path: preReady is empty
   // here, then `resume()` kicks off paced real-time emission that
   // arrives directly via the onFrame forwarding branch.
-  for (const frame of preReady) opts.sendBinary(frame);
+  for (const frame of preReady) sendOne(frame);
   preReady.length = 0;
   forwarding = true;
   audioSource.resume?.();
@@ -178,6 +218,7 @@ export async function startDaemonSTT(opts: STTStartOptions): Promise<STTHandle> 
 
   return {
     async stop(): Promise<string> {
+      batcher?.flush();
       opts.sendControl({ t: 'stt.audio.done' });
       try {
         return await finalTranscript;
@@ -186,12 +227,49 @@ export async function startDaemonSTT(opts: STTStartOptions): Promise<STTHandle> 
       }
     },
     cancel(): void {
+      batcher?.discard();
       if (!settled) {
         settled = true;
         rejectFinal(new Error('stt_cancelled'));
       }
       opts.sendControl({ t: 'stt.cancel' });
       void teardown();
+    },
+  };
+}
+
+function createChunkBatcher(
+  chunkBytes: number,
+  sendBinary: (bytes: ArrayBuffer | Uint8Array) => void,
+): { push(pcm: ArrayBuffer): void; flush(): void; discard(): void } {
+  let pending: Uint8Array[] = [];
+  let pendingBytes = 0;
+  const flush = () => {
+    if (pendingBytes === 0) {
+      pending = [];
+      return;
+    }
+    const out = new Uint8Array(pendingBytes);
+    let offset = 0;
+    for (const part of pending) {
+      out.set(part, offset);
+      offset += part.byteLength;
+    }
+    pending = [];
+    pendingBytes = 0;
+    sendBinary(out);
+  };
+  return {
+    push(pcm) {
+      const view = new Uint8Array(pcm);
+      pending.push(view);
+      pendingBytes += view.byteLength;
+      if (pendingBytes >= chunkBytes) flush();
+    },
+    flush,
+    discard() {
+      pending = [];
+      pendingBytes = 0;
     },
   };
 }

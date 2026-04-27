@@ -15,6 +15,7 @@ import {
   unlockDaemonTtsAudio,
 } from '../voice/tts';
 import { useRtc } from '../rtc/RtcContext';
+import { readSttChunkConfigFromLocation } from '../voice/sttDaemon';
 import type { Settings } from '../storage';
 
 // Runtime driving surface driven by the daemon-owned state machine in
@@ -421,6 +422,7 @@ function MediaSessionDebugPanel({
     ['metadata', snapshot.mediaSession.metadataInstalled ? 'installed' : 'not installed'],
     ['drivingState', state],
     ['rtc', rtcStatus],
+    ['sttChunking', formatSttChunking()],
   ];
   const keeperRows = [
     ['present', boolLabel(snapshot.keeper.present)],
@@ -626,6 +628,13 @@ function DebugGroup({ title, rows }: { title: string; rows: string[][] }) {
       ))}
     </div>
   );
+}
+
+export function formatSttChunking(
+  cfg: { chunkMs: number; chunkBytes: number } | null = readSttChunkConfigFromLocation(),
+): string {
+  if (!cfg) return 'default';
+  return `${cfg.chunkMs}ms ~${cfg.chunkBytes}B`;
 }
 
 function boolLabel(value: boolean): string {
