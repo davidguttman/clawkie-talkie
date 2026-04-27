@@ -326,8 +326,17 @@ describe('runChat with explicit delivery target', () => {
 
 describe('Discord transcript formatting and target derivation', () => {
   it('builds agent input from raw STT text plus interpretation guidance', () => {
-    expect(buildAgentTurnMessage('hello world')).toContain('raw speech-to-text transcript');
-    expect(buildAgentTurnMessage('hello world')).toContain('Raw transcript:\nhello world');
+    const message = buildAgentTurnMessage('hello world');
+
+    expect(message).toContain('raw speech-to-text transcript');
+    expect(message).toContain('Raw transcript:\nhello world');
+    expect(message).toContain('Preserve the existing OpenClaw session agent identity and personality.');
+    expect(message).toContain('turned back into a voice message');
+    expect(message).toContain('concise');
+    expect(message).toContain('read-aloud friendly');
+    expect(message).toContain('Avoid markdown, lists, and code blocks.');
+    expect(message).not.toContain('You are Clawkie');
+    expect(message).not.toContain('Reply as Clawkie');
   });
 
   it('block-quotes each line of the user transcript without a header', () => {
