@@ -119,7 +119,9 @@ describe('runChat OpenClaw CLI integration', () => {
     expect(agentCommand).toContain('raw speech-to-text transcript');
     expect(agentCommand).toContain('mistranscriptions');
     expect(agentCommand).toContain('infer the user');
-    expect(agentCommand).toContain('Raw transcript:\\nturn left at the next light');
+    expect(agentCommand).toContain('<raw-stt-transcript>\\nturn left at the next light\\n</raw-stt-transcript>');
+    expect(agentCommand).not.toContain('Preserve the existing OpenClaw session agent identity and personality');
+    expect(agentCommand).not.toContain('one or two short spoken sentences');
   });
 
   it('does not post the agent reply text via openclaw message send (the agent does it)', async () => {
@@ -328,13 +330,23 @@ describe('Discord transcript formatting and target derivation', () => {
   it('builds agent input from raw STT text plus interpretation guidance', () => {
     const message = buildAgentTurnMessage('hello world');
 
-    expect(message).toContain('raw speech-to-text transcript');
-    expect(message).toContain('Raw transcript:\nhello world');
-    expect(message).toContain('Preserve the existing OpenClaw session agent identity and personality.');
-    expect(message).toContain('turned back into a voice message');
-    expect(message).toContain('concise');
-    expect(message).toContain('read-aloud friendly');
-    expect(message).toContain('Avoid markdown, lists, and code blocks.');
+    expect(message).toBe(
+      'The following is a raw speech-to-text transcript from the user. It may contain ' +
+        "mistranscriptions, missing punctuation, or incorrect words. Use your best judgment to infer the user's " +
+        'intended meaning and actual spoken words before replying.\n\n' +
+        '<raw-stt-transcript>\n' +
+        'hello world\n' +
+        '</raw-stt-transcript>\n\n' +
+        'Your reply will be turned back into a voice message for the user, so keep it concise ' +
+        'by default but complete enough when needed, and read-aloud friendly. Avoid markdown, lists, and code blocks.',
+    );
+    expect(message.indexOf('<raw-stt-transcript>')).toBeLessThan(message.indexOf('hello world'));
+    expect(message.indexOf('hello world')).toBeLessThan(message.indexOf('</raw-stt-transcript>'));
+    expect(message.indexOf('</raw-stt-transcript>')).toBeLessThan(
+      message.indexOf('Your reply will be turned back into a voice message'),
+    );
+    expect(message).not.toContain('Preserve the existing OpenClaw session agent identity and personality');
+    expect(message).not.toContain('one or two short spoken sentences');
     expect(message).not.toContain('You are Clawkie');
     expect(message).not.toContain('Reply as Clawkie');
   });
