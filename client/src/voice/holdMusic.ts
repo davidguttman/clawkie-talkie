@@ -5,6 +5,11 @@ const HOLD_MUSIC_TRACKS = [
   'Pixel Queue.mp3',
   'Rotary Hush.mp3',
   'Soft Hold Tone.mp3',
+  'Maré de Espera.mp3',
+  'Muted Waiting Room.mp3',
+  'Palm Reader Queue.mp3',
+  'Pehli Dastak.mp3',
+  'Shelf Cue Drift.mp3',
 ] as const;
 
 const MUSIC_GAIN = 0.15;
