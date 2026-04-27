@@ -3,14 +3,10 @@ import { HIFI } from '../tokens';
 import { ScrollBody } from '../components/ScreenChrome';
 import { HIFI_APPS, parseSession } from '../sample-data';
 import { useRtc } from '../rtc/RtcContext';
+import type { HandoffRoute } from '../voice/handoffUrl';
 
-// Ported from docs/design/hifi-screens.jsx. Accepts an optional sessionId
-// (if the phone arrived with ?session= or ?join= on the URL) and renders
-// the real entry card. Token validation is Phase 4 work — for now this
-// just renders the handoff visual and hands off to Driving on confirm.
-
-const DEFAULT_SESSION = 'agent:main:discord:1495266157463208138:1766284491';
-const DEFAULT_CHANNEL_HINT = '#ai-writing';
+// Renders the entry card for a real handoff/session URL and hands off
+// to Driving on confirm.
 
 export function HandoffScreen({
   onEnter,
@@ -18,32 +14,36 @@ export function HandoffScreen({
   sessionId,
   joinToken,
   threadId,
-  channelHint,
+  delivery,
+  currentUrl,
   compact = false,
 }: {
   onEnter: () => void;
   onBack?: () => void;
-  sessionId?: string;
+  sessionId: string;
   joinToken?: string | null;
   threadId?: string;
-  channelHint?: string;
+  delivery?: HandoffRoute['delivery'];
+  currentUrl: string;
   compact?: boolean;
 }) {
   const rtc = useRtc();
-  const effectiveSession = sessionId || DEFAULT_SESSION;
-  const sess = parseSession(effectiveSession);
-  const app = HIFI_APPS[sess.app] || HIFI_APPS.discord;
-  const encoded = encodeURIComponent(effectiveSession);
-  const shownChannelHint = channelHint || DEFAULT_CHANNEL_HINT;
+  const sessionParts = sessionId.split(':');
+  const sess = parseSession(sessionId);
+  const appKey = delivery?.channel || sessionParts[2]?.trim() || '';
+  const appLabel = appKey || null;
+  const app = appKey
+    ? HIFI_APPS[appKey] || {
+        name: appKey,
+        bg: HIFI.surface2,
+        letter: appKey.slice(0, 1).toUpperCase() || '?',
+      }
+    : null;
+  const deliveryTarget = delivery?.target.trim() || null;
   const threadLabel = sess.threadId ? `thread ${sess.threadId.slice(-10)}` : null;
-  // The encoded session id is far too long to render inside a 390px URL
-  // pill. On compact phones show a short form with a literal "…" so the
-  // right edge is unambiguously contained inside the bar.
-  const shownUrl = compact
-    ? 'clawkietalkie.ai/?session=…'
-    : `clawkietalkie.ai/?session=${encoded}`;
+  const shownUrl = currentUrl || '';
 
-  // Single centered compact column wraps the fake browser bar AND the
+  // Single centered compact column wraps the browser bar AND the
   // content stack so nothing below renders wider than the column does.
   const columnStyle: CSSProperties = {
     width: '100%',
@@ -54,7 +54,7 @@ export function HandoffScreen({
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', color: HIFI.ink }}>
-      {/* fake browser bar — inside the same compact column as the content
+      {/* Browser bar — inside the same compact column as the content
           below, so its right edge can't overrun the session card. */}
       <div
         style={{
@@ -139,17 +139,6 @@ export function HandoffScreen({
           >
             CLAWKIE<span style={{ color: '#ff9e3b' }}>-TALKIE</span>
           </div>
-          <div
-            style={{
-              fontFamily: HIFI.fonts.mono,
-              fontSize: 10,
-              letterSpacing: 1.4,
-              color: HIFI.ink3,
-              marginBottom: compact ? 8 : 18,
-            }}
-          >
-            A WALKY-TALKY FOR YOUR BRAIN
-          </div>
         </div>
 
         <div
@@ -165,77 +154,72 @@ export function HandoffScreen({
             boxSizing: 'border-box',
           }}
         >
-          <div
-            style={{
-              fontFamily: HIFI.fonts.mono,
-              fontSize: 10,
-              letterSpacing: 1.6,
-              color: '#ff9e3b',
-              fontWeight: 700,
-              marginBottom: 14,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-            }}
-          >
-            <span
-              style={{
-                width: 6,
-                height: 6,
-                borderRadius: '50%',
-                background: '#ff9e3b',
-                animation: 'pulseDot 1.2s ease-in-out infinite',
-                boxShadow: '0 0 8px #ff9e3b',
-              }}
-            />
-            NEW SESSION
-          </div>
-
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20 }}>
-            <span
-              style={{
-                width: 44,
-                height: 44,
-                borderRadius: 10,
-                background: app.bg,
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: 'white',
-                fontSize: 20,
-                fontFamily: HIFI.fonts.sans,
-                fontWeight: 700,
-                flexShrink: 0,
-              }}
-            >
-              {app.letter}
-            </span>
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div
+            {app && (
+              <span
                 style={{
-                  fontFamily: HIFI.fonts.mono,
-                  fontSize: 10,
-                  letterSpacing: 1.4,
-                  color: HIFI.ink3,
-                  fontWeight: 700,
-                  marginBottom: 3,
-                }}
-              >
-                FROM {app.name.toUpperCase()}
-              </div>
-              <div
-                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: 10,
+                  background: app.bg,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'white',
+                  fontSize: 20,
                   fontFamily: HIFI.fonts.sans,
-                  fontSize: 17,
-                  fontWeight: 600,
-                  color: HIFI.ink,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
+                  fontWeight: 700,
+                  flexShrink: 0,
                 }}
               >
-                {shownChannelHint}
-              </div>
+                {app.letter}
+              </span>
+            )}
+            <div style={{ minWidth: 0, flex: 1 }}>
+              {app && (
+                <div
+                  style={{
+                    fontFamily: HIFI.fonts.mono,
+                    fontSize: 10,
+                    letterSpacing: 1.4,
+                    color: HIFI.ink3,
+                    fontWeight: 700,
+                    marginBottom: 3,
+                  }}
+                >
+                  FROM {appLabel?.toUpperCase()}
+                </div>
+              )}
+              {deliveryTarget && (
+                <div
+                  style={{
+                    fontFamily: HIFI.fonts.sans,
+                    fontSize: 17,
+                    fontWeight: 600,
+                    color: HIFI.ink,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {deliveryTarget}
+                </div>
+              )}
+              {!deliveryTarget && (
+                <div
+                  style={{
+                    fontFamily: HIFI.fonts.sans,
+                    fontSize: 14,
+                    fontWeight: 600,
+                    color: HIFI.ink,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {sessionId}
+                </div>
+              )}
               {threadLabel && (
                 <div
                   style={{
@@ -334,69 +318,8 @@ export function HandoffScreen({
             boxSizing: 'border-box',
           }}
         >
-          Anything you record will be linked back to this {app.name} conversation so you can
+          Anything you record will be linked back to this {appLabel ? `${appLabel} conversation` : 'session'} so you can
           pick up either side, any time.
-        </div>
-
-        {/* Status strip flows right after the explainer with a small fixed
-            gap. No more auto-margin dead zone — the footer feels connected
-            to the explainer above it, not stranded at the bottom. */}
-        <div
-          style={{
-            marginTop: compact ? 8 : 20,
-            paddingTop: compact ? 8 : 16,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 8,
-            minWidth: 0,
-          }}
-        >
-          <div
-            style={{
-              height: 1,
-              background: HIFI.stroke,
-              margin: '0 -4px',
-            }}
-          />
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              gap: 10,
-              fontFamily: HIFI.fonts.mono,
-              fontSize: 10,
-              letterSpacing: 1.2,
-              color: HIFI.ink2,
-              fontWeight: 700,
-              padding: '4px 2px 2px',
-            }}
-          >
-            <span
-              style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}
-            >
-              <span
-                style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: '50%',
-                  background: '#4ed29a',
-                  boxShadow: '0 0 8px #4ed29a',
-                  flexShrink: 0,
-                }}
-              />
-              <span
-                style={{
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                END-TO-END ENCRYPTED
-              </span>
-            </span>
-            <span style={{ color: HIFI.ink3, flexShrink: 0 }}>PHASE 0</span>
-          </div>
         </div>
       </div>
       </ScrollBody>

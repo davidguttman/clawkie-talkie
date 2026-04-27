@@ -24,6 +24,7 @@ export function DrivingScreen({
   compact = false,
   settings,
   sessionId,
+  hostPeerId,
   threadId,
 }: {
   accent?: AccentKey;
@@ -34,6 +35,7 @@ export function DrivingScreen({
   compact?: boolean;
   settings?: Settings;
   sessionId?: string;
+  hostPeerId?: string | null;
   threadId?: string;
 }) {
   const accentCfg = HIFI.accents[accent] || HIFI.accents.amber;
@@ -57,6 +59,7 @@ export function DrivingScreen({
   const {
     state,
     liveText,
+    isTranscribing,
     lastTurn,
     intensities,
     error,
@@ -149,11 +152,13 @@ export function DrivingScreen({
     state,
     stateColor,
     liveText,
+    isTranscribing,
     lastTurn,
     accentRec: accentCfg.rec,
   });
 
   const waveIntensities = isIdle ? idleIntensities : intensities;
+  const headerLabel = buildHeaderLabel({ sessionId, hostPeerId });
 
   return (
     <div
@@ -196,7 +201,7 @@ export function DrivingScreen({
             whiteSpace: 'nowrap',
           }}
         >
-          CLWK · f3c1 · discord
+          {headerLabel}
         </div>
         <div
           style={{
@@ -330,7 +335,7 @@ export function DrivingScreen({
 interface CaptionData {
   label: string;
   color: string;
-  text: string;
+  text: string | null;
   live: boolean;
 }
 
@@ -338,12 +343,14 @@ function pickCaption({
   state,
   stateColor,
   liveText,
+  isTranscribing,
   lastTurn,
   accentRec,
 }: {
   state: DrivingState;
   stateColor: string;
   liveText: string;
+  isTranscribing: boolean;
   lastTurn: { who: 'user' | 'ai'; text: string } | null;
   accentRec: string;
 }): CaptionData {
@@ -353,36 +360,56 @@ function pickCaption({
       color: accentRec,
       // liveText is populated from xAI's streaming `transcript.partial`
       // events — real words as they're spoken.
-      text: liveText || 'Listening…',
+      text: liveText || null,
       live: true,
     };
   }
   if (state === 'ai') {
-    return { label: 'AI · READING ALOUD', color: stateColor, text: liveText || '…', live: true };
+    return { label: 'AI · READING ALOUD', color: stateColor, text: liveText || null, live: true };
   }
   if (state === 'thinking') {
-    const transcribing = liveText === 'Transcribing…';
     return {
-      label: transcribing ? 'TRANSCRIBING · XAI' : 'THINKING',
+      label: isTranscribing ? 'TRANSCRIBING · XAI' : 'THINKING',
       color: stateColor,
-      text: liveText || '…',
-      live: transcribing,
+      text: liveText || null,
+      live: isTranscribing,
     };
   }
   if (lastTurn) {
     return {
       label: lastTurn.who === 'user' ? 'YOU · LAST' : 'AI · LAST',
       color: HIFI.ink3,
-      text: lastTurn.text || '—',
+      text: lastTurn.text || null,
       live: false,
     };
   }
   return {
     label: 'READY',
     color: HIFI.ink3,
-    text: 'Tap to start. Tap again to stop.',
+    text: null,
     live: false,
   };
+}
+
+function buildHeaderLabel({
+  sessionId,
+  hostPeerId,
+}: {
+  sessionId?: string;
+  hostPeerId?: string | null;
+}): string {
+  const parts: string[] = [];
+  if (sessionId) parts.push(compactValue(sessionId));
+  if (hostPeerId) parts.push(compactValue(hostPeerId));
+  const parsedApp = sessionId?.split(':')[2]?.trim();
+  if (parsedApp) parts.push(parsedApp);
+  return parts.join(' · ');
+}
+
+function compactValue(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= 12) return trimmed;
+  return `${trimmed.slice(0, 6)}…${trimmed.slice(-4)}`;
 }
 
 function Caption({
@@ -471,7 +498,7 @@ function Caption({
         }}
       >
         {caption.text}
-        {caption.live && (
+        {caption.live && caption.text && (
           <span
             style={{
               display: 'inline-block',
@@ -633,9 +660,11 @@ function FooterButton({
   onClick?: () => void;
   compact?: boolean;
 }) {
+  const disabled = !onClick;
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       style={{
         height: compact ? 50 : 60,
         width: '100%',
@@ -645,8 +674,8 @@ function FooterButton({
         borderRadius: 14,
         border: `1px solid ${HIFI.stroke}`,
         background: HIFI.surface,
-        color: HIFI.ink,
-        cursor: onClick ? 'pointer' : 'default',
+        color: disabled ? HIFI.ink4 : HIFI.ink,
+        cursor: disabled ? 'default' : 'pointer',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -658,6 +687,7 @@ function FooterButton({
         transition: 'background 0.2s, border-color 0.2s',
         appearance: 'none',
         WebkitAppearance: 'none',
+        opacity: disabled ? 0.55 : 1,
       }}
     >
       <span style={{ fontSize: 18, fontFamily: HIFI.fonts.sans }}>{icon}</span>

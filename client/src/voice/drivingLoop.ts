@@ -37,12 +37,19 @@ export interface Turn {
   text: string;
 }
 
+interface CurrentTurnTranscript {
+  active: boolean;
+  sttDone: boolean;
+  text: string;
+}
+
 const WAVE_BARS = 28;
 const IDLE_INTENSITIES = Array(WAVE_BARS).fill(0.12);
 
 export interface DrivingLoop {
   state: DrivingState;
   liveText: string;
+  isTranscribing: boolean;
   lastTurn: Turn | null;
   intensities: number[];
   error: string | null;
@@ -82,7 +89,11 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     side: [] as DrivingSideEffect[],
   });
 
-  const [liveText, setLiveText] = useState('');
+  const [currentTurnTranscript, setCurrentTurnTranscript] = useState<CurrentTurnTranscript>({
+    active: false,
+    sttDone: false,
+    text: '',
+  });
   const [intensities, setIntensities] = useState<number[]>(() => [...IDLE_INTENSITIES]);
 
   const sttRef = useRef<STTHandle | null>(null);
@@ -110,9 +121,17 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
         const isFinal = !!(msg as { is_final?: boolean }).is_final;
         if (isFinal) {
           accumulatedRef.current.push(text.trim());
-          setLiveText(accumulatedRef.current.join(' ').trim());
+          setCurrentTurnTranscript({
+            active: true,
+            sttDone: false,
+            text: accumulatedRef.current.join(' ').trim(),
+          });
         } else {
-          setLiveText(composeTranscript(accumulatedRef.current, text));
+          setCurrentTurnTranscript({
+            active: true,
+            sttDone: false,
+            text: composeTranscript(accumulatedRef.current, text),
+          });
         }
         return;
       }
@@ -122,16 +141,18 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
         const finalText = text || fallback;
         if (!finalText) {
           accumulatedRef.current = [];
+          setCurrentTurnTranscript({ active: false, sttDone: false, text: '' });
           dispatch({ type: 'stt.error', reason: 'empty_transcript' });
           return;
         }
         accumulatedRef.current = [];
-        setLiveText(finalText);
+        setCurrentTurnTranscript({ active: true, sttDone: true, text: finalText });
         dispatch({ type: 'stt.done', text: finalText });
         return;
       }
       if (msg.t === 'stt.error') {
         const reason = typeof msg.message === 'string' ? msg.message : 'stt_error';
+        setCurrentTurnTranscript({ active: false, sttDone: false, text: '' });
         dispatch({ type: 'stt.error', reason });
         return;
       }
@@ -163,7 +184,7 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     if (!side.length) return;
     for (const s of side) {
       if (s.kind === 'startMic') {
-        runStartMic(rtcRef, sttRef, setLiveText, dispatch);
+        runStartMic(rtcRef, sttRef, dispatch);
       }
       else if (s.kind === 'stopMic') runStopMic(sttRef);
       else if (s.kind === 'cancelMic') runCancelMic(sttRef);
@@ -226,7 +247,7 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
         return;
       }
       accumulatedRef.current = [];
-      setLiveText('');
+      setCurrentTurnTranscript({ active: true, sttDone: false, text: '' });
     }
     dispatch({ type: 'tap' });
   }, [ctx.state]);
@@ -242,11 +263,12 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
         ? { who: 'user', text: ctx.lastUserText }
         : null;
 
-  const liveCaption = displayedCaptionText(ctx, liveText);
+  const liveCaption = displayedCaptionText(ctx, currentTurnTranscript.text);
 
   return {
     state: ctx.state,
     liveText: liveCaption,
+    isTranscribing: isCurrentTurnTranscribing(ctx.state, currentTurnTranscript),
     lastTurn,
     intensities,
     error: ctx.error,
@@ -263,7 +285,6 @@ type Dispatch = (e: DrivingEvent) => void;
 function runStartMic(
   rtcRef: React.MutableRefObject<DrivingLoopOptions['rtc']>,
   sttRef: React.MutableRefObject<STTHandle | null>,
-  setLiveText: (t: string) => void,
   dispatch: Dispatch,
 ): void {
   void (async () => {
@@ -350,8 +371,15 @@ function runCancelReply(
 
 export function displayedCaptionText(ctx: DrivingContext, liveText: string): string {
   if (ctx.state === 'ai') return ctx.liveReplyText;
-  if (ctx.state === 'thinking') return liveText || ctx.lastUserText;
+  if (ctx.state === 'thinking') return liveText;
   return liveText;
+}
+
+export function isCurrentTurnTranscribing(
+  state: DrivingState,
+  transcript: Pick<CurrentTurnTranscript, 'active' | 'sttDone'>,
+): boolean {
+  return state === 'thinking' && transcript.active && !transcript.sttDone;
 }
 
 export function composeTranscript(finals: string[], current: string): string {

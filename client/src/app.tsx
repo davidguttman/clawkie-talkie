@@ -111,33 +111,50 @@ export function App() {
   // mockup. Threshold matches the MobileShell switch so they're never out of
   // sync.
   const compact = isNarrow;
+  const currentSessionId = openSession || initial.sessionId;
+  const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
 
   const screenContent = (
     <>
       {screen === 'handoff' && (
-        <HandoffScreen
-          onEnter={() => go('driving')}
-          onBack={() => go('driving')}
-          joinToken={initial.hostPeerId}
-          sessionId={initial.sessionId}
-          threadId={initial.threadId}
-          compact={compact}
-        />
+        initial.sessionId ? (
+          <HandoffScreen
+            onEnter={() => go('driving')}
+            onBack={() => go('driving')}
+            joinToken={initial.hostPeerId}
+            sessionId={initial.sessionId}
+            threadId={initial.threadId}
+            delivery={initial.handoff?.delivery}
+            currentUrl={currentUrl}
+            compact={compact}
+          />
+        ) : (
+          <ErrorScreen
+            kind="bad_session"
+            onDismiss={() => go('driving')}
+            onRetry={() => go('driving')}
+            onBack={() => go('driving')}
+          />
+        )
       )}
       {screen === 'driving' && (
         <DrivingScreen
           accent="amber"
           fontMode="mono"
-          onReplay={() => {
-            const fallback = 'agent:main:discord:1495266157463208138:1766284491';
-            setOpenSession(openSession || fallback);
-            go('transcript');
-          }}
+          onReplay={
+            currentSessionId
+              ? () => {
+                  setOpenSession(currentSessionId);
+                  go('transcript');
+                }
+              : undefined
+          }
           onHistory={() => go('history')}
           onSettings={() => go('settings')}
           compact={compact}
           settings={settings}
           sessionId={initial.sessionId}
+          hostPeerId={initial.hostPeerId}
           threadId={initial.threadId}
         />
       )}
@@ -145,11 +162,20 @@ export function App() {
         <HistoryScreen onBack={() => go('driving')} compact={compact} />
       )}
       {screen === 'transcript' && (
-        <TranscriptScreen
-          sessionId={openSession}
-          onBack={() => go('driving')}
-          compact={compact}
-        />
+        currentSessionId ? (
+          <TranscriptScreen
+            sessionId={currentSessionId}
+            onBack={() => go('driving')}
+            compact={compact}
+          />
+        ) : (
+          <ErrorScreen
+            kind="bad_session"
+            onDismiss={() => go('driving')}
+            onRetry={() => go('driving')}
+            onBack={() => go('driving')}
+          />
+        )
       )}
       {screen === 'settings' && (
         <SettingsScreen
@@ -179,6 +205,7 @@ export function App() {
         onScreen={go}
         errorKind={errorKind}
         onErrorKind={goErrorKind}
+        canOpenTranscript={!!currentSessionId}
       />
       <HiFiPhone>{screenContent}</HiFiPhone>
     </div>
@@ -236,11 +263,13 @@ function SideNav({
   onScreen,
   errorKind,
   onErrorKind,
+  canOpenTranscript,
 }: {
   screen: ScreenId;
   onScreen: (s: ScreenId) => void;
   errorKind: ErrorKind;
   onErrorKind: (k: ErrorKind) => void;
+  canOpenTranscript: boolean;
 }) {
   const screens: { id: ScreenId; label: string; hint: string }[] = [
     { id: 'handoff', label: 'Handoff landing', hint: 'from Discord link' },
@@ -264,18 +293,6 @@ function SideNav({
       <div
         style={{
           fontFamily: HIFI.fonts.mono,
-          fontSize: 11,
-          letterSpacing: 2,
-          color: HIFI.ink3,
-          fontWeight: 700,
-          marginBottom: 6,
-        }}
-      >
-        PHASE 0 BUILD
-      </div>
-      <div
-        style={{
-          fontFamily: HIFI.fonts.mono,
           fontSize: 24,
           fontWeight: 600,
           color: HIFI.ink,
@@ -284,16 +301,6 @@ function SideNav({
         }}
       >
         Clawkie<span style={{ color: HIFI.accents.amber.rec }}>-Talkie</span>
-      </div>
-      <div
-        style={{
-          fontFamily: HIFI.fonts.sans,
-          fontSize: 13,
-          color: HIFI.ink2,
-          lineHeight: 1.55,
-        }}
-      >
-        A walky-talky for your brain. Shell port is live; voice loop wires up in Phase 2.
       </div>
 
       <div style={{ marginTop: 26, paddingTop: 16, borderTop: `1px solid ${HIFI.stroke}` }}>
@@ -312,10 +319,14 @@ function SideNav({
         {screens.map((s) => {
           const on = screen === s.id;
           const accent = HIFI.accents.amber.rec;
+          const disabled = s.id === 'transcript' && !canOpenTranscript;
           return (
             <button
               key={s.id}
-              onClick={() => onScreen(s.id)}
+              onClick={() => {
+                if (!disabled) onScreen(s.id);
+              }}
+              disabled={disabled}
               style={{
                 display: 'block',
                 width: '100%',
@@ -326,10 +337,11 @@ function SideNav({
                 background: on ? HIFI.surface2 : 'transparent',
                 border: `1px solid ${on ? HIFI.strokeStrong : 'transparent'}`,
                 borderLeft: `3px solid ${on ? accent : 'transparent'}`,
-                color: on ? HIFI.ink : HIFI.ink2,
-                cursor: 'pointer',
+                color: disabled ? HIFI.ink4 : on ? HIFI.ink : HIFI.ink2,
+                cursor: disabled ? 'default' : 'pointer',
                 fontFamily: 'inherit',
                 boxShadow: on ? `inset 0 0 24px ${accent}18` : 'none',
+                opacity: disabled ? 0.55 : 1,
               }}
             >
               <div
@@ -337,7 +349,7 @@ function SideNav({
                   fontFamily: HIFI.fonts.sans,
                   fontSize: 12,
                   fontWeight: on ? 700 : 500,
-                  color: on ? HIFI.ink : HIFI.ink2,
+                  color: disabled ? HIFI.ink4 : on ? HIFI.ink : HIFI.ink2,
                 }}
               >
                 {s.label}
@@ -346,7 +358,7 @@ function SideNav({
                 style={{
                   fontFamily: HIFI.fonts.mono,
                   fontSize: 9,
-                  color: on ? HIFI.ink2 : HIFI.ink3,
+                  color: disabled ? HIFI.ink4 : on ? HIFI.ink2 : HIFI.ink3,
                   letterSpacing: 0.6,
                   marginTop: 2,
                 }}

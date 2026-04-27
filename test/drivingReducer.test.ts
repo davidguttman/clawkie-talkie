@@ -8,7 +8,11 @@ import {
   reduce,
   type DrivingContext,
 } from '../client/src/voice/drivingReducer';
-import { composeTranscript, displayedCaptionText } from '../client/src/voice/drivingLoop';
+import {
+  composeTranscript,
+  displayedCaptionText,
+  isCurrentTurnTranscribing,
+} from '../client/src/voice/drivingLoop';
 
 const idle: DrivingContext = { ...initialContext };
 const recording: DrivingContext = { ...initialContext, state: 'recording' };
@@ -146,13 +150,22 @@ describe('displayedCaptionText', () => {
     );
   });
 
-  it('keeps the final user transcript visible while waiting for the AI reply', () => {
+  it('does not reuse a previous turn transcript while a new turn is transcribing', () => {
     expect(
       displayedCaptionText(
         { ...initialContext, state: 'thinking', lastUserText: 'Oh my fucking god' },
         '',
       ),
-    ).toBe('Oh my fucking god');
+    ).toBe('');
+  });
+
+  it('keeps the current final user transcript visible while waiting for the AI reply', () => {
+    expect(
+      displayedCaptionText(
+        { ...initialContext, state: 'thinking', lastUserText: 'previous turn' },
+        'current turn',
+      ),
+    ).toBe('current turn');
   });
 
   it('switches to the AI reply text only once the AI state starts', () => {
@@ -162,6 +175,35 @@ describe('displayedCaptionText', () => {
         'user words',
       ),
     ).toBe('ai words');
+  });
+});
+
+describe('isCurrentTurnTranscribing', () => {
+  it('stays true while a current thinking turn is waiting for stt.done', () => {
+    expect(
+      isCurrentTurnTranscribing('thinking', {
+        active: true,
+        sttDone: false,
+      }),
+    ).toBe(true);
+  });
+
+  it('turns false after current stt.done', () => {
+    expect(
+      isCurrentTurnTranscribing('thinking', {
+        active: true,
+        sttDone: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('does not infer transcribing from previous-turn text', () => {
+    expect(
+      isCurrentTurnTranscribing('thinking', {
+        active: false,
+        sttDone: false,
+      }),
+    ).toBe(false);
   });
 });
 
