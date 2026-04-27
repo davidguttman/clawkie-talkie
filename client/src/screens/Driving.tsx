@@ -13,8 +13,6 @@ import type { Settings } from '../storage';
 // captures mic PCM and plays daemon-streamed TTS audio; STT, reply
 // generation, and TTS all terminate on the daemon side.
 
-const WAVE_BARS = 28;
-
 export function DrivingScreen({
   accent = 'amber',
   fontMode = 'mono',
@@ -82,31 +80,9 @@ export function DrivingScreen({
     };
   }, []);
 
-  // Ambient idle waveform drift — keeps the panel feeling alive when no
-  // turn is in flight. The driving loop owns intensities for non-idle
-  // states.
-  const [idleIntensities, setIdleIntensities] = useState<number[]>(() =>
-    Array(WAVE_BARS).fill(0.12),
-  );
-  useEffect(() => {
-    if (state !== 'idle') return;
-    let raf = 0;
-    const tick = (t: number) => {
-      const next = Array.from({ length: WAVE_BARS }, (_, i) => {
-        const v = 0.16 + Math.sin(t / 900 + i * 0.55) * 0.05;
-        return Math.max(0.08, Math.min(1, Math.abs(v)));
-      });
-      setIdleIntensities(next);
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [state]);
-
   const isRec = state === 'recording';
   const isAI = state === 'ai';
   const isThink = state === 'thinking';
-  const isIdle = state === 'idle';
 
   const stateColor = isRec
     ? accentCfg.rec
@@ -157,22 +133,29 @@ export function DrivingScreen({
     accentRec: accentCfg.rec,
   });
 
-  const waveIntensities = isIdle ? idleIntensities : intensities;
   const headerLabel = buildHeaderLabel({ sessionId, hostPeerId });
+  const rowGap = compact ? 8 : 10;
+  const waveRegionSize = compact ? 'clamp(96px, 20%, 138px)' : 'clamp(112px, 21%, 156px)';
+  const pttButtonSize = compact
+    ? 'clamp(164px, min(52vw, 29dvh), 208px)'
+    : 'clamp(188px, min(42vw, 30dvh), 208px)';
 
   return (
     <div
       style={{
         height: '100%',
-        display: 'flex',
-        flexDirection: 'column',
+        display: 'grid',
+        gridTemplateRows: `auto minmax(0, 1fr) minmax(0, ${waveRegionSize}) auto auto`,
+        rowGap,
         padding: compact ? `8px ${sidePad}px 10px` : `12px ${sidePad}px 14px`,
         color: HIFI.ink,
         fontFamily: baseFont,
         minWidth: 0,
+        minHeight: 0,
         width: '100%',
         boxSizing: 'border-box',
         maxWidth: '100%',
+        overflow: 'hidden',
       }}
     >
       {/* header — full hi-fi layout in both compact and desktop. Status
@@ -181,10 +164,10 @@ export function DrivingScreen({
         style={{
           display: 'flex',
           alignItems: 'center',
-          paddingBottom: 10,
           gap: compact ? 8 : 10,
           minWidth: 0,
           width: '100%',
+          minHeight: 0,
         }}
       >
         <div
@@ -263,45 +246,50 @@ export function DrivingScreen({
         )}
       </div>
 
-      {/* caption — direct stack, no card wrapper. */}
-      <Caption
-        caption={caption}
-        baseFont={baseFont}
-        error={error}
-        daemonConnected={daemonConnected}
-        hasRtcClient={rtc.hasClient}
-        rtcStatus={rtc.status}
-        compact={compact}
-      />
-      {/* divider + waveform sit below the transcript */}
+      {/* caption — bounded so live text scrolls instead of moving controls. */}
+      <div style={{ minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
+        <Caption
+          caption={caption}
+          baseFont={baseFont}
+          error={error}
+          daemonConnected={daemonConnected}
+          hasRtcClient={rtc.hasClient}
+          rtcStatus={rtc.status}
+          compact={compact}
+        />
+      </div>
+      {/* waveform keeps a stable visual band below the transcript. */}
       <div
         style={{
-          marginTop: 12,
-          paddingTop: 12,
+          height: '100%',
+          paddingTop: compact ? 8 : 10,
           borderTop: `1px solid ${HIFI.stroke}`,
           display: 'flex',
+          alignItems: 'center',
           justifyContent: 'center',
           minWidth: 0,
+          minHeight: 0,
+          overflow: 'hidden',
         }}
       >
         <LiveWave
-          intensities={waveIntensities}
+          intensities={intensities}
           color={stateColor}
           width="100%"
-          height={34}
+          height={compact ? 30 : 34}
         />
       </div>
 
-      {/* BIG BUTTON */}
+      {/* BIG BUTTON — kept in a bottom row so transcript growth cannot move it. */}
       <div
         style={{
-          flex: 1,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           position: 'relative',
-          minHeight: 200,
-          padding: '12px 0',
+          minHeight: 0,
+          padding: compact ? '8px 0 10px' : '10px 0 14px',
+          overflow: 'visible',
         }}
       >
         <PTTButton
@@ -311,6 +299,7 @@ export function DrivingScreen({
           stateGlow={stateGlow}
           label={btnLabel}
           accentRec={accentCfg.rec}
+          size={pttButtonSize}
         />
       </div>
 
@@ -321,7 +310,6 @@ export function DrivingScreen({
           display: 'grid',
           gridTemplateColumns: '1fr 1fr',
           gap: 8,
-          marginTop: 8,
           minWidth: 0,
         }}
       >
@@ -449,10 +437,17 @@ function Caption({
     el.scrollTop = el.scrollHeight;
   }, [caption.text]);
 
-  const transcriptMaxHeight = compact ? 128 : 150;
-
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        minWidth: 0,
+        minHeight: 0,
+        height: '100%',
+        overflow: 'hidden',
+      }}
+    >
       <div
         style={{
           fontFamily: HIFI.fonts.mono,
@@ -464,6 +459,7 @@ function Caption({
           display: 'flex',
           alignItems: 'center',
           gap: 6,
+          flexShrink: 0,
         }}
       >
         {caption.live && (
@@ -490,8 +486,8 @@ function Caption({
           fontWeight: 400,
           fontFamily: baseFont,
           wordBreak: 'break-word',
-          maxHeight: transcriptMaxHeight,
-          minHeight: compact ? 72 : 96,
+          flex: '1 1 auto',
+          minHeight: 0,
           overflowY: 'auto',
           paddingRight: 10,
           borderRight: `1px solid ${HIFI.stroke}`,
@@ -523,8 +519,11 @@ function Caption({
             fontWeight: 600,
             minWidth: 0,
             maxWidth: '100%',
+            maxHeight: compact ? 32 : 36,
+            overflow: 'hidden',
             overflowWrap: 'anywhere',
             wordBreak: 'break-word',
+            flexShrink: 0,
           }}
         >
           {errorMessage}
@@ -557,6 +556,7 @@ function PTTButton({
   stateGlow,
   label,
   accentRec: _accentRec,
+  size,
 }: {
   onTap: () => void;
   state: DrivingState;
@@ -564,6 +564,7 @@ function PTTButton({
   stateGlow: string;
   label: string;
   accentRec: string;
+  size: string;
 }) {
   const [pressed, setPressed] = useState(false);
   const clickHandledByPointerRef = useRef(false);
@@ -608,8 +609,10 @@ function PTTButton({
       disabled={disabled}
       style={{
         position: 'relative',
-        width: 208,
-        height: 208,
+        width: size,
+        height: size,
+        aspectRatio: '1 / 1',
+        flexShrink: 0,
         borderRadius: '50%',
         border: 'none',
         cursor: disabled ? 'default' : 'pointer',
