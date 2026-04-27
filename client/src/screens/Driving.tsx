@@ -135,7 +135,6 @@ export function DrivingScreen({
 
   const headerLabel = buildHeaderLabel({ sessionId, hostPeerId });
   const rowGap = compact ? 8 : 10;
-  const waveRegionSize = compact ? 'clamp(96px, 20%, 138px)' : 'clamp(112px, 21%, 156px)';
   const pttButtonSize = compact
     ? 'clamp(164px, min(52vw, 29dvh), 208px)'
     : 'clamp(188px, min(42vw, 30dvh), 208px)';
@@ -145,7 +144,12 @@ export function DrivingScreen({
       style={{
         height: '100%',
         display: 'grid',
-        gridTemplateRows: `auto minmax(0, 1fr) minmax(0, ${waveRegionSize}) auto auto`,
+        // Caption (1fr) and the voice-control area (1.2fr) split free
+        // space proportionally, so the PTT button gets balanced breathing
+        // room above and below regardless of transcript length. Rows are
+        // fr-based, not content-based, which is why streaming text in the
+        // bounded caption cannot push the button around.
+        gridTemplateRows: `auto minmax(0, 1fr) auto minmax(0, 1.2fr) auto`,
         rowGap,
         padding: compact ? `8px ${sidePad}px 10px` : `12px ${sidePad}px 14px`,
         color: HIFI.ink,
@@ -246,8 +250,18 @@ export function DrivingScreen({
         )}
       </div>
 
-      {/* caption — bounded so live text scrolls instead of moving controls. */}
-      <div style={{ minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
+      {/* caption — bounded so live text scrolls instead of moving controls.
+          Bottom border frames the transcript and visually separates it
+          from the voice-control area (waveform + PTT button) below. */}
+      <div
+        style={{
+          minWidth: 0,
+          minHeight: 0,
+          overflow: 'hidden',
+          paddingBottom: compact ? 8 : 10,
+          borderBottom: `1px solid ${HIFI.stroke}`,
+        }}
+      >
         <Caption
           caption={caption}
           baseFont={baseFont}
@@ -258,12 +272,10 @@ export function DrivingScreen({
           compact={compact}
         />
       </div>
-      {/* waveform keeps a stable visual band below the transcript. */}
+      {/* waveform sits at its natural height directly above the PTT
+          button so the two read as one voice-control unit. */}
       <div
         style={{
-          height: '100%',
-          paddingTop: compact ? 8 : 10,
-          borderTop: `1px solid ${HIFI.stroke}`,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -280,7 +292,9 @@ export function DrivingScreen({
         />
       </div>
 
-      {/* BIG BUTTON — kept in a bottom row so transcript growth cannot move it. */}
+      {/* BIG BUTTON — centered inside a flexible row so the breathing
+          room above (between waveform and button) and below (between
+          button and footer) is balanced by the grid, not hard-coded. */}
       <div
         style={{
           display: 'flex',
@@ -288,7 +302,6 @@ export function DrivingScreen({
           justifyContent: 'center',
           position: 'relative',
           minHeight: 0,
-          padding: compact ? '8px 0 10px' : '10px 0 14px',
           overflow: 'visible',
         }}
       >
