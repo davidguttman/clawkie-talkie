@@ -7,7 +7,20 @@ import { TranscriptScreen } from './screens/Transcript';
 import { SettingsScreen } from './screens/Settings';
 import { ErrorScreen, type ErrorKind } from './screens/ErrorScreen';
 import { RtcProvider, useRtc } from './rtc/RtcContext';
-import { loadSettings, saveSettings, type Settings } from './storage';
+import {
+  latestAssistantText,
+  loadSettings,
+  loadTranscriptSession,
+  saveSettings,
+  type Settings,
+} from './storage';
+import { replayAssistantReply } from './replay';
+import {
+  canSpeakReplayText,
+  getLastBufferedReplyAudio,
+  playBufferedReplyAudio,
+  speakReplayText,
+} from './voice/tts';
 import { parseHandoffUrl, type HandoffRoute } from './voice/handoffUrl';
 
 type ScreenId = 'driving' | 'history' | 'transcript' | 'settings' | 'error';
@@ -74,7 +87,24 @@ export function App() {
   }, []);
 
   const compact = isNarrow;
-  const currentSessionId = openSession || initial.sessionId;
+  const currentSessionId =
+    screen === 'driving' ? initial.sessionId : openSession || initial.sessionId;
+
+  const replayLastReply = useCallback(async () => {
+    const session = currentSessionId ? loadTranscriptSession(currentSessionId) : null;
+    try {
+      const result = await replayAssistantReply({
+        audio: getLastBufferedReplyAudio(),
+        text: latestAssistantText(session),
+        canSpeakText: canSpeakReplayText(),
+        playAudio: playBufferedReplyAudio,
+        speakText: speakReplayText,
+      });
+      return result.message;
+    } catch {
+      return 'Replay unavailable on this browser';
+    }
+  }, [currentSessionId]);
 
   const screenContent = (
     <>
@@ -84,10 +114,7 @@ export function App() {
           fontMode="mono"
           onReplay={
             currentSessionId
-              ? () => {
-                  setOpenSession(currentSessionId);
-                  go('transcript');
-                }
+              ? replayLastReply
               : undefined
           }
           onHistory={() => go('history')}
@@ -100,7 +127,14 @@ export function App() {
         />
       )}
       {screen === 'history' && (
-        <HistoryScreen onBack={() => go('driving')} compact={compact} />
+        <HistoryScreen
+          onBack={() => go('driving')}
+          onOpenSession={(sessionId) => {
+            setOpenSession(sessionId);
+            go('transcript');
+          }}
+          compact={compact}
+        />
       )}
       {screen === 'transcript' && (
         currentSessionId ? (
@@ -108,6 +142,7 @@ export function App() {
             sessionId={currentSessionId}
             onBack={() => go('driving')}
             compact={compact}
+            settings={settings}
           />
         ) : (
           <ErrorScreen

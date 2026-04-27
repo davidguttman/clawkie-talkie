@@ -37,7 +37,7 @@ export function DrivingScreen({
 }: {
   accent?: AccentKey;
   fontMode?: 'mono' | 'sans';
-  onReplay?: () => void;
+  onReplay?: () => string | Promise<string>;
   onHistory?: () => void;
   onSettings?: () => void;
   compact?: boolean;
@@ -48,6 +48,7 @@ export function DrivingScreen({
 }) {
   const accentCfg = HIFI.accents[accent] || HIFI.accents.amber;
   const debugMode = useDebugMode();
+  const [replayNotice, setReplayNotice] = useState<string | null>(null);
 
   const rtc = useRtc();
 
@@ -55,6 +56,7 @@ export function DrivingScreen({
     ttsRate: settings?.speed ?? 1.05,
     sessionId,
     threadId,
+    hostPeerId,
     rtc: {
       status: rtc.status,
       hasClient: rtc.hasClient,
@@ -161,8 +163,8 @@ export function DrivingScreen({
         // fr-based, not content-based, which is why streaming text in the
         // bounded caption cannot push the button around.
         gridTemplateRows: debugMode
-          ? `auto minmax(0, 0.9fr) auto minmax(0, 1fr) auto auto`
-          : `auto minmax(0, 1fr) auto minmax(0, 1.2fr) auto`,
+          ? `auto minmax(0, 0.9fr) auto minmax(0, 1fr) auto auto auto`
+          : `auto minmax(0, 1fr) auto minmax(0, 1.2fr) auto auto`,
         rowGap,
         padding: compact ? `8px ${sidePad}px 10px` : `12px ${sidePad}px 14px`,
         color: HIFI.ink,
@@ -348,9 +350,44 @@ export function DrivingScreen({
           minWidth: 0,
         }}
       >
-        <FooterButton icon="↺" label="REPLAY" onClick={onReplay} compact={compact} />
+        <FooterButton
+          icon="↺"
+          label="REPLAY"
+          onClick={
+            onReplay
+              ? async () => {
+                  const message = await onReplay();
+                  setReplayNotice(message);
+                }
+              : undefined
+          }
+          compact={compact}
+        />
         <FooterButton icon="≡" label="HISTORY" onClick={onHistory} compact={compact} />
       </div>
+      {replayNotice && <ReplayNotice message={replayNotice} compact={compact} />}
+    </div>
+  );
+}
+
+function ReplayNotice({ message, compact }: { message: string; compact: boolean }) {
+  return (
+    <div
+      role="status"
+      style={{
+        marginTop: compact ? -2 : 0,
+        minWidth: 0,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        fontFamily: HIFI.fonts.mono,
+        fontSize: 10,
+        letterSpacing: 1,
+        color: HIFI.ink3,
+        textAlign: 'center',
+      }}
+    >
+      {message.toUpperCase()}
     </div>
   );
 }
