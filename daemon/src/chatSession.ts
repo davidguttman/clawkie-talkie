@@ -23,9 +23,8 @@ import type { ChatOptions, ChatResult } from './types.js';
 const execAsync = promisify(exec);
 
 const VOICE_REPLY_GUIDANCE =
-  'Preserve the existing OpenClaw session agent identity and personality. ' +
   'Your reply will be turned back into a voice message for the user, so keep it concise ' +
-  'and read-aloud friendly: one or two short spoken sentences. Avoid markdown, lists, and code blocks.';
+  'by default but complete enough when needed, and read-aloud friendly. Avoid markdown, lists, and code blocks.';
 
 const RAW_STT_GUIDANCE =
   'The following is a raw speech-to-text transcript from the user. It may contain ' +
@@ -195,7 +194,7 @@ async function runOpenClawTurn(opts: {
 }
 
 export function buildAgentTurnMessage(userText: string): string {
-  return `${RAW_STT_GUIDANCE}\n\nRaw transcript:\n${userText}\n\n${VOICE_REPLY_GUIDANCE}`;
+  return `${RAW_STT_GUIDANCE}\n\n<raw-stt-transcript>\n${userText}\n</raw-stt-transcript>\n\n${VOICE_REPLY_GUIDANCE}`;
 }
 
 async function resolveOpenClawSessionId(opts: {
