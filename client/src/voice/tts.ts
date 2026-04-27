@@ -93,6 +93,7 @@ export interface TTSHandle {
 
 export function getLastBufferedReplyAudio(): BufferedReplyAudio | null {
   if (!lastBufferedReplyAudio) return null;
+  if (lastBufferedReplyAudio.kind === 'blob') return lastBufferedReplyAudio;
   return {
     ...lastBufferedReplyAudio,
     chunks: lastBufferedReplyAudio.chunks.map((chunk) => chunk.slice(0)),
@@ -123,6 +124,43 @@ export function speakReplayText(text: string): Promise<void> {
 }
 
 export function playBufferedReplyAudio(audio: BufferedReplyAudio): Promise<void> {
+  if (audio.kind === 'blob') return playBufferedBlobAudio(audio.blob, audio.mimeType);
+  return playBufferedPcmAudio(audio);
+}
+
+function playBufferedBlobAudio(blob: Blob, mimeType: string): Promise<void> {
+  if (typeof Audio === 'undefined' || typeof URL === 'undefined') {
+    return Promise.reject(new Error('audio_unsupported'));
+  }
+  return new Promise((resolve, reject) => {
+    let url = '';
+    try {
+      url = URL.createObjectURL(new Blob([blob], { type: mimeType || blob.type }));
+      const el = new Audio(url);
+      el.setAttribute('playsinline', 'true');
+      el.onended = () => {
+        URL.revokeObjectURL(url);
+        resolve();
+      };
+      el.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error('audio_replay_failed'));
+      };
+      const result = el.play();
+      if (result && typeof result.catch === 'function') {
+        result.catch((err) => {
+          URL.revokeObjectURL(url);
+          reject(err);
+        });
+      }
+    } catch (err) {
+      if (url) URL.revokeObjectURL(url);
+      reject(err);
+    }
+  });
+}
+
+function playBufferedPcmAudio(audio: Extract<BufferedReplyAudio, { kind: 'pcm' }>): Promise<void> {
   const audioCtx = getSharedAudioContext();
   if (!audioCtx || audio.chunks.length === 0) return Promise.reject(new Error('audio_unsupported'));
   void resumeAudioContext(audioCtx);
@@ -374,24 +412,13 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
     sampleRate: DEFAULT_SAMPLE_RATE,
     started: false,
     drainTimer: null as ReturnType<typeof setTimeout> | null,
+    remoteRecorder: null as RemoteReplyRecorder | null,
     rate: opts.rate && Number.isFinite(opts.rate) ? Math.max(0.5, Math.min(2, opts.rate)) : 1,
     replayChunks: [] as ArrayBuffer[],
     replayBytes: 0,
   };
 
-  const finish = (err?: string) => {
-    if (state.finished) return;
-    state.finished = true;
-    if (err && !state.error) state.error = err;
-    if (!err && !state.stopped && state.replayChunks.length > 0) {
-      lastBufferedReplyAudio = {
-        sampleRate: state.sampleRate,
-        rate: state.rate,
-        chunks: state.replayChunks.map((chunk) => chunk.slice(0)),
-        byteLength: state.replayBytes,
-        createdAt: Date.now(),
-      };
-    }
+  const finishCleanup = () => {
     if (state.drainTimer) {
       clearTimeout(state.drainTimer);
       state.drainTimer = null;
@@ -417,6 +444,38 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
     detachControl();
     detachBinary();
     resolveDone();
+  };
+
+  const finish = (err?: string) => {
+    if (state.finished) return;
+    state.finished = true;
+    if (err && !state.error) state.error = err;
+    const remoteRecorder = state.remoteRecorder;
+    state.remoteRecorder = null;
+    if (remoteRecorder && (err || state.stopped)) {
+      remoteRecorder.cancel();
+    }
+    if (!err && !state.stopped && remoteRecorder) {
+      remoteRecorder.stop().then(
+        (audio) => {
+          if (audio) lastBufferedReplyAudio = audio;
+          finishCleanup();
+        },
+        () => finishCleanup(),
+      );
+      return;
+    }
+    if (!err && !state.stopped && state.replayChunks.length > 0) {
+      lastBufferedReplyAudio = {
+        kind: 'pcm',
+        sampleRate: state.sampleRate,
+        rate: state.rate,
+        chunks: state.replayChunks.map((chunk) => chunk.slice(0)),
+        byteLength: state.replayBytes,
+        createdAt: Date.now(),
+      };
+    }
+    finishCleanup();
   };
 
   const scheduleDrainFinish = () => {
@@ -458,6 +517,8 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
       state.started = true;
       state.replayChunks = [];
       state.replayBytes = 0;
+      state.remoteRecorder?.cancel();
+      state.remoteRecorder = startRemoteReplyRecorder(attachedRemoteStream);
       const sr = typeof msg.sample_rate === 'number' ? msg.sample_rate : DEFAULT_SAMPLE_RATE;
       initAudio(sr);
       return;
@@ -504,6 +565,75 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
       return state.analyser;
     },
   };
+}
+
+interface RemoteReplyRecorder {
+  stop(): Promise<BufferedReplyAudio | null>;
+  cancel(): void;
+}
+
+function startRemoteReplyRecorder(stream: MediaStream | null): RemoteReplyRecorder | null {
+  if (!stream || typeof MediaRecorder === 'undefined') return null;
+  if (!stream.getAudioTracks().some((track) => track.readyState === 'live')) return null;
+  try {
+    const mimeType = preferredRecordingMimeType();
+    const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+    const chunks: Blob[] = [];
+    let stopped = false;
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) chunks.push(event.data);
+    };
+    recorder.start();
+    return {
+      stop() {
+        if (stopped) return Promise.resolve(null);
+        stopped = true;
+        return new Promise((resolve) => {
+          recorder.onstop = () => {
+            const blob = new Blob(chunks, { type: recorder.mimeType || mimeType || 'audio/webm' });
+            resolve(
+              blob.size > 0
+                ? {
+                    kind: 'blob',
+                    blob,
+                    mimeType: blob.type,
+                    byteLength: blob.size,
+                    createdAt: Date.now(),
+                  }
+                : null,
+            );
+          };
+          try {
+            recorder.stop();
+          } catch {
+            resolve(null);
+          }
+        });
+      },
+      cancel() {
+        if (stopped) return;
+        stopped = true;
+        try {
+          recorder.ondataavailable = null;
+          recorder.onstop = null;
+          recorder.stop();
+        } catch {
+          // already stopped or unsupported
+        }
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+function preferredRecordingMimeType(): string {
+  const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+  for (const candidate of candidates) {
+    if (typeof MediaRecorder.isTypeSupported !== 'function') return '';
+    if (MediaRecorder.isTypeSupported(candidate)) return candidate;
+  }
+  return '';
 }
 
 function schedulePcmChunk(
