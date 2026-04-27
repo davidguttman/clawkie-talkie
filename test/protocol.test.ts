@@ -63,6 +63,10 @@ describe('daemon → phone factories', () => {
       t: 'rendezvous.error',
       message: 'missing_session',
     });
+    expect(daemonClient.sessionReplaced()).toEqual({
+      t: 'session.replaced',
+      reason: 'newer_phone_connected',
+    });
     expect(daemonClient.sttReady()).toEqual({ t: 'stt.ready' });
     expect(daemonClient.sttPartial('he', false)).toEqual({
       t: 'stt.partial',
@@ -91,6 +95,7 @@ describe('daemon → phone factories', () => {
   it('matches the daemon copy of the protocol', () => {
     expect(daemonClient.rendezvousAccept('r')).toEqual(daemonDaemon.rendezvousAccept('r'));
     expect(daemonClient.rendezvousError('m')).toEqual(daemonDaemon.rendezvousError('m'));
+    expect(daemonClient.sessionReplaced()).toEqual(daemonDaemon.sessionReplaced());
     expect(daemonClient.sttReady()).toEqual(daemonDaemon.sttReady());
     expect(daemonClient.sttPartial('x', true)).toEqual(daemonDaemon.sttPartial('x', true));
     expect(daemonClient.sttDone('y')).toEqual(daemonDaemon.sttDone('y'));
@@ -108,6 +113,7 @@ describe('daemon → phone factories', () => {
     const messages = [
       daemonClient.rendezvousAccept('host:s1'),
       daemonClient.rendezvousError('bad'),
+      daemonClient.sessionReplaced(),
       daemonClient.sttReady(),
       daemonClient.sttPartial('hello', false),
       daemonClient.sttDone('hello world'),

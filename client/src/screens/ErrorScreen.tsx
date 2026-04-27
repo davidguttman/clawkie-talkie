@@ -10,7 +10,8 @@ export type ErrorKind =
   | 'offline'
   | 'stt_failed'
   | 'tts_failed'
-  | 'bad_session';
+  | 'bad_session'
+  | 'replaced';
 
 interface ErrorDef {
   tone: 'blocked' | 'degraded' | 'info';
@@ -73,6 +74,15 @@ const ERRORS: Record<ErrorKind, ErrorDef> = {
     body: 'Handoff links expire after 15 minutes. Go back to your chat and tap the link again to get a fresh one.',
     primaryLabel: 'GOT IT',
     primaryAction: 'dismiss',
+  },
+  replaced: {
+    tone: 'blocked',
+    pill: 'REPLACED',
+    glyph: '⇄',
+    headline: 'Opened on another phone',
+    body: 'This phone was disconnected because a newer phone joined the same Clawkie-Talkie session.',
+    primaryLabel: 'RELOAD',
+    primaryAction: 'retry',
   },
 };
 

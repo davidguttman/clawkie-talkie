@@ -75,13 +75,19 @@ export function RtcProvider({
   useEffect(() => {
     if (!activeRoomId) return;
 
-    const client = new RtcClient({
+    let client: RtcClient;
+    client = new RtcClient({
       hostPeerId: activeRoomId,
       onStatusChange: (s, d) => {
         setStatus(s);
-        setDetail(d);
+        setDetail((prev) => d ?? (prev === 'session_replaced' ? prev : undefined));
       },
       onControlMessage: (msg) => {
+        if (msg.t === 'session.replaced') {
+          setDetail('session_replaced');
+          setStatus('closed');
+          setTimeout(() => client.close(), 0);
+        }
         for (const fn of controlListenersRef.current) fn(msg);
       },
       onBinaryMessage: (bytes) => {

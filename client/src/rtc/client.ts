@@ -217,7 +217,7 @@ export class RtcClient {
   }
 
   private setStatus(status: RtcStatus, detail?: string): void {
-    if (this.status === status) return;
+    if (this.status === status && detail === undefined) return;
     this.status = status;
     this.opts.onStatusChange?.(status, detail);
   }

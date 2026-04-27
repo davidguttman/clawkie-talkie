@@ -6,7 +6,7 @@ import { HistoryScreen } from './screens/History';
 import { TranscriptScreen } from './screens/Transcript';
 import { SettingsScreen } from './screens/Settings';
 import { ErrorScreen, type ErrorKind } from './screens/ErrorScreen';
-import { RtcProvider } from './rtc/RtcContext';
+import { RtcProvider, useRtc } from './rtc/RtcContext';
 import { loadSettings, saveSettings, type Settings } from './storage';
 import { parseHandoffUrl, type HandoffRoute } from './voice/handoffUrl';
 
@@ -26,6 +26,7 @@ const ERROR_KINDS: ErrorKind[] = [
   'stt_failed',
   'tts_failed',
   'bad_session',
+  'replaced',
 ];
 
 export function parseInitialSearch(search: string): {
@@ -204,8 +205,40 @@ export function App() {
           : null
       }
     >
-      {rendered}
+      <RtcDisconnectGate isNarrow={isNarrow}>{rendered}</RtcDisconnectGate>
     </RtcProvider>
+  );
+}
+
+function RtcDisconnectGate({
+  isNarrow,
+  children,
+}: {
+  isNarrow: boolean;
+  children: ReactNode;
+}) {
+  const rtc = useRtc();
+  const reload = useCallback(() => {
+    window.location.reload();
+  }, []);
+
+  if (rtc.detail !== 'session_replaced') return <>{children}</>;
+
+  const replaced = (
+    <ErrorScreen
+      kind="replaced"
+      onDismiss={reload}
+      onRetry={reload}
+      onBack={reload}
+    />
+  );
+
+  return isNarrow ? (
+    <MobileShell>{replaced}</MobileShell>
+  ) : (
+    <div style={{ display: 'flex', gap: 32, alignItems: 'flex-start' }}>
+      <HiFiPhone>{replaced}</HiFiPhone>
+    </div>
   );
 }
 
@@ -266,6 +299,7 @@ function SideNav({
     { id: 'stt_failed', label: 'Transcription failed', hint: 'spoke, got nothing' },
     { id: 'tts_failed', label: 'Audio failed', hint: 'text ok, no sound' },
     { id: 'bad_session', label: 'Bad handoff link', hint: 'expired or invalid' },
+    { id: 'replaced', label: 'Replaced phone', hint: 'newer phone connected' },
   ];
 
   return (

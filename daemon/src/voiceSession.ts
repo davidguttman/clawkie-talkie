@@ -68,9 +68,22 @@ export function createVoiceSessionState(config: VoiceSessionConfig): VoiceSessio
   };
 }
 
+export type PhoneConnectionDecision = 'accept' | 'use_existing' | 'replace_existing';
+
+export function decidePhoneConnection(input: {
+  hasCurrentPeer: boolean;
+  currentRemoteId: string | null;
+  incomingRemoteId: string;
+}): PhoneConnectionDecision {
+  if (!input.hasCurrentPeer) return 'accept';
+  if (input.currentRemoteId === input.incomingRemoteId) return 'use_existing';
+  return 'replace_existing';
+}
+
 // --- runtime ---------------------------------------------------------
 
 const CONNECT_TIMEOUT_MS = 12_000;
+const REPLACED_REMOTE_IGNORE_TTL_MS = 30_000;
 
 type SignalPayload = Parameters<SimplePeer.Instance['signal']>[0];
 
@@ -115,6 +128,7 @@ export class VoiceSession {
   private rawRemainder: Buffer = Buffer.alloc(0);
   private resampledRemainder: Buffer = Buffer.alloc(0);
   private closing = false;
+  private readonly replacedRemoteIds = new Set<string>();
 
   constructor(private readonly opts: VoiceSessionRuntimeOptions) {
     this.roomId = opts.roomId;
@@ -139,10 +153,12 @@ export class VoiceSession {
     });
 
     this.signalClient.on('announce', ({ peerId }) => {
+      if (this.replacedRemoteIds.has(peerId)) return;
       this.acceptPhone(peerId, true);
     });
 
     this.signalClient.on('signal', (event) => {
+      if (this.replacedRemoteIds.has(event.from)) return;
       if (this.peer && this.remoteId === event.from && !this.peer.destroyed) {
         try {
           this.peer.signal(event.data as SignalPayload);
@@ -182,19 +198,28 @@ export class VoiceSession {
   }
 
   private acceptPhone(remoteId: string, initiator: boolean, initialSignal?: SignalPayload): void {
-    if (this.peer && !this.peer.destroyed) {
-      if (this.remoteId === remoteId) {
-        if (initialSignal) {
-          try { this.peer.signal(initialSignal); } catch { /* ignore */ }
-        }
-        return;
+    if (this.replacedRemoteIds.has(remoteId)) return;
+
+    const decision = decidePhoneConnection({
+      hasCurrentPeer: !!this.peer && !this.peer.destroyed,
+      currentRemoteId: this.remoteId,
+      incomingRemoteId: remoteId,
+    });
+
+    if (decision === 'use_existing') {
+      if (initialSignal) {
+        try { this.peer?.signal(initialSignal); } catch { /* ignore */ }
       }
+      return;
+    }
+
+    if (decision === 'replace_existing') {
       if (!this.connected) {
         console.error(`[voice ${this.roomId}] replacing stale pending phone ${this.remoteId ?? 'unknown'} with ${remoteId}`);
-        this.tearDownPeer('replace_stale_pending_phone');
+        this.replaceCurrentPhone('replace_stale_pending_phone');
       } else {
-        console.error(`[voice ${this.roomId}] rejecting second phone ${remoteId} — one per room`);
-        return;
+        console.error(`[voice ${this.roomId}] replacing active phone ${this.remoteId ?? 'unknown'} with ${remoteId}`);
+        this.replaceCurrentPhone('newer_phone_connected');
       }
     }
 
@@ -254,6 +279,40 @@ export class VoiceSession {
         console.error(`[voice ${this.roomId}] peer.signal (initial) failed: ${err instanceof Error ? err.message : err}`);
       }
     }
+  }
+
+  private replaceCurrentPhone(reason: string): void {
+    const previousPeer = this.peer;
+    const previousRemoteId = this.remoteId;
+    if (!previousPeer) return;
+
+    if (previousRemoteId) this.ignoreReplacedRemote(previousRemoteId);
+    if (this.connected && !previousPeer.destroyed) {
+      this.sendToPeer(previousPeer, daemonToPhone.sessionReplaced(reason));
+    }
+
+    this.clearConnectionTimeout();
+    this.stopKeepalive();
+    this.resetTurn(reason);
+    this.closeOutboundAudio();
+    this.peer = null;
+    this.remoteId = null;
+    this.connected = false;
+
+    setTimeout(() => {
+      try {
+        previousPeer.destroy();
+      } catch {
+        // ignore
+      }
+    }, 100).unref?.();
+  }
+
+  private ignoreReplacedRemote(remoteId: string): void {
+    this.replacedRemoteIds.add(remoteId);
+    setTimeout(() => {
+      this.replacedRemoteIds.delete(remoteId);
+    }, REPLACED_REMOTE_IGNORE_TTL_MS).unref?.();
   }
 
   private armConnectionTimeout(peer: SimplePeer.Instance, remoteId: string): void {
@@ -612,6 +671,10 @@ export class VoiceSession {
   private send(msg: unknown): void {
     const peer = this.peer;
     if (!peer || !this.connected) return;
+    this.sendToPeer(peer, msg);
+  }
+
+  private sendToPeer(peer: SimplePeer.Instance, msg: unknown): void {
     try {
       peer.send(JSON.stringify(msg));
     } catch (err) {

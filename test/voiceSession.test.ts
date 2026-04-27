@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createVoiceSessionState } from '../daemon/src/voiceSession';
+import { createVoiceSessionState, decidePhoneConnection } from '../daemon/src/voiceSession';
 
 describe('voice session state', () => {
   it('binds one room to one session and delivery target for its lifetime', () => {
@@ -50,5 +50,31 @@ describe('voice session state', () => {
     s.handleStartTurn();
     s.resetTurn();
     expect(s.turnInFlight).toBe(false);
+  });
+
+  it('uses last-phone-wins decisions for a different incoming phone', () => {
+    expect(
+      decidePhoneConnection({
+        hasCurrentPeer: false,
+        currentRemoteId: null,
+        incomingRemoteId: 'phone-a',
+      }),
+    ).toBe('accept');
+
+    expect(
+      decidePhoneConnection({
+        hasCurrentPeer: true,
+        currentRemoteId: 'phone-a',
+        incomingRemoteId: 'phone-a',
+      }),
+    ).toBe('use_existing');
+
+    expect(
+      decidePhoneConnection({
+        hasCurrentPeer: true,
+        currentRemoteId: 'phone-a',
+        incomingRemoteId: 'phone-b',
+      }),
+    ).toBe('replace_existing');
   });
 });

@@ -25,6 +25,13 @@ describe('client URL parsing (legacy query)', () => {
       threadId: 'thread-1',
     });
   });
+
+  it('recognizes the replaced-phone error state', () => {
+    expect(parseInitialSearch('?screen=error&errorKind=replaced')).toMatchObject({
+      screen: 'error',
+      errorKind: 'replaced',
+    });
+  });
 });
 
 describe('parseHandoffUrl', () => {

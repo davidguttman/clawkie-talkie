@@ -21,6 +21,7 @@ export type PhoneToDaemon =
 export type DaemonToPhone =
   | { t: 'rendezvous.accept'; roomId: string }
   | { t: 'rendezvous.error'; message: string }
+  | { t: 'session.replaced'; reason: string }
   | { t: 'stt.ready' }
   | { t: 'stt.partial'; text: string; is_final: boolean }
   | { t: 'stt.done'; text: string }
@@ -48,6 +49,10 @@ export const phoneToDaemon = {
 export const daemonToPhone = {
   rendezvousAccept: (roomId: string): DaemonToPhone => ({ t: 'rendezvous.accept', roomId }),
   rendezvousError: (message: string): DaemonToPhone => ({ t: 'rendezvous.error', message }),
+  sessionReplaced: (reason = 'newer_phone_connected'): DaemonToPhone => ({
+    t: 'session.replaced',
+    reason,
+  }),
   sttReady: (): DaemonToPhone => ({ t: 'stt.ready' }),
   sttPartial: (text: string, isFinal: boolean): DaemonToPhone => ({
     t: 'stt.partial',
