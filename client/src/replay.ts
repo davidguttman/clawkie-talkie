@@ -1,7 +1,18 @@
-export interface BufferedReplyAudio {
+export type BufferedReplyAudio = BufferedPcmReplyAudio | BufferedBlobReplyAudio;
+
+export interface BufferedPcmReplyAudio {
+  kind: 'pcm';
   sampleRate: number;
   rate: number;
   chunks: ArrayBuffer[];
+  byteLength: number;
+  createdAt: number;
+}
+
+export interface BufferedBlobReplyAudio {
+  kind: 'blob';
+  blob: Blob;
+  mimeType: string;
   byteLength: number;
   createdAt: number;
 }
@@ -24,13 +35,19 @@ export interface ReplayResult {
 }
 
 export function selectReplaySource(request: ReplayRequest): ReplaySelection {
-  if (request.audio && request.audio.chunks.length > 0 && request.audio.byteLength > 0) {
+  if (hasReplayAudio(request.audio)) {
     return { kind: 'audio', audio: request.audio };
   }
   const text = request.text?.trim();
   if (!text) return { kind: 'none', reason: 'no_audio_or_text' };
   if (request.canSpeakText) return { kind: 'text', text };
   return { kind: 'none', reason: 'text_playback_unavailable' };
+}
+
+function hasReplayAudio(audio: BufferedReplyAudio | null): audio is BufferedReplyAudio {
+  if (!audio || audio.byteLength <= 0) return false;
+  if (audio.kind === 'blob') return audio.blob.size > 0;
+  return audio.chunks.length > 0;
 }
 
 export async function replayAssistantReply({

@@ -6,6 +6,7 @@ import {
 } from '../client/src/replay';
 
 const audio: BufferedReplyAudio = {
+  kind: 'pcm',
   sampleRate: 24000,
   rate: 1,
   chunks: [new Uint8Array([0, 0]).buffer],
@@ -29,6 +30,36 @@ describe('replay selection', () => {
     expect(selectReplaySource({ audio: null, text: 'repeat that', canSpeakText: false })).toEqual({
       kind: 'none',
       reason: 'text_playback_unavailable',
+    });
+  });
+
+  it('accepts MediaRecorder blob audio as a replay source', () => {
+    const blobAudio: BufferedReplyAudio = {
+      kind: 'blob',
+      blob: new Blob(['remote audio'], { type: 'audio/webm' }),
+      mimeType: 'audio/webm',
+      byteLength: 12,
+      createdAt: 1,
+    };
+
+    expect(selectReplaySource({ audio: blobAudio, text: null, canSpeakText: false })).toEqual({
+      kind: 'audio',
+      audio: blobAudio,
+    });
+  });
+
+  it('rejects empty blob audio and falls back to text when available', () => {
+    const blobAudio: BufferedReplyAudio = {
+      kind: 'blob',
+      blob: new Blob([], { type: 'audio/webm' }),
+      mimeType: 'audio/webm',
+      byteLength: 0,
+      createdAt: 1,
+    };
+
+    expect(selectReplaySource({ audio: blobAudio, text: 'saved text', canSpeakText: true })).toEqual({
+      kind: 'text',
+      text: 'saved text',
     });
   });
 

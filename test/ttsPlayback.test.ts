@@ -41,10 +41,40 @@ class FakeMediaStreamSource {
 }
 
 class FakeMediaStream {
-  private tracks: Array<{ readyState: 'live' | 'ended' }> = [{ readyState: 'live' }];
+  private tracks: Array<{ kind: 'audio'; readyState: 'live' | 'ended' }> = [
+    { kind: 'audio', readyState: 'live' },
+  ];
 
   getTracks() {
     return this.tracks;
+  }
+
+  getAudioTracks() {
+    return this.tracks;
+  }
+}
+
+class FakeMediaRecorder {
+  static instances: FakeMediaRecorder[] = [];
+  static isTypeSupported = vi.fn((mimeType: string) => mimeType === 'audio/webm;codecs=opus');
+
+  mimeType = 'audio/webm;codecs=opus';
+  ondataavailable: ((event: { data: Blob }) => void) | null = null;
+  onstop: (() => void) | null = null;
+  start = vi.fn();
+  stop = vi.fn(() => {
+    this.ondataavailable?.({
+      data: new Blob(['remote-track-audio'], { type: this.mimeType }),
+    });
+    this.onstop?.();
+  });
+
+  constructor(
+    public stream: MediaStream,
+    opts?: { mimeType?: string },
+  ) {
+    this.mimeType = opts?.mimeType || 'audio/webm';
+    FakeMediaRecorder.instances.push(this);
   }
 }
 
@@ -145,6 +175,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.resetModules();
   FakeAudioContext.instances = [];
+  FakeMediaRecorder.instances = [];
+  FakeMediaRecorder.isTypeSupported.mockClear();
 });
 
 describe('daemon TTS playback audio context', () => {
@@ -246,11 +278,62 @@ describe('daemon TTS playback audio context', () => {
     await handle.done;
 
     expect(getLastBufferedReplyAudio()).toMatchObject({
+      kind: 'pcm',
       sampleRate: 24000,
       rate: 1,
       byteLength: 4,
     });
-    expect(getLastBufferedReplyAudio()?.chunks).toHaveLength(1);
+    const audio = getLastBufferedReplyAudio();
+    expect(audio?.kind === 'pcm' ? audio.chunks : []).toHaveLength(1);
+  });
+
+  it('buffers the primary remote audio track locally with MediaRecorder for replay', async () => {
+    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
+    const audioEl = {
+      autoplay: false,
+      pause: vi.fn(),
+      play: vi.fn(() => Promise.resolve()),
+      setAttribute: vi.fn(),
+      srcObject: null as MediaStream | null,
+      style: {},
+    };
+    vi.stubGlobal('document', {
+      body: { appendChild: vi.fn() },
+      createElement: vi.fn(() => audioEl),
+    });
+    const { attachDaemonRemoteStream, getLastBufferedReplyAudio, playDaemonTts } = await import(
+      '../client/src/voice/tts'
+    );
+    const controls: Array<(msg: { t: string; [k: string]: unknown }) => void> = [];
+    const stream = new FakeMediaStream() as unknown as MediaStream;
+
+    attachDaemonRemoteStream(stream);
+    const handle = playDaemonTts({
+      addControlListener(fn) {
+        controls.push(fn);
+        return vi.fn();
+      },
+      addBinaryListener() {
+        return vi.fn();
+      },
+      sendControl: vi.fn(),
+    });
+
+    controls[0]({ t: 'tts.start', sample_rate: 48000 });
+    controls[0]({ t: 'tts.done' });
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    await handle.done;
+
+    expect(FakeMediaRecorder.instances).toHaveLength(1);
+    expect(FakeMediaRecorder.instances[0].stream).toBe(stream);
+    expect(FakeMediaRecorder.instances[0].start).toHaveBeenCalled();
+    expect(FakeMediaRecorder.instances[0].stop).toHaveBeenCalled();
+    expect(getLastBufferedReplyAudio()).toMatchObject({
+      kind: 'blob',
+      mimeType: 'audio/webm;codecs=opus',
+      byteLength: 18,
+    });
   });
 
   it('defensively resumes the shared context when TTS starts without prior unlock', async () => {
