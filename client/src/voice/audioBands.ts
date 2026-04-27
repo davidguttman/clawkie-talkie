@@ -8,6 +8,8 @@ const ANALYSER_RMS_FLOOR = 0.004;
 const ANALYSER_PEAK_FLOOR = 0.01;
 const ANALYSER_REFERENCE_RMS = 0.08;
 const ANALYSER_REFERENCE_PEAK = 0.22;
+const ANALYSER_DYNAMIC_FLOOR = 0.025;
+const ANALYSER_DYNAMIC_RANGE = 0.16;
 
 export interface SmoothBandOptions {
   attack?: number;
@@ -21,14 +23,61 @@ export const DEFAULT_BAND_SMOOTHING = {
 } as const;
 
 export const RECORDING_BAND_SMOOTHING = {
-  attack: 0.68,
-  release: 0.3,
+  attack: 0.78,
+  release: 0.38,
 } as const;
 
 export const OUTPUT_BAND_SMOOTHING = {
   attack: 0.55,
   release: 0.24,
 } as const;
+
+export class BandNormalizer {
+  private floor = ANALYSER_DYNAMIC_FLOOR;
+  private peak = ANALYSER_DYNAMIC_RANGE;
+
+  reset(): void {
+    this.floor = ANALYSER_DYNAMIC_FLOOR;
+    this.peak = ANALYSER_DYNAMIC_RANGE;
+  }
+
+  normalize(bands: readonly number[]): number[] {
+    const count = bands.length;
+    if (count === 0) return [];
+
+    let rawPeak = 0;
+    let sum = 0;
+    for (const band of bands) {
+      const value = Math.max(0, band - MIN_DISPLAY_INTENSITY);
+      if (value > rawPeak) rawPeak = value;
+      sum += value;
+    }
+
+    if (rawPeak <= 0.004) {
+      this.floor += (ANALYSER_DYNAMIC_FLOOR - this.floor) * 0.04;
+      this.peak += (ANALYSER_DYNAMIC_RANGE - this.peak) * 0.02;
+      return Array(count).fill(MIN_DISPLAY_INTENSITY);
+    }
+
+    const mean = sum / count;
+    const targetFloor = Math.min(0.11, mean * 0.55);
+    const floorK = targetFloor > this.floor ? 0.015 : 0.06;
+    this.floor += (targetFloor - this.floor) * floorK;
+
+    const targetPeak = Math.max(rawPeak, this.floor + 0.035);
+    const peakK = targetPeak > this.peak ? 0.38 : 0.018;
+    this.peak += (targetPeak - this.peak) * peakK;
+
+    const range = Math.max(0.035, this.peak - this.floor);
+    return bands.map((band) => {
+      const raw = Math.max(0, band - MIN_DISPLAY_INTENSITY);
+      const normalized = Math.max(0, (raw - this.floor) / range);
+      if (normalized <= 0) return MIN_DISPLAY_INTENSITY;
+      const shaped = Math.pow(Math.min(1, normalized), 0.72);
+      return clampIntensity(MIN_DISPLAY_INTENSITY + shaped * 0.92);
+    });
+  }
+}
 
 export function pcm16ToBandIntensities(
   pcm: ArrayBuffer,
@@ -94,12 +143,13 @@ export function analyserToBandIntensities(
   bandCount: number,
   frequencyScratch?: Uint8Array<ArrayBuffer>,
   timeScratch?: Uint8Array<ArrayBuffer>,
+  normalizer?: BandNormalizer,
 ): number[] {
   const bins = frequencyScratch && frequencyScratch.length === analyser.frequencyBinCount
     ? frequencyScratch
     : new Uint8Array(analyser.frequencyBinCount);
   analyser.getByteFrequencyData(bins);
-  const frequencyBands = byteFrequencyDataToBands(bins, bandCount);
+  const frequencyBands = byteFrequencyDataToBands(bins, bandCount, normalizer);
 
   if (typeof analyser.getByteTimeDomainData !== 'function') return frequencyBands;
   const time = timeScratch && timeScratch.length === analyser.fftSize
@@ -119,6 +169,7 @@ export function analyserToBandIntensities(
 export function byteFrequencyDataToBands(
   data: Uint8Array<ArrayBufferLike>,
   bandCount: number,
+  normalizer?: BandNormalizer,
 ): number[] {
   const count = Math.max(0, Math.floor(bandCount));
   if (count === 0) return [];
@@ -133,15 +184,18 @@ export function byteFrequencyDataToBands(
     let peak = 0;
     let n = 0;
     for (let i = start; i <= end; i++) {
-      const v = data[i] / 255;
+      const binPosition = data.length <= 1 ? 0 : i / (data.length - 1);
+      const boost = 0.9 + Math.pow(binPosition, 0.72) * 1.65;
+      const v = Math.min(1, (data[i] / 255) * boost);
       sum += v * v;
       if (v > peak) peak = v;
       n++;
     }
     const rms = n > 0 ? Math.sqrt(sum / n) : 0;
-    out[band] = clampIntensity(rms * 0.55 + peak * 0.65);
+    const shaped = Math.log1p((rms * 0.58 + peak * 0.72) * 10) / Math.log1p(10);
+    out[band] = clampIntensity(shaped);
   }
-  return out;
+  return (normalizer ?? new BandNormalizer()).normalize(out);
 }
 
 export function mergeBandIntensities(

@@ -21,6 +21,16 @@ class FakeScriptProcessor {
   disconnect = vi.fn();
 }
 
+class FakeAnalyserNode {
+  fftSize = 2048;
+  smoothingTimeConstant = 0.8;
+  frequencyBinCount = 1024;
+  connect = vi.fn();
+  disconnect = vi.fn();
+  getByteFrequencyData = vi.fn();
+  getByteTimeDomainData = vi.fn();
+}
+
 class FakeMediaStreamSource {
   connect = vi.fn();
   disconnect = vi.fn();
@@ -51,6 +61,7 @@ class FakeAudioContext {
   sampleRate = 16000;
   createMediaStreamSource = vi.fn(() => new FakeMediaStreamSource());
   createScriptProcessor = vi.fn(() => new FakeScriptProcessor());
+  createAnalyser = vi.fn(() => new FakeAnalyserNode());
   createGain = vi.fn(() => new FakeGainNode());
   resume = vi.fn(async () => {
     this.state = 'running';
@@ -96,7 +107,7 @@ describe('createMicAudioSource', () => {
     expect(getUserMedia).toHaveBeenCalledTimes(1);
   });
 
-  it('uses a 1024-sample mic callback frame for responsive visualization', async () => {
+  it('uses a 1024-sample mic callback frame for STT transport', async () => {
     const stream = new FakeMediaStream();
     const getUserMedia = vi.fn(async () => stream);
     vi.stubGlobal('window', { AudioContext: FakeAudioContext });
@@ -117,6 +128,34 @@ describe('createMicAudioSource', () => {
       1,
       1,
     );
+  });
+
+  it('creates and reuses a live mic analyser configured for RAF visualization', async () => {
+    const stream = new FakeMediaStream();
+    const getUserMedia = vi.fn(async () => stream);
+    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } });
+
+    const { createMicAudioSource, getActiveMicAnalyser } = await import(
+      '../client/src/voice/audioSource'
+    );
+
+    const src1 = createMicAudioSource();
+    await src1.start(() => {});
+    const firstAnalyser = getActiveMicAnalyser() as unknown as FakeAnalyserNode;
+    await src1.stop();
+
+    const src2 = createMicAudioSource();
+    await src2.start(() => {});
+    const secondAnalyser = getActiveMicAnalyser();
+    await src2.stop();
+
+    expect(firstAnalyser).toBeTruthy();
+    expect(firstAnalyser.fftSize).toBe(128);
+    expect(firstAnalyser.smoothingTimeConstant).toBe(0);
+    expect(secondAnalyser).toBe(firstAnalyser);
+    expect(FakeAudioContext.instances[0].createAnalyser).toHaveBeenCalledTimes(1);
+    expect(firstAnalyser.connect).toHaveBeenCalledTimes(1);
   });
 
   it('does not stop the underlying mic tracks on a normal stop()', async () => {
@@ -147,7 +186,7 @@ describe('createMicAudioSource', () => {
     vi.stubGlobal('window', { AudioContext: FakeAudioContext });
     vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } });
 
-    const { createMicAudioSource, releaseMicAudioSource } = await import(
+    const { createMicAudioSource, getActiveMicAnalyser, releaseMicAudioSource } = await import(
       '../client/src/voice/audioSource'
     );
 
@@ -157,6 +196,7 @@ describe('createMicAudioSource', () => {
 
     await releaseMicAudioSource();
     expect(stream1.getTracks()[0].readyState).toBe('ended');
+    expect(getActiveMicAnalyser()).toBeNull();
 
     const src2 = createMicAudioSource();
     await src2.start(() => {});

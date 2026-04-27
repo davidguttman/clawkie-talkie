@@ -49,6 +49,9 @@ let cachedStream: MediaStream | null = null;
 let cachedAudioCtx: AudioContext | null = null;
 let cachedSourceNode: MediaStreamAudioSourceNode | null = null;
 let cachedSourceCtx: AudioContext | null = null;
+let cachedMicAnalyser: AnalyserNode | null = null;
+let cachedAnalyserSink: GainNode | null = null;
+let cachedAnalyserCtx: AudioContext | null = null;
 
 async function acquireMicResources(): Promise<{
   stream: MediaStream;
@@ -67,6 +70,7 @@ async function acquireMicResources(): Promise<{
         window.AudioContext ||
         (window as unknown as { webkitAudioContext: typeof AudioContext })
           .webkitAudioContext;
+      disconnectCachedMicAnalyser();
       cachedAudioCtx = new AudioCtor({ sampleRate: SAMPLE_RATE });
       cachedSourceNode = null;
       cachedSourceCtx = null;
@@ -79,13 +83,16 @@ async function acquireMicResources(): Promise<{
       }
     }
     if (!cachedSourceNode || cachedSourceCtx !== cachedAudioCtx) {
+      disconnectCachedMicAnalyser();
       cachedSourceNode = cachedAudioCtx.createMediaStreamSource(cachedStream);
       cachedSourceCtx = cachedAudioCtx;
     }
+    ensureMicAnalyser(cachedAudioCtx, cachedSourceNode);
     return { stream: cachedStream, audioCtx: cachedAudioCtx, source: cachedSourceNode };
   }
 
   // Fresh acquisition (first PTT, or tracks died and need re-asking).
+  disconnectCachedMicAnalyser();
   let stream: MediaStream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
@@ -115,7 +122,51 @@ async function acquireMicResources(): Promise<{
   cachedAudioCtx = audioCtx;
   cachedSourceNode = source;
   cachedSourceCtx = audioCtx;
+  ensureMicAnalyser(audioCtx, source);
   return { stream, audioCtx, source };
+}
+
+function ensureMicAnalyser(
+  audioCtx: AudioContext,
+  source: MediaStreamAudioSourceNode,
+): AnalyserNode {
+  if (cachedMicAnalyser && cachedAnalyserCtx === audioCtx) return cachedMicAnalyser;
+
+  disconnectCachedMicAnalyser();
+  const analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 128;
+  analyser.smoothingTimeConstant = 0;
+  const sink = audioCtx.createGain();
+  sink.gain.value = 0;
+  source.connect(analyser);
+  analyser.connect(sink);
+  sink.connect(audioCtx.destination);
+  cachedMicAnalyser = analyser;
+  cachedAnalyserSink = sink;
+  cachedAnalyserCtx = audioCtx;
+  return analyser;
+}
+
+function disconnectCachedMicAnalyser(): void {
+  try {
+    cachedMicAnalyser?.disconnect();
+  } catch {
+    // ignore
+  }
+  try {
+    cachedAnalyserSink?.disconnect();
+  } catch {
+    // ignore
+  }
+  cachedMicAnalyser = null;
+  cachedAnalyserSink = null;
+  cachedAnalyserCtx = null;
+}
+
+export function getActiveMicAnalyser(): AnalyserNode | null {
+  if (!cachedMicAnalyser || !cachedAudioCtx || cachedAudioCtx.state === 'closed') return null;
+  if (!cachedStream || !cachedStream.getTracks().every((t) => t.readyState === 'live')) return null;
+  return cachedMicAnalyser;
 }
 
 // Deliberate teardown for app unmount / cancel. Stops the underlying
@@ -129,6 +180,7 @@ export async function releaseMicAudioSource(): Promise<void> {
   cachedAudioCtx = null;
   cachedSourceNode = null;
   cachedSourceCtx = null;
+  disconnectCachedMicAnalyser();
   try {
     source?.disconnect();
   } catch {
@@ -157,6 +209,7 @@ export function _resetMicAudioSourceForTests(): void {
   cachedAudioCtx = null;
   cachedSourceNode = null;
   cachedSourceCtx = null;
+  disconnectCachedMicAnalyser();
 }
 
 export function createMicAudioSource(): AudioSource {
