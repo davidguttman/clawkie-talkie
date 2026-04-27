@@ -194,6 +194,22 @@
         box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent), 0 0 28px var(--accent-glow);
       }
       .btn.primary:hover { box-shadow: 0 0 0 1px var(--accent), 0 0 40px var(--accent-glow); }
+      .btn.primary.copied {
+        background: radial-gradient(circle at 30% 28%, var(--think) 0%, color-mix(in srgb, var(--think) 60%, #000) 100%);
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--think) 60%, transparent), 0 0 28px rgba(232, 194, 90, 0.45);
+      }
+      .btn.ghost {
+        font-family: var(--mono);
+        font-size: 11px;
+        height: 36px;
+        padding: 0 14px;
+        border-radius: 10px;
+        color: var(--ink3);
+        border-color: var(--stroke);
+        background: transparent;
+        letter-spacing: 1.4px;
+      }
+      .btn.ghost:hover { color: var(--ink); border-color: var(--stroke-strong); background: var(--surface); }
       .btn .icon { font-family: var(--sans); font-size: 16px; }
 
       .hero {
@@ -585,28 +601,33 @@
           <a href="#use-cases">USE CASES</a>
         </nav>
         <span class="spacer"></span>
-        <a class="btn primary" href="/voice">
-          OPEN VOICE APP
-          <span class="icon">→</span>
-        </a>
+        <button type="button" class="btn primary" data-copy-install>
+          COPY INSTALL INSTRUCTIONS
+          <span class="icon">⧉</span>
+        </button>
       </header>
 
       <section class="hero">
         <div>
-          <span class="pill"><span class="dot"></span>VOICE · LIVE</span>
+          <span class="pill"><span class="dot"></span>AGENT-INSTALLED</span>
           <h1>
-            A walkie-talkie<br />for your <span class="accent">brain</span>.
+            A walkie-talkie<br />for your <span class="accent">agent</span>.
           </h1>
           <p class="lede">
-            Clawkie-Talkie is the hands-free voice surface for your
-            OpenClaw session. Tap once, speak your thought, and hear the
-            reply read back &mdash; eyes on the road, hands on the wheel.
+            Clawkie-Talkie is a hands-free voice surface your coding
+            agent installs and runs for you. You can't use it without
+            your agent &mdash; the daemon, the rendezvous, and the
+            voice link all live on the agent's machine.
+          </p>
+          <p class="lede" style="margin-top:-18px;">
+            Don't have Clawkie-Talkie yet? Tell your agent to install
+            it.
           </p>
           <div class="hero-cta">
-            <a class="btn primary" href="/voice">
-              TAP TO TALK
-              <span class="icon">→</span>
-            </a>
+            <button type="button" class="btn primary" data-copy-install>
+              COPY INSTALL INSTRUCTIONS FOR MY AGENT
+              <span class="icon">⧉</span>
+            </button>
             <a class="btn" href="#how">HOW IT WORKS</a>
           </div>
           <div class="hero-meta">
@@ -628,7 +649,7 @@
               <span class="dot"></span>YOU · LIVE
             </div>
             <div class="device-caption">
-              switch to voice and walk me through the deploy plan<span class="device-caret"></span>
+              walk me through the deploy plan for the auth service<span class="device-caret"></span>
             </div>
             <div class="device-wave">
               <span></span><span></span><span></span><span></span>
@@ -663,30 +684,33 @@
         </div>
         <div class="steps">
           <div class="step">
-            <span class="step-num">01 · TAP</span>
-            <h3>Open the link.</h3>
+            <span class="step-num">01 · INSTALL</span>
+            <h3>Tell your agent to install.</h3>
             <p>
-              From any OpenClaw turn, say "switch to voice." The agent
-              hands you a deterministic rendezvous URL. Open it on the
-              phone in your pocket.
+              Copy the install instructions and paste them into your
+              agent. Your agent clones the repo, inspects the code,
+              and starts the local daemon &mdash; you don't run a thing
+              on your own machine.
             </p>
           </div>
           <div class="step">
-            <span class="step-num">02 · SPEAK</span>
-            <h3>Hit the big button.</h3>
+            <span class="step-num">02 · HANDOFF</span>
+            <h3>Say "switch to voice."</h3>
             <p>
-              Tap once to record. Live transcription streams as you
-              speak. Tap again to send. Use AirPods or the lock screen
-              &mdash; never touch the phone.
+              From any OpenClaw turn, the agent hands you a
+              deterministic rendezvous URL built from the current
+              session. Open it on the phone in your pocket &mdash;
+              that's the only thing you do.
             </p>
           </div>
           <div class="step">
-            <span class="step-num">03 · LISTEN</span>
-            <h3>The reply reads itself.</h3>
+            <span class="step-num">03 · TALK</span>
+            <h3>Speak. Hear the reply.</h3>
             <p>
-              Clawkie runs the OpenClaw session, mirrors the transcript
-              into the original conversation, and reads the answer back
-              through your earbuds.
+              Tap once to record, again to send. Live transcription
+              streams as you speak; the reply is read back through
+              your earbuds. AirPods and lock-screen controls work
+              the same way.
             </p>
           </div>
         </div>
@@ -777,24 +801,91 @@
 
         <div class="cta">
           <div>
-            <h2>Ready to switch to voice?</h2>
+            <h2>Don't have Clawkie-Talkie yet?<br />Tell your agent to install it.</h2>
             <p>
-              Open the voice app on your phone, tap the big button, and
-              start talking. Your existing OpenClaw session is waiting
-              on the other end.
+              The whole product runs on your agent's side &mdash; the
+              daemon, the WebRTC rendezvous, and the xAI STT/TTS calls.
+              Hand your agent the install instructions and it'll take
+              about a minute.
+            </p>
+            <p style="margin-top:14px;font-family:var(--mono);font-size:12px;color:var(--ink3);letter-spacing:0.4px;">
+              The instructions tell your agent to clone
+              <code style="color:var(--ink2);">github.com/davidguttman/clawkietalkie</code>
+              and inspect the source &mdash; the daemon, server, and
+              client code &mdash; before running any setup.
             </p>
           </div>
-          <a class="btn primary" href="/voice">
-            OPEN VOICE APP
-            <span class="icon">→</span>
-          </a>
+          <button type="button" class="btn primary" data-copy-install>
+            COPY INSTALL INSTRUCTIONS FOR MY AGENT
+            <span class="icon">⧉</span>
+          </button>
         </div>
       </section>
 
       <footer>
         <span>© CLAWKIE-TALKIE · A WALKY-TALKY FOR YOUR BRAIN</span>
-        <span><a href="/voice">/VOICE</a></span>
+        <span>
+          <a href="https://github.com/davidguttman/clawkietalkie">GITHUB →</a>
+        </span>
       </footer>
     </div>
+
+    <script>
+      (function () {
+        var buttons = document.querySelectorAll('[data-copy-install]');
+        if (!buttons.length) return;
+        var installText =
+          "Install Clawkie-Talkie for me. The source is at " +
+          "https://github.com/davidguttman/clawkietalkie — clone it, " +
+          "read the README and the daemon/, server/, and client/ " +
+          "directories before running anything, then follow the " +
+          "setup steps in the README to start the local daemon. " +
+          "When it's running, hand me a /voice rendezvous link from " +
+          "the next turn so I can switch to voice.";
+        buttons.forEach(function (btn) {
+          var defaultHTML = btn.innerHTML;
+          var resetTimer = null;
+          btn.addEventListener('click', function () {
+            var done = function (label) {
+              btn.innerHTML = label;
+              btn.classList.add('copied');
+              if (resetTimer) clearTimeout(resetTimer);
+              resetTimer = setTimeout(function () {
+                btn.innerHTML = defaultHTML;
+                btn.classList.remove('copied');
+              }, 2600);
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard
+                .writeText(installText)
+                .then(function () {
+                  done('COPIED — PASTE INTO YOUR AGENT <span class="icon">✓</span>');
+                })
+                .catch(function () {
+                  done('COPY FAILED — SELECT TEXT BELOW');
+                  showFallback();
+                });
+            } else {
+              done('COPY UNSUPPORTED — SELECT TEXT BELOW');
+              showFallback();
+            }
+          });
+        });
+        function showFallback() {
+          if (document.getElementById('install-fallback')) return;
+          var pre = document.createElement('pre');
+          pre.id = 'install-fallback';
+          pre.textContent = installText;
+          pre.style.cssText =
+            'margin:24px auto 0;max-width:760px;padding:18px 20px;' +
+            'background:#0c0c0e;border:1px solid rgba(255,255,255,0.1);' +
+            'border-radius:14px;color:#c4c4c8;font-family:' +
+            "'IBM Plex Mono',ui-monospace,monospace;font-size:12px;" +
+            'white-space:pre-wrap;';
+          var page = document.querySelector('.page');
+          if (page) page.appendChild(pre);
+        }
+      })();
+    </script>
   </body>
 </html>
