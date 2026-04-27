@@ -319,7 +319,7 @@ describe('HoldMusicController', () => {
     expect(ctx.biquads[3].connect).toHaveBeenCalledWith(ctx.biquads[4]);
     expect(ctx.biquads[4].connect).toHaveBeenCalledWith(ctx.biquads[5]);
     expect(ctx.biquads[5].connect).toHaveBeenCalledWith(ctx.gains[4]);
-    expect(ctx.gains[4].gain.value).toBeCloseTo(0.04838281249999998);
+    expect(ctx.gains[4].gain.value).toBeCloseTo(0.027);
     expect(ctx.gains[4].connect).toHaveBeenCalledWith(ctx.destination);
     expect(ctx.bufferSources[0].buffer).not.toBe(ctx.bufferSources[1].buffer);
     expect(countSamplesAbove(ctx.bufferSources[0].buffer?.getChannelData(0) ?? new Float32Array(), 0))
