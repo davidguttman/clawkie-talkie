@@ -2,6 +2,8 @@
 
 Local rendezvous daemon for Clawkie-Talkie.
 
+For end-user Mac/Linux installation, credentials, persistence, verification, and troubleshooting, see [Install the Clawkie Talkie daemon](../docs/install-daemon.md).
+
 The daemon subscribes to a rambly-style signaling server (SSE subscribe + HTTP
 POST signal) on a stable UUID room — the `host=H` rendezvous/control room. A
 browser landing on a `/voice#host=H&session=S&channel=C&target=T` link joins
@@ -40,7 +42,7 @@ The root `dev:daemon` / `daemon` scripts will additionally load a repo-root
 ## Run the daemon directly
 
     npm run daemon -- \
-      --client-origin https://clawkie-talkie.davidguttman.jump.sh
+      --client-origin https://clawkietalkie.app
 
 Optional flags:
 
