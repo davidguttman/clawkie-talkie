@@ -11,6 +11,7 @@ const execMock = vi.hoisted(() => {
 vi.mock('node:child_process', () => ({ exec: execMock }));
 
 import {
+  buildAgentTurnMessage,
   ChatError,
   classifyOpenClawError,
   deriveDiscordMessageTarget,
@@ -102,6 +103,23 @@ describe('runChat OpenClaw CLI integration', () => {
     expect(agentCommand).not.toContain('"--deliver"');
     expect(agentCommand).not.toContain('"--reply-channel"');
     expect(agentCommand).not.toContain('"--reply-to"');
+  });
+
+  it('wraps the agent input with raw STT transcript guidance', async () => {
+    execMock.mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+
+    await runChat('turn left at the next light', {
+      apiKey: 'test-key',
+      sessionId: 'session-1',
+      threadId: 'thread-1',
+      deliver: true,
+    });
+
+    const agentCommand = findAgentCommand();
+    expect(agentCommand).toContain('raw speech-to-text transcript');
+    expect(agentCommand).toContain('mistranscriptions');
+    expect(agentCommand).toContain('infer the user');
+    expect(agentCommand).toContain('Raw transcript:\\nturn left at the next light');
   });
 
   it('does not post the agent reply text via openclaw message send (the agent does it)', async () => {
@@ -307,6 +325,11 @@ describe('runChat with explicit delivery target', () => {
 });
 
 describe('Discord transcript formatting and target derivation', () => {
+  it('builds agent input from raw STT text plus interpretation guidance', () => {
+    expect(buildAgentTurnMessage('hello world')).toContain('raw speech-to-text transcript');
+    expect(buildAgentTurnMessage('hello world')).toContain('Raw transcript:\nhello world');
+  });
+
   it('block-quotes each line of the user transcript without a header', () => {
     expect(quoteTranscript('one\ntwo')).toBe('> one\n> two');
   });
