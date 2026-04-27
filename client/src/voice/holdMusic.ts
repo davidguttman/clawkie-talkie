@@ -1,16 +1,4 @@
-const HOLD_MUSIC_TRACKS = [
-  'Dial Tone Reverie.mp3',
-  'Dockside Hold.mp3',
-  'Looped Hold Tone.mp3',
-  'Pixel Queue.mp3',
-  'Rotary Hush.mp3',
-  'Soft Hold Tone.mp3',
-  'Maré de Espera.mp3',
-  'Muted Waiting Room.mp3',
-  'Palm Reader Queue.mp3',
-  'Pehli Dastak.mp3',
-  'Shelf Cue Drift.mp3',
-] as const;
+import { HOLD_MUSIC_TRACKS } from 'virtual:hold-music-tracks';
 
 const MUSIC_GAIN = 0.15;
 const NOISE_TO_MUSIC_RATIO = 0.04;

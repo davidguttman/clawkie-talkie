@@ -204,8 +204,8 @@ describe('hold music selection', () => {
     const { pickHoldMusicUrl } = await import('../client/src/voice/holdMusic');
 
     expect(pickHoldMusicUrl(() => 0)).toBe('/music/Dial%20Tone%20Reverie.mp3');
-    expect(pickHoldMusicUrl(() => 6 / 11)).toBe('/music/Mar%C3%A9%20de%20Espera.mp3');
-    expect(pickHoldMusicUrl(() => 0.999)).toBe('/music/Shelf%20Cue%20Drift.mp3');
+    expect(pickHoldMusicUrl(() => 6 / 11)).toBe('/music/Pehli%20Dastak.mp3');
+    expect(pickHoldMusicUrl(() => 0.999)).toBe('/music/Soft%20Hold%20Tone.mp3');
   });
 
   it('starts between 15% and 50% of the track duration', async () => {
