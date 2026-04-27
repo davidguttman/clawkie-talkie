@@ -25,6 +25,7 @@
 // The phone never touches an xAI API key or WebSocket either way.
 
 import { startMediaSessionKeeper } from './mediaSessionKeeper';
+import type { BufferedReplyAudio } from '../replay';
 
 const DEFAULT_SAMPLE_RATE = 24000;
 const VISUALIZER_FFT_SIZE = 512;
@@ -33,6 +34,7 @@ const VISUALIZER_SMOOTHING = 0.45;
 let sharedAudioCtx: AudioContext | null = null;
 let sharedAudioElement: HTMLAudioElement | null = null;
 let attachedRemoteStream: MediaStream | null = null;
+let lastBufferedReplyAudio: BufferedReplyAudio | null = null;
 let remoteStreamAnalyserState: {
   stream: MediaStream;
   source: MediaStreamAudioSourceNode;
@@ -87,6 +89,91 @@ export interface TTSHandle {
   stop(): void;
   readonly error?: string;
   readonly analyser?: AnalyserNode | null;
+}
+
+export function getLastBufferedReplyAudio(): BufferedReplyAudio | null {
+  if (!lastBufferedReplyAudio) return null;
+  return {
+    ...lastBufferedReplyAudio,
+    chunks: lastBufferedReplyAudio.chunks.map((chunk) => chunk.slice(0)),
+  };
+}
+
+export function canSpeakReplayText(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    'speechSynthesis' in window &&
+    'SpeechSynthesisUtterance' in window
+  );
+}
+
+export function speakReplayText(text: string): Promise<void> {
+  if (!canSpeakReplayText()) return Promise.reject(new Error('speech_synthesis_unavailable'));
+  return new Promise((resolve) => {
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.onend = () => resolve();
+    utterance.onerror = () => resolve();
+    try {
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      resolve();
+    }
+  });
+}
+
+export function playBufferedReplyAudio(audio: BufferedReplyAudio): Promise<void> {
+  const audioCtx = getSharedAudioContext();
+  if (!audioCtx || audio.chunks.length === 0) return Promise.reject(new Error('audio_unsupported'));
+  void resumeAudioContext(audioCtx);
+  try {
+    const gain = audioCtx.createGain();
+    gain.gain.value = 1;
+    gain.connect(audioCtx.destination);
+    let nextStartTime = audioCtx.currentTime;
+    let remaining = 0;
+    return new Promise((resolve) => {
+      const finishOne = (source: AudioBufferSourceNode) => {
+        remaining -= 1;
+        try {
+          source.disconnect();
+        } catch {
+          // already disconnected
+        }
+        if (remaining === 0) {
+          try {
+            gain.disconnect();
+          } catch {
+            // already disconnected
+          }
+          resolve();
+        }
+      };
+
+      for (const chunk of audio.chunks) {
+        if (chunk.byteLength < 2) continue;
+        const source = createPcmBufferSource(audioCtx, chunk, audio.sampleRate, audio.rate);
+        if (!source) continue;
+        source.connect(gain);
+        const startAt = Math.max(audioCtx.currentTime, nextStartTime);
+        nextStartTime = startAt + source.buffer!.duration / (source.playbackRate.value || 1);
+        remaining += 1;
+        source.onended = () => finishOne(source);
+        source.start(startAt);
+      }
+
+      if (remaining === 0) {
+        try {
+          gain.disconnect();
+        } catch {
+          // already disconnected
+        }
+        resolve();
+      }
+    });
+  } catch {
+    return Promise.reject(new Error('audio_unsupported'));
+  }
 }
 
 export interface TTSPlayerOptions {
@@ -288,12 +375,23 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
     started: false,
     drainTimer: null as ReturnType<typeof setTimeout> | null,
     rate: opts.rate && Number.isFinite(opts.rate) ? Math.max(0.5, Math.min(2, opts.rate)) : 1,
+    replayChunks: [] as ArrayBuffer[],
+    replayBytes: 0,
   };
 
   const finish = (err?: string) => {
     if (state.finished) return;
     state.finished = true;
     if (err && !state.error) state.error = err;
+    if (!err && !state.stopped && state.replayChunks.length > 0) {
+      lastBufferedReplyAudio = {
+        sampleRate: state.sampleRate,
+        rate: state.rate,
+        chunks: state.replayChunks.map((chunk) => chunk.slice(0)),
+        byteLength: state.replayBytes,
+        createdAt: Date.now(),
+      };
+    }
     if (state.drainTimer) {
       clearTimeout(state.drainTimer);
       state.drainTimer = null;
@@ -358,6 +456,8 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
     if (state.finished || state.stopped) return;
     if (msg.t === 'tts.start') {
       state.started = true;
+      state.replayChunks = [];
+      state.replayBytes = 0;
       const sr = typeof msg.sample_rate === 'number' ? msg.sample_rate : DEFAULT_SAMPLE_RATE;
       initAudio(sr);
       return;
@@ -380,6 +480,8 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
     if (isRemoteAudioActive()) return;
     if (!state.audioCtx) initAudio(state.sampleRate);
     if (!state.audioCtx || !state.gain) return;
+    state.replayChunks.push(bytes.slice(0));
+    state.replayBytes += bytes.byteLength;
     schedulePcmChunk(state, bytes);
   });
 
@@ -420,6 +522,28 @@ function schedulePcmChunk(
   if (bytes.byteLength < 2) return;
   void resumeAudioContext(state.audioCtx);
 
+  const source = createPcmBufferSource(state.audioCtx, bytes, state.sampleRate, state.rate);
+  if (!source) return;
+  source.connect(state.gain);
+
+  const now = state.audioCtx.currentTime;
+  const startAt = Math.max(now, state.nextStartTime);
+  state.nextStartTime = startAt + source.buffer!.duration / (source.playbackRate.value || 1);
+
+  state.sources.push(source);
+  source.onended = () => {
+    state.sources = state.sources.filter((s) => s !== source);
+  };
+  source.start(startAt);
+}
+
+function createPcmBufferSource(
+  audioCtx: AudioContext,
+  bytes: ArrayBuffer,
+  sampleRate: number,
+  rate: number,
+): AudioBufferSourceNode | null {
+  if (bytes.byteLength < 2) return null;
   const sampleCount = bytes.byteLength >> 1;
   const samples = new Float32Array(sampleCount);
   const view = new DataView(bytes);
@@ -428,23 +552,13 @@ function schedulePcmChunk(
     samples[i] = s < 0 ? s / 0x8000 : s / 0x7fff;
   }
 
-  const buffer = state.audioCtx.createBuffer(1, sampleCount, state.sampleRate);
+  const buffer = audioCtx.createBuffer(1, sampleCount, sampleRate);
   buffer.getChannelData(0).set(samples);
 
-  const source = state.audioCtx.createBufferSource();
+  const source = audioCtx.createBufferSource();
   source.buffer = buffer;
-  if (state.rate !== 1) source.playbackRate.value = state.rate;
-  source.connect(state.gain);
-
-  const now = state.audioCtx.currentTime;
-  const startAt = Math.max(now, state.nextStartTime);
-  state.nextStartTime = startAt + buffer.duration / (source.playbackRate.value || 1);
-
-  state.sources.push(source);
-  source.onended = () => {
-    state.sources = state.sources.filter((s) => s !== source);
-  };
-  source.start(startAt);
+  if (rate !== 1) source.playbackRate.value = rate;
+  return source;
 }
 
 function getSharedAudioContext(): AudioContext | null {

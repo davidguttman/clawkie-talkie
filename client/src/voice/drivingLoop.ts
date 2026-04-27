@@ -39,6 +39,7 @@ import {
 } from './drivingReducer';
 import { HoldMusicController } from './holdMusic';
 import type { ControlMessage, RtcStatus } from '../rtc/client';
+import { appendTranscriptTurn } from '../storage';
 
 export type { DrivingState } from './drivingReducer';
 
@@ -80,6 +81,7 @@ export interface DrivingLoopOptions {
   sttLanguage?: string;
   sessionId?: string;
   threadId?: string;
+  hostPeerId?: string | null;
   rtc: {
     status: RtcStatus;
     hasClient: boolean;
@@ -124,9 +126,21 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
   // committed real words during the turn.
   const accumulatedRef = useRef<string[]>([]);
   const rtcRef = useRef(rtc);
+  const sessionMetaRef = useRef({
+    sessionId: opts.sessionId,
+    threadId: opts.threadId,
+    hostPeerId: opts.hostPeerId,
+  });
   useEffect(() => {
     rtcRef.current = rtc;
   }, [rtc]);
+  useEffect(() => {
+    sessionMetaRef.current = {
+      sessionId: opts.sessionId,
+      threadId: opts.threadId,
+      hostPeerId: opts.hostPeerId,
+    };
+  }, [opts.sessionId, opts.threadId, opts.hostPeerId]);
 
   const daemonConnected = rtc.hasClient && rtc.status === 'open';
 
@@ -168,6 +182,7 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
         }
         accumulatedRef.current = [];
         setCurrentTurnTranscript({ active: true, sttDone: true, text: finalText });
+        saveTranscriptTurn(sessionMetaRef.current, 'user', finalText);
         dispatch({ type: 'stt.done', text: finalText });
         return;
       }
@@ -179,11 +194,13 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
       }
       if (msg.t === 'reply.done') {
         const text = typeof msg.text === 'string' ? msg.text : '';
+        saveTranscriptTurn(sessionMetaRef.current, 'assistant', text);
         dispatch({ type: 'reply.done', text });
         return;
       }
       if (msg.t === 'reply.error') {
         const reason = typeof msg.message === 'string' ? msg.message : 'reply_error';
+        saveTranscriptTurn(sessionMetaRef.current, 'assistant', '', reason);
         stopHoldMusicForControlMessage(msg, holdMusicRef.current);
         dispatch({ type: 'reply.error', reason });
         return;
@@ -405,6 +422,23 @@ function runCancelReply(
   const tts = ttsRef.current;
   ttsRef.current = null;
   tts?.stop();
+}
+
+function saveTranscriptTurn(
+  opts: Pick<DrivingLoopOptions, 'sessionId' | 'threadId' | 'hostPeerId'>,
+  role: 'user' | 'assistant',
+  text: string,
+  error?: string,
+): void {
+  if (!opts.sessionId) return;
+  appendTranscriptTurn(
+    {
+      sessionId: opts.sessionId,
+      threadId: opts.threadId,
+      hostPeerId: opts.hostPeerId,
+    },
+    { role, text, error },
+  );
 }
 
 export function readTargetBands(

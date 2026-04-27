@@ -222,6 +222,37 @@ describe('daemon TTS playback audio context', () => {
     expect(ctx.buffers).toContainEqual({ channels: 1, length: 2, sampleRate: 24000 });
   });
 
+  it('keeps the last completed fallback PCM reply available for local replay', async () => {
+    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+    const { getLastBufferedReplyAudio, playDaemonTts } = await import('../client/src/voice/tts');
+    const controls: Array<(msg: { t: string; [k: string]: unknown }) => void> = [];
+    const binaries: Array<(bytes: ArrayBuffer) => void> = [];
+
+    const handle = playDaemonTts({
+      addControlListener(fn) {
+        controls.push(fn);
+        return vi.fn();
+      },
+      addBinaryListener(fn) {
+        binaries.push(fn);
+        return vi.fn();
+      },
+      sendControl: vi.fn(),
+    });
+
+    controls[0]({ t: 'tts.start', sample_rate: 24000 });
+    binaries[0](new Uint8Array([0, 0, 0xff, 0x7f]).buffer);
+    controls[0]({ t: 'tts.done' });
+    await handle.done;
+
+    expect(getLastBufferedReplyAudio()).toMatchObject({
+      sampleRate: 24000,
+      rate: 1,
+      byteLength: 4,
+    });
+    expect(getLastBufferedReplyAudio()?.chunks).toHaveLength(1);
+  });
+
   it('defensively resumes the shared context when TTS starts without prior unlock', async () => {
     vi.stubGlobal('window', { AudioContext: FakeAudioContext });
     const { playDaemonTts } = await import('../client/src/voice/tts');
