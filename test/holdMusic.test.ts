@@ -241,15 +241,15 @@ describe('radio static generation', () => {
     expect(countSamplesAbove(crackle, 0.25)).toBe(countSamplesAbove(crackle, 0));
   });
 
-  it('builds a symmetrical gentle saturation curve', async () => {
-    const { createGentleSaturationCurve } = await import('../client/src/voice/holdMusic');
+  it('builds the AM-IFY drive saturation curve', async () => {
+    const { createAmifySaturationCurve } = await import('../client/src/voice/holdMusic');
 
-    const curve = createGentleSaturationCurve(9, 1.8);
+    const curve = createAmifySaturationCurve(9, 0.5);
 
     expect(curve).toHaveLength(9);
-    expect(curve[0]).toBeCloseTo(-1);
+    expect(curve[0]).toBeCloseTo(-0.348128);
     expect(curve[4]).toBeCloseTo(0);
-    expect(curve[8]).toBeCloseTo(1);
+    expect(curve[8]).toBeCloseTo(0.348128);
     expect(curve[2]).toBeCloseTo(-curve[6]);
   });
 });
@@ -277,28 +277,31 @@ describe('HoldMusicController', () => {
     expect(audio.play).toHaveBeenCalledTimes(1);
     expect(ctx.mediaElementSources).toHaveLength(1);
     expect(ctx.biquads[0].type).toBe('highpass');
-    expect(ctx.biquads[0].frequency.value).toBe(320);
+    expect(ctx.biquads[0].frequency.value).toBe(400);
     expect(ctx.biquads[1].type).toBe('lowpass');
-    expect(ctx.biquads[1].frequency.value).toBe(3600);
+    expect(ctx.biquads[1].frequency.value).toBe(3200);
     expect(ctx.biquads[2].type).toBe('peaking');
     expect(ctx.biquads[2].frequency.value).toBe(1500);
-    expect(ctx.biquads[2].gain.value).toBe(6);
+    expect(ctx.biquads[2].gain.value).toBe(4);
     expect(ctx.biquads[2].Q.value).toBe(1.2);
     expect(ctx.waveShapers[0].curve).toBeInstanceOf(Float32Array);
-    expect(ctx.waveShapers[0].oversample).toBe('2x');
+    expect(ctx.waveShapers[0].oversample).toBe('4x');
     expect(ctx.compressors[0].threshold.value).toBe(-24);
+    expect(ctx.compressors[0].ratio.value).toBe(8);
+    expect(ctx.compressors[0].attack.value).toBe(0.003);
+    expect(ctx.compressors[0].release.value).toBe(0.1);
     expect(ctx.gains[1].gain.value).toBe(1);
-    expect(ctx.gains[2].gain.value).toBeCloseTo(0.045);
+    expect(ctx.gains[2].gain.value).toBe(0);
     expect(ctx.gains[3].gain.value).toBeCloseTo(0.15);
     expect(ctx.oscillators[0].type).toBe('sine');
-    expect(ctx.oscillators[0].frequency.value).toBeCloseTo(0.13);
+    expect(ctx.oscillators[0].frequency.value).toBeCloseTo(0.05);
     expect(ctx.biquads[3].type).toBe('highpass');
-    expect(ctx.biquads[3].frequency.value).toBe(320);
+    expect(ctx.biquads[3].frequency.value).toBe(400);
     expect(ctx.biquads[4].type).toBe('lowpass');
-    expect(ctx.biquads[4].frequency.value).toBe(3600);
+    expect(ctx.biquads[4].frequency.value).toBe(3200);
     expect(ctx.biquads[5].type).toBe('peaking');
-    expect(ctx.biquads[5].frequency.value).toBe(1500);
-    expect(ctx.biquads[5].gain.value).toBe(6);
+    expect(ctx.biquads[5].frequency.value).toBe(2200);
+    expect(ctx.biquads[5].gain.value).toBe(4);
     expect(ctx.mediaElementSources[0].connect).toHaveBeenCalledWith(ctx.biquads[0]);
     expect(ctx.biquads[0].connect).toHaveBeenCalledWith(ctx.gains[0]);
     expect(ctx.gains[0].connect).toHaveBeenCalledWith(ctx.biquads[1]);
@@ -315,8 +318,7 @@ describe('HoldMusicController', () => {
     expect(ctx.biquads[3].connect).toHaveBeenCalledWith(ctx.biquads[4]);
     expect(ctx.biquads[4].connect).toHaveBeenCalledWith(ctx.biquads[5]);
     expect(ctx.biquads[5].connect).toHaveBeenCalledWith(ctx.gains[4]);
-    expect(ctx.gains[4].gain.value).toBeCloseTo(0.012);
-    expect(ctx.gains[4].gain.value).toBeLessThan(ctx.gains[3].gain.value / 10);
+    expect(ctx.gains[4].gain.value).toBeCloseTo(0.04838281249999998);
     expect(ctx.gains[4].connect).toHaveBeenCalledWith(ctx.destination);
     expect(ctx.bufferSources[0].buffer).not.toBe(ctx.bufferSources[1].buffer);
     expect(countSamplesAbove(ctx.bufferSources[0].buffer?.getChannelData(0) ?? new Float32Array(), 0))
@@ -354,8 +356,8 @@ describe('HoldMusicController', () => {
     const worklet = FakeAudioWorkletNode.instances[0];
     expect(addModule).toHaveBeenCalledWith('/audio/bitcrusher-processor.js');
     expect(worklet.name).toBe('hold-music-bitcrusher');
-    expect(worklet.parameters.get('bits')?.value).toBe(8);
-    expect(worklet.parameters.get('normFreq')?.value).toBe(0.15);
+    expect(worklet.parameters.get('bits')?.value).toBe(6);
+    expect(worklet.parameters.get('normFreq')?.value).toBe(0.25);
     expect(ctx.biquads[0].disconnect).toHaveBeenCalledWith(ctx.gains[0]);
     expect(ctx.gains[0].disconnect).toHaveBeenCalledWith(ctx.biquads[1]);
     expect(ctx.biquads[0].connect).toHaveBeenCalledWith(worklet);

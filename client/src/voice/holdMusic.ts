@@ -8,22 +8,24 @@ const HOLD_MUSIC_TRACKS = [
 ] as const;
 
 const MUSIC_GAIN = 0.15;
-const NOISE_GAIN = 0.012;
-const MUSIC_HIGHPASS_HZ = 320;
-const MUSIC_LOWPASS_HZ = 3600;
+const NOISE_GAIN = 0.04838281249999998;
+const MUSIC_HIGHPASS_HZ = 400;
+const MUSIC_LOWPASS_HZ = 3200;
 const MUSIC_MIDRANGE_HZ = 1500;
-const MUSIC_MIDRANGE_GAIN_DB = 6;
+const MUSIC_MIDRANGE_GAIN_DB = 4;
 const MUSIC_MIDRANGE_Q = 1.2;
-const MUSIC_WOBBLE_HZ = 0.13;
-const MUSIC_WOBBLE_DEPTH = 0.045;
+const MUSIC_SATURATION_DRIVE = 0.5;
+const MUSIC_WOBBLE_HZ = 0.05;
+const MUSIC_WOBBLE_DEPTH = 0;
+const NOISE_FREQ_HZ = 2200;
 const NOISE_BUFFER_SECONDS = 2;
 const CRACKLES_PER_SECOND = 5;
 const CRACKLE_MIN_AMPLITUDE = 0.28;
 const CRACKLE_EXTRA_AMPLITUDE = 0.22;
 const BITCRUSHER_WORKLET_URL = '/audio/bitcrusher-processor.js';
 const BITCRUSHER_PROCESSOR_NAME = 'hold-music-bitcrusher';
-const BITCRUSHER_BITS = 8;
-const BITCRUSHER_NORM_FREQ = 0.15;
+const BITCRUSHER_BITS = 6;
+const BITCRUSHER_NORM_FREQ = 0.25;
 
 let sharedAudioCtx: AudioContext | null = null;
 
@@ -105,14 +107,14 @@ export class HoldMusicController {
       musicMidPeak.Q.value = MUSIC_MIDRANGE_Q;
       musicMidPeak.gain.value = MUSIC_MIDRANGE_GAIN_DB;
 
-      musicSaturation.curve = createGentleSaturationCurve();
-      musicSaturation.oversample = '2x';
+      musicSaturation.curve = createAmifySaturationCurve();
+      musicSaturation.oversample = '4x';
 
       musicCompressor.threshold.value = -24;
       musicCompressor.knee.value = 18;
-      musicCompressor.ratio.value = 3;
-      musicCompressor.attack.value = 0.012;
-      musicCompressor.release.value = 0.32;
+      musicCompressor.ratio.value = 8;
+      musicCompressor.attack.value = 0.003;
+      musicCompressor.release.value = 0.1;
 
       musicWobble.gain.value = 1;
       musicWobbleOscillator.type = 'sine';
@@ -129,7 +131,7 @@ export class HoldMusicController {
       noiseLowpass.Q.value = 0.7;
 
       noiseMidPeak.type = 'peaking';
-      noiseMidPeak.frequency.value = MUSIC_MIDRANGE_HZ;
+      noiseMidPeak.frequency.value = NOISE_FREQ_HZ;
       noiseMidPeak.Q.value = MUSIC_MIDRANGE_Q;
       noiseMidPeak.gain.value = MUSIC_MIDRANGE_GAIN_DB;
 
@@ -384,15 +386,16 @@ export function generateRadioCrackleSamples({
   return samples;
 }
 
-export function createGentleSaturationCurve(
+export function createAmifySaturationCurve(
   length = 256,
-  amount = 1.8,
+  drive = MUSIC_SATURATION_DRIVE,
 ): Float32Array<ArrayBuffer> {
   const curve = new Float32Array(Math.max(2, length));
-  const normalizer = Math.tanh(amount);
+  const amount = Math.max(0, drive) * 100;
+  const degrees = Math.PI / 180;
   for (let i = 0; i < curve.length; i += 1) {
     const x = (i / (curve.length - 1)) * 2 - 1;
-    curve[i] = Math.tanh(x * amount) / normalizer;
+    curve[i] = ((3 + amount) * x * 20 * degrees) / (Math.PI + amount * Math.abs(x));
   }
   return curve;
 }

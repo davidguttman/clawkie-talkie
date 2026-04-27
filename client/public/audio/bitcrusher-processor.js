@@ -3,14 +3,14 @@ class HoldMusicBitcrusherProcessor extends AudioWorkletProcessor {
     return [
       {
         name: 'bits',
-        defaultValue: 8,
+        defaultValue: 6,
         minValue: 1,
         maxValue: 16,
         automationRate: 'k-rate',
       },
       {
         name: 'normFreq',
-        defaultValue: 0.15,
+        defaultValue: 0.25,
         minValue: 0.01,
         maxValue: 1,
         automationRate: 'k-rate',
