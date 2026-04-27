@@ -232,6 +232,14 @@ User services normally start when you log in. If you need the daemon to start at
 sudo loginctl enable-linger "$USER"
 ```
 
+## Install the OpenClaw voice handoff skill
+
+The daemon alone is not enough for voice handoff. OpenClaw also needs the `clawkie-voice-handoff` skill so a user can ask an agent to switch the current conversation to voice.
+
+If an agent is performing the install, use [Agent install instructions](../AGENT-INSTALL.md). That guide includes copying `openclaw/clawkie-voice-handoff/SKILL.md` into the runtime skills directory and patching the installed copy with this machine's stable `DAEMON_PEER_ID`.
+
+Do not put the user's `DAEMON_PEER_ID` into the source-controlled skill file. Only the runtime-installed copy should contain the machine-specific host ID.
+
 ## Verify the install
 
 After starting the daemon manually or as a service:
@@ -244,8 +252,9 @@ After starting the daemon manually or as a service:
    - `Peer ID: <DAEMON_PEER_ID>`
    - `Waiting for phone…`
 3. Confirm the printed peer ID matches the `DAEMON_PEER_ID` in `.env`.
-4. From OpenClaw, request a Clawkie Talkie voice handoff link and open it in a browser.
-5. The browser should reach the voice UI instead of a bad-session error, and the daemon logs should show WebRTC/rendezvous activity.
+4. Confirm the OpenClaw `clawkie-voice-handoff` skill is installed and configured with the same host ID.
+5. From OpenClaw, request a Clawkie Talkie voice handoff link and open it in a browser.
+6. The browser should reach the voice UI instead of a bad-session error, and the daemon logs should show WebRTC/rendezvous activity.
 
 There is no inbound HTTP port for the daemon to expose. It reaches the signaling service over outbound HTTPS and establishes WebRTC from there.
 

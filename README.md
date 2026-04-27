@@ -8,11 +8,15 @@ A local daemon runs on the user's machine, keeps private credentials local, conn
 https://clawkietalkie.app/voice#host=<host>&session=<session>&channel=<channel>&target=<target>
 ```
 
-## Install the daemon
+## Install
 
 For end-user Mac/Linux setup, including persistent launchd/systemd service examples, see:
 
 - [Install the Clawkie Talkie daemon](./docs/install-daemon.md)
+
+For agent-run installation, including installing the OpenClaw voice handoff skill, see:
+
+- [Agent install instructions](./AGENT-INSTALL.md)
 
 ## Developer and protocol docs
 
