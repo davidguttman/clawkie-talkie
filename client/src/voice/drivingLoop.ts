@@ -25,6 +25,8 @@ import {
   analyserToBandIntensities,
   mergeBandIntensities,
   pcm16ToBandIntensities,
+  OUTPUT_BAND_SMOOTHING,
+  RECORDING_BAND_SMOOTHING,
   smoothBandIntensities,
 } from './audioBands';
 import {
@@ -222,9 +224,11 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     >();
     const tick = () => {
       const target = readTargetBands(ctx.state, micBandsRef.current, ttsRef.current, analyserScratch);
+      const smoothing =
+        ctx.state === 'recording' ? RECORDING_BAND_SMOOTHING : OUTPUT_BAND_SMOOTHING;
       const next = smoothBandIntensities(renderedBandsRef.current, target, {
-        attack: ctx.state === 'recording' ? 0.5 : 0.38,
-        release: ctx.state === 'recording' ? 0.18 : 0.12,
+        attack: smoothing.attack,
+        release: smoothing.release,
       });
       renderedBandsRef.current = next;
       setIntensities(next);

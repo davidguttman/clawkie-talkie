@@ -44,6 +44,8 @@ class FakeMediaStream {
 }
 
 class FakeAudioContext {
+  static instances: FakeAudioContext[] = [];
+
   state: AudioContextState = 'running';
   destination = {};
   sampleRate = 16000;
@@ -56,6 +58,10 @@ class FakeAudioContext {
   close = vi.fn(async () => {
     this.state = 'closed';
   });
+
+  constructor() {
+    FakeAudioContext.instances.push(this);
+  }
 }
 
 afterEach(async () => {
@@ -63,6 +69,7 @@ afterEach(async () => {
   _resetMicAudioSourceForTests();
   vi.unstubAllGlobals();
   vi.resetModules();
+  FakeAudioContext.instances = [];
 });
 
 describe('createMicAudioSource', () => {
@@ -87,6 +94,29 @@ describe('createMicAudioSource', () => {
     await src3.stop();
 
     expect(getUserMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses a 1024-sample mic callback frame for responsive visualization', async () => {
+    const stream = new FakeMediaStream();
+    const getUserMedia = vi.fn(async () => stream);
+    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } });
+
+    const { createMicAudioSource, MIC_BUFFER_SIZE, MIC_FRAME_DURATION_MS } = await import(
+      '../client/src/voice/audioSource'
+    );
+
+    const src = createMicAudioSource();
+    await src.start(() => {});
+    await src.stop();
+
+    expect(MIC_BUFFER_SIZE).toBe(1024);
+    expect(MIC_FRAME_DURATION_MS).toBe(64);
+    expect(FakeAudioContext.instances[0].createScriptProcessor).toHaveBeenCalledWith(
+      1024,
+      1,
+      1,
+    );
   });
 
   it('does not stop the underlying mic tracks on a normal stop()', async () => {

@@ -15,6 +15,21 @@ export interface SmoothBandOptions {
   floor?: number;
 }
 
+export const DEFAULT_BAND_SMOOTHING = {
+  attack: 0.6,
+  release: 0.24,
+} as const;
+
+export const RECORDING_BAND_SMOOTHING = {
+  attack: 0.68,
+  release: 0.3,
+} as const;
+
+export const OUTPUT_BAND_SMOOTHING = {
+  attack: 0.55,
+  release: 0.24,
+} as const;
+
 export function pcm16ToBandIntensities(
   pcm: ArrayBuffer,
   bandCount: number,
@@ -148,8 +163,8 @@ export function smoothBandIntensities(
   target: readonly number[],
   opts: SmoothBandOptions = {},
 ): number[] {
-  const attack = opts.attack ?? 0.45;
-  const release = opts.release ?? 0.16;
+  const attack = opts.attack ?? DEFAULT_BAND_SMOOTHING.attack;
+  const release = opts.release ?? DEFAULT_BAND_SMOOTHING.release;
   const floor = opts.floor ?? MIN_DISPLAY_INTENSITY;
   const count = Math.max(previous.length, target.length);
   const next = new Array<number>(count);

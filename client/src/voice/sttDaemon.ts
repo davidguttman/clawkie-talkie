@@ -27,7 +27,9 @@
 
 import type { ControlMessage } from '../rtc/client';
 import {
+  MIC_BUFFER_SIZE,
   MicPermissionError,
+  SAMPLE_RATE,
   selectAudioSource,
   type AudioSource,
 } from './audioSource';
@@ -60,13 +62,11 @@ export interface STTStartOptions {
   audioSource?: AudioSource;
 }
 
-const SAMPLE_RATE = 16000;
-const MIC_BUFFER_SIZE = 4096;
 // Rolling cap on pre-ready frames — bounded memory, enough to preserve
 // the first ~1 s of mic audio captured while the daemon's xAI WS is
 // still handshaking. Fixture source doesn't emit pre-ready so this is
 // effectively unused there.
-const PRE_READY_CAP_FRAMES = Math.ceil(
+export const PRE_READY_CAP_FRAMES = Math.ceil(
   1000 / ((MIC_BUFFER_SIZE / SAMPLE_RATE) * 1000),
 );
 
