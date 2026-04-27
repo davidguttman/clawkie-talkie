@@ -227,6 +227,83 @@ describe('runChat with explicit delivery target', () => {
     expect(transcriptCommand).toContain('"--target" "channel:C123"');
     expect(transcriptCommand).toContain(`"--message" ${JSON.stringify('> hello')}`);
   });
+
+  it('mirrors the assistant reply to the same delivery target after the agent turn', async () => {
+    execMock
+      .mockResolvedValueOnce({ stdout: 'transcript posted\n', stderr: '' })
+      .mockResolvedValueOnce({ stdout: 'hello back\n', stderr: '' })
+      .mockResolvedValueOnce({ stdout: 'reply posted\n', stderr: '' });
+
+    const result = await runChat('hi', {
+      apiKey: 'test-key',
+      sessionId: 'session-1',
+      delivery: { channel: 'discord', target: 'channel:thread-1' },
+    });
+
+    expect(result.text).toBe('hello back');
+
+    const sendCommands = execMock.mock.calls
+      .map(([cmd]) => String(cmd))
+      .filter((cmd) => cmd.includes('openclaw "message" "send"'));
+
+    // One transcript post and one reply post — both via the same
+    // generic delivery target. No duplicate transcript post.
+    expect(sendCommands).toHaveLength(2);
+
+    const transcriptCommand = sendCommands[0];
+    expect(transcriptCommand).toContain('"--channel" "discord"');
+    expect(transcriptCommand).toContain('"--target" "channel:thread-1"');
+    expect(transcriptCommand).toContain(`"--message" ${JSON.stringify('> hi')}`);
+
+    const replyCommand = sendCommands[1];
+    expect(replyCommand).toContain('"--channel" "discord"');
+    expect(replyCommand).toContain('"--target" "channel:thread-1"');
+    expect(replyCommand).toContain('"--message" "hello back"');
+  });
+
+  it('does not post a reply when the agent turn fails', async () => {
+    execMock
+      .mockResolvedValueOnce({ stdout: 'transcript posted\n', stderr: '' })
+      .mockRejectedValueOnce(
+        Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:18789'), {
+          stderr: 'connect ECONNREFUSED 127.0.0.1:18789',
+        }),
+      );
+
+    await expect(
+      runChat('hi', {
+        apiKey: 'test-key',
+        sessionId: 'session-1',
+        delivery: { channel: 'discord', target: 'channel:thread-1' },
+      }),
+    ).rejects.toMatchObject({ code: 'openclaw_gateway_unavailable' });
+
+    const sendCommands = execMock.mock.calls
+      .map(([cmd]) => String(cmd))
+      .filter((cmd) => cmd.includes('openclaw "message" "send"'));
+    // Only the transcript post should have happened — no reply send.
+    expect(sendCommands).toHaveLength(1);
+    expect(sendCommands[0]).toContain(`"--message" ${JSON.stringify('> hi')}`);
+  });
+
+  it('classifies and surfaces a failure to post the reply', async () => {
+    execMock
+      .mockResolvedValueOnce({ stdout: 'transcript posted\n', stderr: '' })
+      .mockResolvedValueOnce({ stdout: 'hello back\n', stderr: '' })
+      .mockRejectedValueOnce(
+        Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:18789'), {
+          stderr: 'connect ECONNREFUSED 127.0.0.1:18789',
+        }),
+      );
+
+    await expect(
+      runChat('hi', {
+        apiKey: 'test-key',
+        sessionId: 'session-1',
+        delivery: { channel: 'discord', target: 'channel:thread-1' },
+      }),
+    ).rejects.toMatchObject({ code: 'openclaw_gateway_unavailable' });
+  });
 });
 
 describe('Discord transcript formatting and target derivation', () => {

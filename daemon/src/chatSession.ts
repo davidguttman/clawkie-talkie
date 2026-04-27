@@ -287,9 +287,23 @@ export async function runChat(userText: string, opts: ChatOptionsWithSession): P
       signal: opts.signal,
     });
 
-    // Discord-bound agent sessions post the reply themselves; do not
-    // post it again here. Debug notification stays a fixed-string
-    // status ping so it never embeds reply text.
+    // The voice handoff path (rendezvous-bound `delivery`) is not a
+    // Discord-bound OpenClaw session, so the agent invocation does
+    // *not* mirror its reply back to the originating channel/thread.
+    // Post it explicitly here. The legacy `threadId`-only path goes
+    // through a Discord-bound agent session that posts the reply
+    // itself, so we skip the explicit send to avoid the double-post
+    // that prompted the original "no reply send" guard.
+    if (opts.delivery) {
+      await sendGenericMessage(
+        opts.apiKey,
+        opts.delivery,
+        reply,
+        opts.signal,
+        'openclaw_reply_post_failed',
+      );
+    }
+
     await sendDebugNotification(opts.apiKey, opts.threadId, 'reply delivered');
 
     return { text: reply, source: 'xai_via_openclaw' };
