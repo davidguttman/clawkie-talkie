@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { parseInitialSearch } from '../client/src/app';
+import { parseInitialLocation, parseInitialSearch } from '../client/src/app';
 import { parseHandoffUrl } from '../client/src/voice/handoffUrl';
 
 describe('client URL parsing (legacy query)', () => {
+  it('defaults to the bad-session error instead of a handoff screen', () => {
+    expect(parseInitialSearch('')).toMatchObject({
+      screen: 'error',
+      errorKind: 'bad_session',
+    });
+  });
+
   it('requires an explicit host peer id', () => {
     expect(parseInitialSearch('').hostPeerId).toBeNull();
     expect(parseInitialSearch('?screen=driving').hostPeerId).toBeNull();
@@ -56,5 +63,36 @@ describe('parseHandoffUrl', () => {
   it('returns null when required args are missing', () => {
     expect(parseHandoffUrl('/voice')).toBeNull();
     expect(parseHandoffUrl('/voice#host=h&session=s')).toBeNull();
+  });
+});
+
+describe('initial handoff routing', () => {
+  it('opens valid voice handoff URLs directly in Driving', () => {
+    expect(
+      parseInitialLocation({
+        search: '',
+        hash: '#host=host-1&session=session-1&channel=discord&target=channel%3Athread-1',
+      }),
+    ).toMatchObject({
+      screen: 'driving',
+      hostPeerId: 'host-1',
+      sessionId: 'session-1',
+      handoff: {
+        delivery: { channel: 'discord', target: 'channel:thread-1' },
+      },
+    });
+  });
+
+  it('keeps invalid handoff URLs on the bad-session error', () => {
+    expect(
+      parseInitialLocation({
+        search: '',
+        hash: '#host=host-1&session=session-1',
+      }),
+    ).toMatchObject({
+      screen: 'error',
+      errorKind: 'bad_session',
+      handoff: null,
+    });
   });
 });

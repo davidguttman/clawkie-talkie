@@ -1,5 +1,5 @@
-// One RtcClient per host peer ID, hoisted so both Handoff and Driving
-// screens can consume the same connection + control message stream.
+// One RtcClient per host peer ID, hoisted so Driving can consume the
+// connection + control message stream.
 
 import {
   createContext,

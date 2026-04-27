@@ -26,6 +26,11 @@ const SYSTEM_PROMPT =
   'You are Clawkie, a walky-talky voice assistant. Reply in one or two ' +
   'short spoken sentences — no markdown, no lists, no code blocks.';
 
+const RAW_STT_GUIDANCE =
+  'The following is a raw speech-to-text transcript from the user. It may contain ' +
+  "mistranscriptions, missing punctuation, or incorrect words. Use your best judgment to infer the user's " +
+  'intended meaning and actual spoken words before replying.';
+
 // Helper: send a debug/activity notification to the Discord thread
 async function sendDebugNotification(
   apiKey: string,
@@ -166,7 +171,7 @@ async function runOpenClawTurn(opts: {
   signal?: AbortSignal;
 }): Promise<string> {
   const sessionId = await resolveOpenClawSessionId(opts);
-  const message = `User said: "${opts.userText}"\n\nReply as Clawkie: ${SYSTEM_PROMPT}`;
+  const message = buildAgentTurnMessage(opts.userText);
   const args = [
     'agent',
     '--session-id', sessionId,
@@ -186,6 +191,10 @@ async function runOpenClawTurn(opts: {
     const msg = err instanceof Error ? err.message : 'openclaw_failed';
     throw new ChatError(msg, classifyOpenClawError(err));
   }
+}
+
+export function buildAgentTurnMessage(userText: string): string {
+  return `${RAW_STT_GUIDANCE}\n\nRaw transcript:\n${userText}\n\nReply as Clawkie: ${SYSTEM_PROMPT}`;
 }
 
 async function resolveOpenClawSessionId(opts: {

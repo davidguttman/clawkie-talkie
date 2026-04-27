@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { HIFI } from './tokens';
 import { HiFiPhone } from './components/Phone';
-import { HandoffScreen } from './screens/Handoff';
 import { DrivingScreen } from './screens/Driving';
 import { HistoryScreen } from './screens/History';
 import { TranscriptScreen } from './screens/Transcript';
@@ -11,10 +10,9 @@ import { RtcProvider } from './rtc/RtcContext';
 import { loadSettings, saveSettings, type Settings } from './storage';
 import { parseHandoffUrl, type HandoffRoute } from './voice/handoffUrl';
 
-type ScreenId = 'handoff' | 'driving' | 'history' | 'transcript' | 'settings' | 'error';
+type ScreenId = 'driving' | 'history' | 'transcript' | 'settings' | 'error';
 
 const SCREEN_IDS: ScreenId[] = [
-  'handoff',
   'driving',
   'history',
   'transcript',
@@ -41,7 +39,7 @@ export function parseInitialSearch(search: string): {
   const rawScreen = params.get('screen');
   const screen: ScreenId = (SCREEN_IDS as string[]).includes(rawScreen || '')
     ? (rawScreen as ScreenId)
-    : 'handoff';
+    : 'error';
   const rawKind = params.get('errorKind');
   const errorKind: ErrorKind = (ERROR_KINDS as string[]).includes(rawKind || '')
     ? (rawKind as ErrorKind)
@@ -52,21 +50,26 @@ export function parseInitialSearch(search: string): {
   return { screen, errorKind, hostPeerId, sessionId, threadId };
 }
 
-function parseInitial() {
-  const legacy = parseInitialSearch(window.location.search);
+export function parseInitialLocation(location: { search: string; hash: string }) {
+  const legacy = parseInitialSearch(location.search);
   // Hash-first handoff URLs (preferred) — keep identifiers off the wire.
   const handoff = parseHandoffUrl(
-    '/voice' + (window.location.search || '') + (window.location.hash || ''),
+    '/voice' + (location.search || '') + (location.hash || ''),
   );
   if (handoff) {
     return {
       ...legacy,
+      screen: 'driving' as ScreenId,
       hostPeerId: handoff.hostPeerId,
       sessionId: handoff.sessionId,
       handoff,
     };
   }
   return { ...legacy, handoff: null as HandoffRoute | null };
+}
+
+function parseInitial() {
+  return parseInitialLocation(window.location);
 }
 
 function setUrlParam(key: string, value: string | null) {
@@ -112,31 +115,9 @@ export function App() {
   // sync.
   const compact = isNarrow;
   const currentSessionId = openSession || initial.sessionId;
-  const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
 
   const screenContent = (
     <>
-      {screen === 'handoff' && (
-        initial.sessionId ? (
-          <HandoffScreen
-            onEnter={() => go('driving')}
-            onBack={() => go('driving')}
-            joinToken={initial.hostPeerId}
-            sessionId={initial.sessionId}
-            threadId={initial.threadId}
-            delivery={initial.handoff?.delivery}
-            currentUrl={currentUrl}
-            compact={compact}
-          />
-        ) : (
-          <ErrorScreen
-            kind="bad_session"
-            onDismiss={() => go('driving')}
-            onRetry={() => go('driving')}
-            onBack={() => go('driving')}
-          />
-        )
-      )}
       {screen === 'driving' && (
         <DrivingScreen
           accent="amber"
@@ -272,7 +253,6 @@ function SideNav({
   canOpenTranscript: boolean;
 }) {
   const screens: { id: ScreenId; label: string; hint: string }[] = [
-    { id: 'handoff', label: 'Handoff landing', hint: 'from Discord link' },
     { id: 'driving', label: 'Driving mode', hint: 'main voice screen' },
     { id: 'history', label: 'History', hint: 'past sessions (disabled)' },
     { id: 'transcript', label: 'Transcript', hint: 'session detail (disabled)' },
