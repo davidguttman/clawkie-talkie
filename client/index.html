@@ -46,6 +46,7 @@
         overflow-x: hidden;
       }
       a { color: inherit; text-decoration: none; }
+      code { overflow-wrap: anywhere; word-break: break-word; }
 
       .page {
         position: relative;
@@ -688,9 +689,9 @@
             <h3>Tell your agent to install.</h3>
             <p>
               Copy the install instructions and paste them into your
-              agent. Your agent clones the repo, inspects the code,
-              and starts the local daemon &mdash; you don't run a thing
-              on your own machine.
+              agent. Your agent follows <code>AGENT-INSTALL.md</code>,
+              inspects the repo first, then installs the persistent
+              daemon and OpenClaw <code>clawkie-voice-handoff</code> skill.
             </p>
           </div>
           <div class="step">
@@ -804,15 +805,16 @@
             <h2>Don't have Clawkie-Talkie yet?<br />Tell your agent to install it.</h2>
             <p>
               The whole product runs on your agent's side &mdash; the
-              daemon, the WebRTC rendezvous, and the xAI STT/TTS calls.
-              Hand your agent the install instructions and it'll take
-              about a minute.
+              persistent daemon, the WebRTC rendezvous, the xAI STT/TTS
+              calls, and the OpenClaw <code>clawkie-voice-handoff</code>
+              skill that makes "switch to voice" work.
             </p>
             <p style="margin-top:14px;font-family:var(--mono);font-size:12px;color:var(--ink3);letter-spacing:0.4px;">
-              The instructions tell your agent to clone
-              <code style="color:var(--ink2);">github.com/davidguttman/clawkietalkie</code>
-              and inspect the source &mdash; the daemon, server, and
-              client code &mdash; before running any setup.
+              Tell your agent to follow
+              <code style="color:var(--ink2);">https://github.com/davidguttman/clawkietalkie/blob/master/AGENT-INSTALL.md</code>:
+              inspect the source first, stop and ask if anything looks
+              suspicious, harmful, or uncertain, verify daemon/service
+              status and skill configuration, then report back in plain English.
             </p>
           </div>
           <button type="button" class="btn primary" data-copy-install>
@@ -835,13 +837,15 @@
         var buttons = document.querySelectorAll('[data-copy-install]');
         if (!buttons.length) return;
         var installText =
-          "Install Clawkie-Talkie for me. The source is at " +
-          "https://github.com/davidguttman/clawkietalkie — clone it, " +
-          "read the README and the daemon/, server/, and client/ " +
-          "directories before running anything, then follow the " +
-          "setup steps in the README to start the local daemon. " +
-          "When it's running, hand me a /voice rendezvous link from " +
-          "the next turn so I can switch to voice.";
+          "Install Clawkie-Talkie for me by following " +
+          "https://github.com/davidguttman/clawkietalkie/blob/master/AGENT-INSTALL.md. " +
+          "Before installing, download or clone the repo and inspect the source; " +
+          "stop and ask me if anything looks suspicious, harmful, or you are not confident. " +
+          "The install should set up the persistent Clawkie-Talkie daemon and the " +
+          "OpenClaw clawkie-voice-handoff skill so I can say \"switch to voice\" " +
+          "and get a working handoff link. Verify the daemon/service status, logs, " +
+          "and skill configuration before reporting success. When finished, give me " +
+          "a plain English summary of what changed, what you verified, and any blockers.";
         buttons.forEach(function (btn) {
           var defaultHTML = btn.innerHTML;
           var resetTimer = null;
