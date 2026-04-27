@@ -20,8 +20,15 @@ const BITCRUSHER_WORKLET_URL = '/audio/bitcrusher-processor.js';
 const BITCRUSHER_PROCESSOR_NAME = 'hold-music-bitcrusher';
 const BITCRUSHER_BITS = 8;
 const BITCRUSHER_NORM_FREQ = 0.4;
+const HOLD_MUSIC_FFT_SIZE = 512;
+const HOLD_MUSIC_SMOOTHING = 0.45;
 
 let sharedAudioCtx: AudioContext | null = null;
+let activeHoldMusicAnalyser: AnalyserNode | null = null;
+
+export function getActiveHoldMusicAnalyser(): AnalyserNode | null {
+  return activeHoldMusicAnalyser;
+}
 
 interface HoldMusicSession {
   audio: HTMLAudioElement;
@@ -36,6 +43,7 @@ interface HoldMusicSession {
   musicWobbleOscillator: OscillatorNode;
   musicWobbleDepth: GainNode;
   musicGain: GainNode;
+  musicAnalyser: AnalyserNode | null;
   hissSource: AudioBufferSourceNode;
   crackleSource: AudioBufferSourceNode;
   noiseHighpass: BiquadFilterNode;
@@ -140,6 +148,14 @@ export class HoldMusicController {
       musicCompressor.connect(musicWobble);
       musicWobble.connect(musicGain);
       musicGain.connect(audioCtx.destination);
+      const musicAnalyser = createHoldMusicAnalyser(audioCtx);
+      if (musicAnalyser) {
+        try {
+          musicGain.connect(musicAnalyser);
+        } catch {
+          // analyser tap is best-effort; never block playback
+        }
+      }
       musicWobbleOscillator.connect(musicWobbleDepth);
       musicWobbleDepth.connect(musicWobble.gain);
 
@@ -175,6 +191,7 @@ export class HoldMusicController {
         musicWobbleOscillator,
         musicWobbleDepth,
         musicGain,
+        musicAnalyser,
         hissSource,
         crackleSource,
         noiseHighpass,
@@ -188,6 +205,7 @@ export class HoldMusicController {
         },
       };
       this.session = session;
+      activeHoldMusicAnalyser = musicAnalyser;
 
       if (hasKnownDuration(audio)) {
         this.beginSession(session);
@@ -206,6 +224,9 @@ export class HoldMusicController {
     this.session = null;
     if (!session) return;
     session.stopped = true;
+    if (session.musicAnalyser && activeHoldMusicAnalyser === session.musicAnalyser) {
+      activeHoldMusicAnalyser = null;
+    }
 
     try {
       session.audio.removeEventListener('loadedmetadata', session.onMetadata);
@@ -247,6 +268,7 @@ export class HoldMusicController {
       session.musicWobbleOscillator,
       session.musicWobbleDepth,
       session.musicGain,
+      session.musicAnalyser,
       session.hissSource,
       session.crackleSource,
       session.noiseHighpass,
@@ -254,6 +276,7 @@ export class HoldMusicController {
       session.noiseMidPeak,
       session.noiseGain,
     ]) {
+      if (!node) continue;
       try {
         node.disconnect();
       } catch {
@@ -392,6 +415,18 @@ export function createAmifySaturationCurve(
     curve[i] = ((3 + amount) * x * 20 * degrees) / (Math.PI + amount * Math.abs(x));
   }
   return curve;
+}
+
+function createHoldMusicAnalyser(audioCtx: AudioContext): AnalyserNode | null {
+  if (typeof audioCtx.createAnalyser !== 'function') return null;
+  try {
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = HOLD_MUSIC_FFT_SIZE;
+    analyser.smoothingTimeConstant = HOLD_MUSIC_SMOOTHING;
+    return analyser;
+  } catch {
+    return null;
+  }
 }
 
 function createHissSource(audioCtx: AudioContext): AudioBufferSourceNode {

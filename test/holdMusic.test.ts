@@ -46,6 +46,12 @@ class FakeOscillatorNode extends FakeAudioNode {
 
 class FakeMediaElementSourceNode extends FakeAudioNode {}
 
+class FakeAnalyserNode extends FakeAudioNode {
+  fftSize = 2048;
+  smoothingTimeConstant = 0.8;
+  frequencyBinCount = 1024;
+}
+
 class FakeAudioBufferSourceNode extends FakeAudioNode {
   buffer: FakeAudioBuffer | null = null;
   loop = false;
@@ -82,6 +88,7 @@ class FakeAudioContext {
   compressors: FakeDynamicsCompressorNode[] = [];
   oscillators: FakeOscillatorNode[] = [];
   bufferSources: FakeAudioBufferSourceNode[] = [];
+  analysers: FakeAnalyserNode[] = [];
   resume = vi.fn(() => {
     this.state = 'running';
     return Promise.resolve();
@@ -138,6 +145,12 @@ class FakeAudioContext {
     const source = new FakeAudioBufferSourceNode();
     this.bufferSources.push(source);
     return source;
+  }
+
+  createAnalyser(): FakeAnalyserNode {
+    const analyser = new FakeAnalyserNode();
+    this.analysers.push(analyser);
+    return analyser;
   }
 }
 
@@ -366,6 +379,33 @@ describe('HoldMusicController', () => {
 
     controller.stop();
     expect(worklet.disconnect).toHaveBeenCalled();
+  });
+
+  it('exposes a hold music analyser tapped from the music bed and clears it on stop', async () => {
+    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+    vi.stubGlobal('Audio', FakeAudioElement);
+    const { HoldMusicController, getActiveHoldMusicAnalyser } = await import(
+      '../client/src/voice/holdMusic'
+    );
+
+    expect(getActiveHoldMusicAnalyser()).toBeNull();
+
+    const controller = new HoldMusicController();
+    controller.start();
+
+    const ctx = FakeAudioContext.instances[0];
+    expect(ctx.analysers).toHaveLength(1);
+    const analyser = ctx.analysers[0];
+    expect(analyser.fftSize).toBe(512);
+    expect(analyser.smoothingTimeConstant).toBeCloseTo(0.45);
+    expect(ctx.gains[3].connect).toHaveBeenCalledWith(ctx.destination);
+    expect(ctx.gains[3].connect).toHaveBeenCalledWith(analyser);
+    expect(getActiveHoldMusicAnalyser()).toBe(analyser as unknown as AnalyserNode);
+
+    controller.stop();
+
+    expect(analyser.disconnect).toHaveBeenCalled();
+    expect(getActiveHoldMusicAnalyser()).toBeNull();
   });
 
   it('keeps the fallback bitcrusher slot when the worklet fails to load', async () => {

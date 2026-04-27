@@ -37,7 +37,7 @@ import {
   type DrivingSideEffect,
   type DrivingState,
 } from './drivingReducer';
-import { HoldMusicController } from './holdMusic';
+import { HoldMusicController, getActiveHoldMusicAnalyser } from './holdMusic';
 import type { ControlMessage, RtcStatus } from '../rtc/client';
 import { appendTranscriptTurn } from '../storage';
 
@@ -455,6 +455,10 @@ export function readTargetBands(
 
   const analysers = getActiveOutputAnalysers();
   if (tts?.analyser) analysers.push(tts.analyser);
+  if (state === 'thinking') {
+    const holdAnalyser = getActiveHoldMusicAnalyser();
+    if (holdAnalyser) analysers.push(holdAnalyser);
+  }
   if (analysers.length === 0) return QUIET_INTENSITIES;
 
   const bands = analysers.map((analyser) => readAnalyserBands(analyser, analyserScratch));

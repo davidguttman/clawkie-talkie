@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AnalyserScratch } from '../client/src/voice/drivingLoop';
 
 let activeMicAnalyser: AnalyserNode | null = null;
+let activeHoldMusicAnalyser: AnalyserNode | null = null;
+let activeOutputAnalysers: AnalyserNode[] = [];
 
 vi.mock('../client/src/voice/audioSource', async (importActual) => ({
   ...(await importActual<typeof import('../client/src/voice/audioSource')>()),
@@ -9,8 +11,19 @@ vi.mock('../client/src/voice/audioSource', async (importActual) => ({
 }));
 
 vi.mock('../client/src/voice/tts', () => ({
-  getActiveOutputAnalysers: () => [],
+  getActiveOutputAnalysers: () => activeOutputAnalysers,
   playDaemonTts: vi.fn(),
+}));
+
+vi.mock('../client/src/voice/holdMusic', () => ({
+  HoldMusicController: class {
+    start(): void {}
+    stop(): void {}
+    unlock(): Promise<void> {
+      return Promise.resolve();
+    }
+  },
+  getActiveHoldMusicAnalyser: () => activeHoldMusicAnalyser,
 }));
 
 class FakeAnalyser {
@@ -36,6 +49,8 @@ class FakeAnalyser {
 
 beforeEach(() => {
   activeMicAnalyser = null;
+  activeHoldMusicAnalyser = null;
+  activeOutputAnalysers = [];
 });
 
 describe('driving loop visualization band selection', () => {
@@ -63,6 +78,45 @@ describe('driving loop visualization band selection', () => {
     const fallback = Array.from({ length: 28 }, (_, i) => 0.08 + i * 0.01);
 
     expect(readTargetBands('recording', fallback, null, scratch)).toBe(fallback);
+  });
+});
+
+describe('driving loop thinking visualizer source selection', () => {
+  it('uses the hold music analyser in thinking when no tts/remote analyser exists', async () => {
+    const { readTargetBands } = await import('../client/src/voice/drivingLoop');
+    const holdAnalyser = new FakeAnalyser();
+    holdAnalyser.pushFrame([[10, 96]]);
+    activeHoldMusicAnalyser = holdAnalyser as unknown as AnalyserNode;
+    const scratch = new WeakMap<AnalyserNode, AnalyserScratch>();
+
+    const bands = readTargetBands('thinking', [], null, scratch);
+
+    expect(bands).toHaveLength(28);
+    expect(Math.max(...bands)).toBeGreaterThan(0.1);
+  });
+
+  it('does not include the hold music analyser when state is ai', async () => {
+    const { readTargetBands } = await import('../client/src/voice/drivingLoop');
+    const holdAnalyser = new FakeAnalyser();
+    holdAnalyser.pushFrame([[10, 96]]);
+    activeHoldMusicAnalyser = holdAnalyser as unknown as AnalyserNode;
+    const scratch = new WeakMap<AnalyserNode, AnalyserScratch>();
+
+    // No tts/remote analyser available either; should fall back to QUIET.
+    const bands = readTargetBands('ai', [], null, scratch);
+    expect(Math.max(...bands)).toBeLessThan(0.1);
+  });
+
+  it('does not affect non-thinking/ai states', async () => {
+    const { readTargetBands } = await import('../client/src/voice/drivingLoop');
+    const holdAnalyser = new FakeAnalyser();
+    holdAnalyser.pushFrame([[10, 200]]);
+    activeHoldMusicAnalyser = holdAnalyser as unknown as AnalyserNode;
+    const scratch = new WeakMap<AnalyserNode, AnalyserScratch>();
+    const fallback = Array.from({ length: 28 }, (_, i) => 0.08 + i * 0.01);
+
+    expect(readTargetBands('idle', fallback, null, scratch)).not.toBe(fallback);
+    expect(Math.max(...readTargetBands('idle', fallback, null, scratch))).toBeLessThan(0.1);
   });
 });
 
