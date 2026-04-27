@@ -33,70 +33,12 @@ const VISUALIZER_SMOOTHING = 0.45;
 let sharedAudioCtx: AudioContext | null = null;
 let sharedAudioElement: HTMLAudioElement | null = null;
 let attachedRemoteStream: MediaStream | null = null;
-let backgroundStaticState: { source: AudioBufferSourceNode; gain: GainNode } | null = null;
-let backgroundStaticAnalyser: AnalyserNode | null = null;
 let remoteStreamAnalyserState: {
   stream: MediaStream;
   source: MediaStreamAudioSourceNode;
   analyser: AnalyserNode;
   sink: GainNode;
 } | null = null;
-
-// Pink-shaped noise sits below the agent voice in the mix; this
-// multiplier is intentionally low and was halved from the previous
-// 0.04 white-noise tuning after pink shaping made the bed audibly
-// warmer at the same nominal level.
-export const BACKGROUND_STATIC_GAIN = 0.02;
-const BACKGROUND_STATIC_BUFFER_SECONDS = 2;
-
-export interface PinkNoiseOptions {
-  // Base amplitude applied to the filtered pink output before
-  // crackle pops are mixed in. ~0.18 keeps peaks near ±0.5 with the
-  // Kellet coefficients below; the gain node attenuates further.
-  amplitude?: number;
-  // Per-sample probability of a crackle pop. Kept rare so the bed
-  // sounds like vinyl warmth rather than overt static.
-  crackleProbability?: number;
-  // Crackle pop amplitude (added on top of the pink sample).
-  crackleAmplitude?: number;
-  // Injectable RNG for deterministic tests.
-  random?: () => number;
-}
-
-// Paul Kellet's pink-noise filter (public domain). Cheap, stable,
-// and produces a perceptually warm 1/f spectrum from a white-noise
-// driver without needing an AudioWorklet or BiquadFilter chain.
-export function generatePinkNoiseSamples(
-  count: number,
-  opts: PinkNoiseOptions = {},
-): Float32Array {
-  const amplitude = opts.amplitude ?? 0.18;
-  const crackleProbability = opts.crackleProbability ?? 0.0004;
-  const crackleAmplitude = opts.crackleAmplitude ?? 0.6;
-  const rand = opts.random ?? Math.random;
-
-  const out = new Float32Array(Math.max(0, count));
-  let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
-  for (let i = 0; i < out.length; i++) {
-    const white = rand() * 2 - 1;
-    b0 = 0.99886 * b0 + white * 0.0555179;
-    b1 = 0.99332 * b1 + white * 0.0750759;
-    b2 = 0.96900 * b2 + white * 0.1538520;
-    b3 = 0.86650 * b3 + white * 0.3104856;
-    b4 = 0.55000 * b4 + white * 0.5329522;
-    b5 = -0.7616 * b5 - white * 0.0168980;
-    const pink = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362;
-    b6 = white * 0.115926;
-    let s = pink * amplitude;
-    if (rand() < crackleProbability) {
-      s += (rand() * 2 - 1) * crackleAmplitude;
-    }
-    if (s > 1) s = 1;
-    else if (s < -1) s = -1;
-    out[i] = s;
-  }
-  return out;
-}
 
 export interface TTSHandle {
   done: Promise<void>;
@@ -189,7 +131,6 @@ export function isRemoteAudioActive(): boolean {
 
 export function getActiveOutputAnalysers(): AnalyserNode[] {
   const out: AnalyserNode[] = [];
-  if (backgroundStaticAnalyser) out.push(backgroundStaticAnalyser);
   if (remoteStreamAnalyserState?.stream.getTracks().some((t) => t.readyState === 'live')) {
     out.push(remoteStreamAnalyserState.analyser);
   }
@@ -486,72 +427,6 @@ function resumeAudioContext(audioCtx: AudioContext): Promise<void> {
     () => undefined,
     () => undefined,
   );
-}
-
-// Low-volume background static + occasional crackle — used as an
-// audible "system is alive" signal during the `thinking` and `ai`
-// phases. Mixed at a much lower gain than TTS so it sits behind the
-// agent voice without masking it. Idempotent start; cleans up its own
-// nodes on stop. Reuses the same shared/unlocked AudioContext as the
-// PTT cue, so iOS lets it run after the user's first tap.
-export function startBackgroundStatic(): void {
-  if (backgroundStaticState) return;
-  const audioCtx = getSharedAudioContext();
-  if (!audioCtx) return;
-  void resumeAudioContext(audioCtx);
-  try {
-    const sr = audioCtx.sampleRate || DEFAULT_SAMPLE_RATE;
-    const samples = Math.max(1, Math.floor(sr * BACKGROUND_STATIC_BUFFER_SECONDS));
-    const buffer = audioCtx.createBuffer(1, samples, sr);
-    const ch = buffer.getChannelData(0);
-    ch.set(generatePinkNoiseSamples(samples));
-    const source = audioCtx.createBufferSource();
-    source.buffer = buffer;
-    (source as AudioBufferSourceNode & { loop: boolean }).loop = true;
-    const gain = audioCtx.createGain();
-    const analyser = createVisualizerAnalyser(audioCtx);
-    gain.gain.value = BACKGROUND_STATIC_GAIN;
-    source.connect(gain);
-    gain.connect(analyser);
-    analyser.connect(audioCtx.destination);
-    source.start(0);
-    backgroundStaticState = { source, gain };
-    backgroundStaticAnalyser = analyser;
-  } catch {
-    backgroundStaticState = null;
-    backgroundStaticAnalyser = null;
-  }
-}
-
-export function stopBackgroundStatic(): void {
-  const s = backgroundStaticState;
-  backgroundStaticState = null;
-  if (!s) return;
-  try {
-    s.source.stop();
-  } catch {
-    // already stopped
-  }
-  try {
-    s.source.disconnect();
-  } catch {
-    // already disconnected
-  }
-  try {
-    s.gain.disconnect();
-  } catch {
-    // already disconnected
-  }
-  try {
-    backgroundStaticAnalyser?.disconnect();
-  } catch {
-    // already disconnected
-  }
-  backgroundStaticAnalyser = null;
-}
-
-export function isBackgroundStaticActive(): boolean {
-  return !!backgroundStaticState;
 }
 
 function playSilentUnlockPulse(audioCtx: AudioContext): void {

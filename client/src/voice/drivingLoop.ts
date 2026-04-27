@@ -17,8 +17,6 @@ import {
 import {
   playDaemonTts,
   getActiveOutputAnalysers,
-  startBackgroundStatic,
-  stopBackgroundStatic,
   type TTSHandle,
 } from './tts';
 import {
@@ -219,8 +217,8 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
   // Audio visualization: recording samples the live mic analyser every
   // RAF; STT PCM frames remain only as the daemon transport and as a
   // short fallback before the analyser exists. Thinking/AI reads
-  // analyser nodes from audible static, daemon TTS fallback playback,
-  // and any attached WebRTC remote audio stream.
+  // analyser nodes from daemon TTS fallback playback and any attached
+  // WebRTC remote audio stream.
   useEffect(() => {
     if (ctx.state === 'idle') {
       renderedBandsRef.current = [...IDLE_INTENSITIES];
@@ -245,23 +243,11 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     return () => cancelAnimationFrame(raf);
   }, [ctx.state]);
 
-  // Background static / crackle while the agent is thinking or
-  // speaking. Tied to ctx.state so it stops cleanly the moment the
-  // turn ends or the user starts a new recording.
-  useEffect(() => {
-    if (ctx.state === 'thinking' || ctx.state === 'ai') {
-      startBackgroundStatic();
-    } else {
-      stopBackgroundStatic();
-    }
-  }, [ctx.state]);
-
   // Tear down active handles on unmount.
   useEffect(() => {
     return () => {
       sttRef.current?.cancel();
       ttsRef.current?.stop();
-      stopBackgroundStatic();
     };
   }, []);
 

@@ -11,8 +11,6 @@ vi.mock('../client/src/voice/audioSource', async (importActual) => ({
 vi.mock('../client/src/voice/tts', () => ({
   getActiveOutputAnalysers: () => [],
   playDaemonTts: vi.fn(),
-  startBackgroundStatic: vi.fn(),
-  stopBackgroundStatic: vi.fn(),
 }));
 
 class FakeAnalyser {
