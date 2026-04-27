@@ -37,6 +37,7 @@ import {
   type DrivingSideEffect,
   type DrivingState,
 } from './drivingReducer';
+import { HoldMusicController } from './holdMusic';
 import type { ControlMessage, RtcStatus } from '../rtc/client';
 
 export type { DrivingState } from './drivingReducer';
@@ -115,6 +116,7 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
 
   const sttRef = useRef<STTHandle | null>(null);
   const ttsRef = useRef<TTSHandle | null>(null);
+  const holdMusicRef = useRef<HoldMusicController | null>(null);
   const micBandsRef = useRef<number[]>([...QUIET_INTENSITIES]);
   const renderedBandsRef = useRef<number[]>([...IDLE_INTENSITIES]);
   // Accumulator for non-empty final partials. Used as fallback for
@@ -182,15 +184,23 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
       }
       if (msg.t === 'reply.error') {
         const reason = typeof msg.message === 'string' ? msg.message : 'reply_error';
+        stopHoldMusicForControlMessage(msg, holdMusicRef.current);
         dispatch({ type: 'reply.error', reason });
         return;
       }
+      if (msg.t === 'tts.start') {
+        stopHoldMusicForControlMessage(msg, holdMusicRef.current);
+        dispatch({ type: 'tts.start' });
+        return;
+      }
       if (msg.t === 'tts.done') {
+        stopHoldMusicForControlMessage(msg, holdMusicRef.current);
         dispatch({ type: 'tts.done' });
         return;
       }
       if (msg.t === 'tts.error') {
         const reason = typeof msg.message === 'string' ? msg.message : 'tts_error';
+        stopHoldMusicForControlMessage(msg, holdMusicRef.current);
         dispatch({ type: 'tts.error', reason });
         return;
       }
@@ -213,6 +223,13 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [side]);
+
+  useEffect(() => {
+    if (ctx.state === 'thinking') {
+      holdMusicRef.current ??= new HoldMusicController();
+    }
+    syncHoldMusicForDrivingState(ctx.state, holdMusicRef.current);
+  }, [ctx.state]);
 
   // Audio visualization: recording samples the live mic analyser every
   // RAF; STT PCM frames remain only as the daemon transport and as a
@@ -248,6 +265,7 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     return () => {
       sttRef.current?.cancel();
       ttsRef.current?.stop();
+      holdMusicRef.current?.stop();
     };
   }, []);
 
@@ -262,6 +280,8 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
       micBandsRef.current = [...QUIET_INTENSITIES];
       setCurrentTurnTranscript({ active: true, sttDone: false, text: '' });
     }
+    holdMusicRef.current ??= new HoldMusicController();
+    void holdMusicRef.current.unlock();
     dispatch({ type: 'tap' });
   }, [ctx.state]);
 
@@ -448,4 +468,39 @@ export function isCurrentTurnTranscribing(
 
 export function composeTranscript(finals: string[], current: string): string {
   return [...finals, current.trim()].filter(Boolean).join(' ').trim();
+}
+
+interface HoldMusicLike {
+  start(): void;
+  stop(): void;
+}
+
+export function syncHoldMusicForDrivingState(
+  state: DrivingState,
+  holdMusic: HoldMusicLike | null,
+): void {
+  if (!holdMusic) return;
+  if (state === 'thinking') {
+    holdMusic.start();
+    return;
+  }
+  if (state === 'idle' || state === 'recording') {
+    holdMusic.stop();
+  }
+}
+
+export function shouldStopHoldMusicForControlMessage(msg: { t: string }): boolean {
+  return (
+    msg.t === 'reply.error' ||
+    msg.t === 'tts.start' ||
+    msg.t === 'tts.done' ||
+    msg.t === 'tts.error'
+  );
+}
+
+function stopHoldMusicForControlMessage(
+  msg: { t: string },
+  holdMusic: HoldMusicLike | null,
+): void {
+  if (shouldStopHoldMusicForControlMessage(msg)) holdMusic?.stop();
 }

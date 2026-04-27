@@ -65,3 +65,32 @@ describe('driving loop visualization band selection', () => {
     expect(readTargetBands('recording', fallback, null, scratch)).toBe(fallback);
   });
 });
+
+describe('driving loop hold music state gates', () => {
+  it('starts while waiting for the agent and carries through the pre-speech ai state', async () => {
+    const { syncHoldMusicForDrivingState } = await import('../client/src/voice/drivingLoop');
+    const holdMusic = { start: vi.fn(), stop: vi.fn() };
+
+    syncHoldMusicForDrivingState('thinking', holdMusic);
+    syncHoldMusicForDrivingState('ai', holdMusic);
+
+    expect(holdMusic.start).toHaveBeenCalledTimes(1);
+    expect(holdMusic.stop).not.toHaveBeenCalled();
+
+    syncHoldMusicForDrivingState('recording', holdMusic);
+    syncHoldMusicForDrivingState('idle', holdMusic);
+
+    expect(holdMusic.stop).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops when daemon speech starts or the waiting turn ends', async () => {
+    const { shouldStopHoldMusicForControlMessage } = await import('../client/src/voice/drivingLoop');
+
+    expect(shouldStopHoldMusicForControlMessage({ t: 'tts.start' })).toBe(true);
+    expect(shouldStopHoldMusicForControlMessage({ t: 'tts.done' })).toBe(true);
+    expect(shouldStopHoldMusicForControlMessage({ t: 'tts.error' })).toBe(true);
+    expect(shouldStopHoldMusicForControlMessage({ t: 'reply.error' })).toBe(true);
+    expect(shouldStopHoldMusicForControlMessage({ t: 'reply.done' })).toBe(false);
+    expect(shouldStopHoldMusicForControlMessage({ t: 'stt.partial' })).toBe(false);
+  });
+});
