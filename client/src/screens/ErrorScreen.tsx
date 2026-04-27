@@ -65,10 +65,10 @@ const ERRORS: Record<ErrorKind, ErrorDef> = {
   },
   bad_session: {
     tone: 'blocked',
-    pill: 'LINK EXPIRED',
+    pill: 'SESSION UNAVAILABLE',
     glyph: '⚠',
-    headline: "This session link isn't valid",
-    body: 'Handoff links expire after 15 minutes. Go back to your chat and tap the link again to get a fresh one.',
+    headline: 'Clawkie can’t join this session',
+    body: 'The handoff details are missing or unavailable. Go back to your chat and open the voice link again.',
     primaryLabel: 'GOT IT',
     primaryAction: 'dismiss',
   },
