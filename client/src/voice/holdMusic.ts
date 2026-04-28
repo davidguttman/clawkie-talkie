@@ -21,6 +21,8 @@ const BITCRUSHER_BITS = 8;
 const BITCRUSHER_NORM_FREQ = 0.4;
 const HOLD_MUSIC_FFT_SIZE = 64;
 const HOLD_MUSIC_SMOOTHING = 0.1;
+const HOLD_MUSIC_MIN_DECIBELS = -90;
+const HOLD_MUSIC_MAX_DECIBELS = -10;
 
 let sharedAudioCtx: AudioContext | null = null;
 let activeHoldMusicAnalyser: AnalyserNode | null = null;
@@ -422,6 +424,8 @@ function createHoldMusicAnalyser(audioCtx: AudioContext): AnalyserNode | null {
     const analyser = audioCtx.createAnalyser();
     analyser.fftSize = HOLD_MUSIC_FFT_SIZE;
     analyser.smoothingTimeConstant = HOLD_MUSIC_SMOOTHING;
+    analyser.minDecibels = HOLD_MUSIC_MIN_DECIBELS;
+    analyser.maxDecibels = HOLD_MUSIC_MAX_DECIBELS;
     return analyser;
   } catch {
     return null;

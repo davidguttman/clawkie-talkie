@@ -24,9 +24,6 @@ import {
   BandNormalizer,
   mergeBandIntensities,
   pcm16ToBandIntensities,
-  OUTPUT_BAND_SMOOTHING,
-  RECORDING_BAND_SMOOTHING,
-  smoothBandIntensities,
 } from './audioBands';
 import { getActiveMicAnalyser } from './audioSource';
 import {
@@ -55,6 +52,7 @@ interface CurrentTurnTranscript {
 }
 
 const WAVE_BARS = 28;
+const UNIQUE_WAVE_BANDS = WAVE_BARS / 2;
 const IDLE_INTENSITIES = Array(WAVE_BARS).fill(0.12);
 const QUIET_INTENSITIES = Array(WAVE_BARS).fill(0.08);
 
@@ -263,14 +261,8 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     const analyserScratch = new WeakMap<AnalyserNode, AnalyserScratch>();
     const tick = () => {
       const target = readTargetBands(ctx.state, micBandsRef.current, ttsRef.current, analyserScratch);
-      const smoothing =
-        ctx.state === 'recording' ? RECORDING_BAND_SMOOTHING : OUTPUT_BAND_SMOOTHING;
-      const next = smoothBandIntensities(renderedBandsRef.current, target, {
-        attack: smoothing.attack,
-        release: smoothing.release,
-      });
-      renderedBandsRef.current = next;
-      setIntensities(next);
+      renderedBandsRef.current = target;
+      setIntensities(target);
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -348,7 +340,9 @@ function runStartMic(
         isConnected: () => rtcRef.current.status === 'open',
         onError: (reason) => dispatch({ type: 'stt.error', reason }),
         onAudioFrame: (pcm) => {
-          micBandsRef.current = pcm16ToBandIntensities(pcm, WAVE_BARS);
+          micBandsRef.current = mirrorCenterOutBands(
+            pcm16ToBandIntensities(pcm, UNIQUE_WAVE_BANDS),
+          );
         },
       });
       sttRef.current = handle;
@@ -482,13 +476,19 @@ function readAnalyserBands(
     };
     analyserScratch.set(analyser, scratch);
   }
-  return analyserToBandIntensities(
-    analyser,
-    WAVE_BARS,
-    scratch.frequency,
-    scratch.time,
-    scratch.normalizer,
+  return mirrorCenterOutBands(
+    analyserToBandIntensities(
+      analyser,
+      UNIQUE_WAVE_BANDS,
+      scratch.frequency,
+      scratch.time,
+      scratch.normalizer,
+    ),
   );
+}
+
+export function mirrorCenterOutBands(uniqueBands: readonly number[]): number[] {
+  return [...uniqueBands, ...uniqueBands.slice().reverse()];
 }
 
 export function displayedCaptionText(ctx: DrivingContext, liveText: string): string {
