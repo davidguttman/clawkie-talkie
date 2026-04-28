@@ -75,18 +75,29 @@ describe('buildInferTtsCommand', () => {
     });
   });
 
-  it('appends voice and model only when provided', () => {
+  it('appends supported voice and model when provided', () => {
     const command = buildInferTtsCommand({
       text: 'hello',
       outputPath: '/tmp/reply.mp3',
-      voice: 'rex',
+      voice: 'nova',
       model: 'configured/tts-provider',
     });
 
     expect(command.args).toContain('--voice');
-    expect(command.args).toContain('rex');
+    expect(command.args).toContain('nova');
     expect(command.args).toContain('--model');
     expect(command.args).toContain('configured/tts-provider');
+  });
+
+  it('omits unsupported legacy xAI voice ids', () => {
+    const command = buildInferTtsCommand({
+      text: 'hello',
+      outputPath: '/tmp/reply.mp3',
+      voice: 'eve',
+    });
+
+    expect(command.args).not.toContain('--voice');
+    expect(command.args).not.toContain('eve');
   });
 });
 
@@ -254,7 +265,7 @@ describe('synthesizeTtsWithOpenClawInfer', () => {
     await synthesizeTtsWithOpenClawInfer({
       text: 'reply text',
       outputPath: '/tmp/reply.mp3',
-      voice: 'rex',
+      voice: 'nova',
       exec: async (request) => {
         calls.push(request);
         return {
@@ -266,7 +277,7 @@ describe('synthesizeTtsWithOpenClawInfer', () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject(
-      buildInferTtsCommand({ text: 'reply text', outputPath: '/tmp/reply.mp3', voice: 'rex' }),
+      buildInferTtsCommand({ text: 'reply text', outputPath: '/tmp/reply.mp3', voice: 'nova' }),
     );
   });
 

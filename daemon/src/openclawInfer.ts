@@ -21,6 +21,23 @@ export interface InferCommand {
 export type InferTranscribeCommand = InferCommand;
 export type InferTtsCommand = InferCommand;
 
+const SUPPORTED_OPENCLAW_INFER_TTS_VOICES = new Set([
+  'alloy',
+  'ash',
+  'ballad',
+  'cedar',
+  'coral',
+  'echo',
+  'fable',
+  'juniper',
+  'marin',
+  'onyx',
+  'nova',
+  'sage',
+  'shimmer',
+  'verse',
+]);
+
 export interface OpenClawInferExecRequest {
   command: string;
   args: string[];
@@ -88,9 +105,16 @@ export function buildInferTtsCommand(opts: InferTtsCommandOptions): InferTtsComm
     '--json',
     '--local',
   ];
-  if (opts.voice) args.push('--voice', opts.voice);
+  const voice = normalizeOpenClawInferTtsVoice(opts.voice);
+  if (voice) args.push('--voice', voice);
   if (opts.model) args.push('--model', opts.model);
   return { command: 'openclaw', args };
+}
+
+export function normalizeOpenClawInferTtsVoice(voice: string | undefined): string | undefined {
+  const candidate = voice?.trim();
+  if (!candidate) return undefined;
+  return SUPPORTED_OPENCLAW_INFER_TTS_VOICES.has(candidate) ? candidate : undefined;
 }
 
 export function parseInferTranscript(stdout: string): string {
