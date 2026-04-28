@@ -16,10 +16,11 @@ Do not install credentials into the browser. The daemon holds credentials locall
 
 - Do not commit `.env`, API keys, generated host IDs, LaunchAgent plists with private paths, or systemd unit files with private paths.
 - Do not paste or print the xAI API key in chat/log summaries.
+- Before asking the user for an xAI key, check the local OpenClaw configuration and auth profiles for an existing configured xAI key. A missing `XAI_API_KEY` shell environment variable is **not** enough reason to ask the user to paste a key.
 - Treat `DAEMON_PEER_ID` as private-ish: not a password, but do not publish it or post it in public channels.
 - Use the public Clawkie Talkie client origin and the persistent daemon path; do not use local development shortcuts for an end-user install.
 - Do not start/stop unrelated services.
-- If the user has not provided an xAI API key or OpenClaw is not installed/configured, stop and report the missing prerequisite.
+- If OpenClaw is not installed/configured, stop and report the missing prerequisite. If no usable xAI key exists after checking local OpenClaw config/auth profiles and any user-designated secret source, ask for a safe secret handoff path; do not ask the user to paste the key into a public/shared chat.
 
 ## Source
 
@@ -101,9 +102,18 @@ node -e "console.log(require('node:crypto').randomUUID())"
 Set these values in `.env`:
 
 ```env
-XAI_API_KEY=<user-provided-xai-key>
+XAI_API_KEY=<xai-key-from-local-openclaw-config-or-user-approved-secret-source>
 DAEMON_PEER_ID=<installer-generated-uuid>
 ```
+
+Credential source order for `XAI_API_KEY`:
+
+1. Preserve an existing repo-root `.env` value if this is an update and it is already present.
+2. Check the local OpenClaw config/auth profile for an existing xAI API key. Use `openclaw config file`/`openclaw config get ...` or the runtime's config tooling to find the active config; if the value is a SecretRef, resolve it through the configured local secret provider. Copy the key locally into `.env` without printing it.
+3. Check only user-designated local secret sources, if the user already named one.
+4. Only then ask the user for a safe way to provide the key. Do **not** tell them to paste it into chat.
+
+When reporting a blocker, be specific: say whether the key was absent from OpenClaw config, present but unresolved, or unavailable because the secret provider was locked/unconfigured. Do not summarize that as merely "no key in the shell environment."
 
 Do not regenerate the UUID on later updates — keep it stable so existing handoff links and the installed skill remain valid.
 
