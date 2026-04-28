@@ -1092,7 +1092,7 @@ function PTTButton({
       <ButtonAura active={isRec || isAI} color={stateColor} />
       <div style={{ position: 'relative', zIndex: 2, textAlign: 'center' }}>
         <div style={{ fontSize: 48, lineHeight: 1, fontWeight: 500 }}>
-          {isRec ? '■' : isAI ? '◉' : isThink ? (holdMusicMuted ? '🔇' : '🔊') : '●'}
+          {isRec ? '■' : isAI ? '◉' : isThink ? (holdMusicMuted ? '⊘' : '◐') : '●'}
         </div>
         <div
           style={{
@@ -1102,7 +1102,7 @@ function PTTButton({
             marginTop: 12,
           }}
         >
-          {label}
+          {isThink ? (holdMusicMuted ? 'TAP FOR ◐' : 'TAP TO MUTE') : label}
         </div>
       </div>
     </button>
