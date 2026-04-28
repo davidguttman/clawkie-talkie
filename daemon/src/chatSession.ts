@@ -33,6 +33,7 @@ const RAW_STT_GUIDANCE =
 
 const WEBCHAT_BASE_SESSION_KEY = 'agent:main:webchat';
 const WEBCHAT_CONCRETE_SESSION_PREFIX = `${WEBCHAT_BASE_SESSION_KEY}:`;
+const WEBCHAT_LAST_SESSION_KEY = 'agent:main:main';
 
 // Helper: send a debug/activity notification to the Discord thread
 async function sendDebugNotification(
@@ -162,24 +163,33 @@ export function deriveDiscordMessageTarget(opts: {
   return ids.at(-1);
 }
 
-// Helper: get assistant reply text only — never deliver from the
-// agent invocation. Discord delivery happens once, separately, via
-// `sendReplyMessage` so the agent's session-bound delivery and an
-// explicit reply target can't both fire and double-post.
+// Helper: get assistant reply text. External-channel turns avoid
+// `--deliver` so they do not double-post; internal/webchat session-only
+// turns use OpenClaw's `--channel last --deliver` fallback because there
+// is no external `openclaw message send` target.
 async function runOpenClawTurn(opts: {
   apiKey: string;
   sessionId: string;
   threadId?: string;
   userText: string;
+  delivery?: DeliveryTarget;
   signal?: AbortSignal;
 }): Promise<string> {
-  const sessionId = await resolveOpenClawSessionId(opts);
   const message = buildAgentTurnMessage(opts.userText);
-  const args = [
-    'agent',
-    '--session-id', sessionId,
-    '--message', message,
-  ];
+  const args = isSessionOnlyWebchatTurn(opts.sessionId, opts.delivery)
+    ? [
+        'agent',
+        '--agent', 'main',
+        '--session-id', normalizeWebchatSessionKey(opts.sessionId),
+        '--channel', 'last',
+        '--deliver',
+        '--message', message,
+      ]
+    : [
+        'agent',
+        '--session-id', await resolveOpenClawSessionId(opts),
+        '--message', message,
+      ];
 
   const env = openClawEnv(opts.apiKey);
 
@@ -194,6 +204,20 @@ async function runOpenClawTurn(opts: {
     const msg = err instanceof Error ? err.message : 'openclaw_failed';
     throw new ChatError(msg, classifyOpenClawError(err));
   }
+}
+
+function isSessionOnlyWebchatTurn(sessionId: string, delivery?: DeliveryTarget): boolean {
+  if (delivery) return false;
+  const requested = sessionId.trim();
+  return (
+    requested === WEBCHAT_LAST_SESSION_KEY ||
+    requested === WEBCHAT_BASE_SESSION_KEY ||
+    requested.startsWith(WEBCHAT_CONCRETE_SESSION_PREFIX)
+  );
+}
+
+function normalizeWebchatSessionKey(sessionId: string): string {
+  return sessionId.trim() === WEBCHAT_BASE_SESSION_KEY ? WEBCHAT_LAST_SESSION_KEY : sessionId.trim();
 }
 
 export function buildAgentTurnMessage(userText: string): string {
@@ -309,6 +333,7 @@ export async function runChat(userText: string, opts: ChatOptionsWithSession): P
       sessionId: opts.sessionId,
       threadId: opts.threadId,
       userText: trimmed,
+      delivery: opts.delivery,
       signal: opts.signal,
     });
 

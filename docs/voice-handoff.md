@@ -30,7 +30,7 @@ omit it:
 
 ```
 https://clawkietalkie.app/voice#host=H&session=<sessionId>&channel=<channel>&target=<target>
-https://clawkietalkie.app/voice#host=H&session=<sessionId>&channel=webchat
+https://clawkietalkie.app/voice#host=H&session=agent:main:main&channel=webchat
 ```
 
 The browser:
@@ -62,18 +62,16 @@ Required handoff args (accepted from hash fragment, then query string):
 
 - `host` — daemon rendezvous/control room id
 - `session` — OpenClaw session key/id, passed later to
-  `openclaw agent --session-id`. For webchat-only handoffs, `agent:main:webchat`
-  is accepted as a base key: the daemon resolves it to the single active
-  concrete session with key prefix `agent:main:webchat:` after checking for an
-  exact match. Zero matches fail as `openclaw_session_not_found`; multiple
-  matches fail as `openclaw_session_ambiguous`. This fallback is intentionally
-  not used for Discord or other external channels.
+  `openclaw agent --session-id`. For webchat-only handoffs, use
+  `agent:main:main` when no more specific exact key is visible; the daemon runs
+  `openclaw agent --agent main --session-id agent:main:main --channel last --deliver`.
+  Older `agent:main:webchat` links are normalized to this webchat session-only form.
 - `channel` — source channel/surface. For external delivery this is passed later to
   `openclaw message send --channel`.
 - `target` — optional OpenClaw delivery target. For external delivery, this is
   required and passed later to `openclaw message send --target`. For
   webchat/internal session-only links, omit `target`; the daemon does not call
-  `openclaw message send` and only runs `openclaw agent --session-id`.
+  `openclaw message send` and uses OpenClaw channel-last delivery for the agent turn.
 
 Hash wins over query when both are present. All values must be URL-encoded.
 
