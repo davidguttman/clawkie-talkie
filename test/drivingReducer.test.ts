@@ -90,6 +90,12 @@ describe('thinking', () => {
     expect(side).toEqual([{ kind: 'cancelReply' }]);
   });
 
+  it('tap during thinking keeps waiting while current turn STT is still finalizing', () => {
+    const { next, side } = reduce(thinking, { type: 'tap', currentTurnTranscribing: true });
+    expect(next.state).toBe('thinking');
+    expect(side).toEqual([]);
+  });
+
   it('stt.done just records the user text without state change', () => {
     const { next, side } = reduce(thinking, { type: 'stt.done', text: 'HELLO' });
     expect(next.state).toBe('thinking');

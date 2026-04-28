@@ -286,8 +286,11 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     }
     holdMusicRef.current ??= new HoldMusicController();
     void holdMusicRef.current.unlock();
-    dispatch({ type: 'tap' });
-  }, [ctx.state]);
+    dispatch({
+      type: 'tap',
+      currentTurnTranscribing: isCurrentTurnTranscribing(ctx.state, currentTurnTranscript),
+    });
+  }, [ctx.state, currentTurnTranscript]);
 
   const silence = useCallback(() => {
     dispatch({ type: 'silence' });

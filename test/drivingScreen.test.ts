@@ -46,6 +46,15 @@ describe('DrivingScreen hold music mute control', () => {
   });
 });
 
+describe('DrivingScreen voice error labels', () => {
+  it('surfaces infer STT and reply auth failures with distinct labels', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    expect(source).toContain("if (code === 'openclaw_infer_stt_failed') return 'INFER ERROR");
+    expect(source).toContain("if (code === 'openclaw_auth_unavailable') return 'REPLY ERROR");
+  });
+});
+
 describe('DrivingScreen media debug surface', () => {
   it('keeps the hardware-event conclusion and keeper counters visible in debug mode', () => {
     const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');

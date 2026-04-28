@@ -24,7 +24,7 @@ export interface DrivingContext {
 }
 
 export type DrivingEvent =
-  | { type: 'tap' }
+  | { type: 'tap'; currentTurnTranscribing?: boolean }
   | { type: 'silence' }
   | { type: 'stt.done'; text: string }
   | { type: 'stt.error'; reason: string }
@@ -100,7 +100,11 @@ export function reduce(ctx: DrivingContext, event: DrivingEvent): Reduction {
         };
       }
       if (event.type === 'tap') {
-        // Double-tap from thinking bails out of the turn.
+        if (event.currentTurnTranscribing) {
+          return { next: ctx, side: [] };
+        }
+        // Double-tap from thinking bails out of the turn after the
+        // authoritative STT final has arrived and the reply turn is running.
         return {
           next: { ...ctx, state: 'idle' },
           side: [{ kind: 'cancelReply' }],
