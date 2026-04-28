@@ -17,7 +17,7 @@ Windows native packages exist for the WebRTC dependency, but this repo does not 
 
 - A machine that can stay online while you want voice handoff to work.
 - Node.js and npm. Use a current Node release; Node 22 LTS or newer is recommended.
-- Git, or another way to download this repo.
+- `curl` and `unzip` for downloading the source ZIP.
 - OpenClaw installed, configured, and available on `PATH` as `openclaw` for the same user that runs the daemon.
 - An xAI API key for STT/TTS and OpenClaw turns.
 - Outbound network access to the signaling service, xAI, and any OpenClaw services you use.
@@ -32,29 +32,28 @@ The daemon uses `@roamhq/wrtc` for native WebRTC. Its package includes prebuilt 
 
 The currently supported install path is from this repo. There is no published npm package installer for the daemon yet.
 
-Download the latest source ZIP from GitHub and unzip it into a durable folder such as `~/src/clawkie-talkie`. This avoids needing Git for a one-time install.
+Download the latest source ZIP from GitHub and unzip it into a durable workspace folder such as `~/workspace/clawkie-talkie`. This avoids needing Git for a one-time install.
 
 ```bash
-mkdir -p ~/src
-cd ~/src
+mkdir -p ~/workspace
+cd ~/workspace
 curl -L -o clawkie-talkie.zip \
-  https://github.com/davidguttman/clawkie-talkie/archive/refs/heads/master.zip
+  https://github.com/davidguttman/clawkietalkie/archive/HEAD.zip
 unzip -q clawkie-talkie.zip
+extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkietalkie-*' | head -n 1)
 rm -rf clawkie-talkie
-mv clawkie-talkie-master clawkie-talkie
+mv "$extracted_dir" clawkie-talkie
 rm clawkie-talkie.zip
 cd clawkie-talkie
 npm install
 ```
-
-If you prefer Git, `git clone https://github.com/davidguttman/clawkie-talkie.git` into the same folder also works and makes later updates easier.
 
 ## Configure the daemon
 
 Create a repo-root `.env` file. Do not commit it or share it.
 
 ```bash
-cd ~/src/clawkie-talkie
+cd ~/workspace/clawkie-talkie
 cp .env.example .env
 chmod 600 .env
 ```
@@ -96,7 +95,7 @@ Treat the ID as private-ish: it is not your xAI key, but it does identify the ro
 From the repo root:
 
 ```bash
-cd ~/src/clawkie-talkie
+cd ~/workspace/clawkie-talkie
 npm run daemon
 ```
 
@@ -120,7 +119,7 @@ https://clawkietalkie.app/voice#host=<host>&session=<session>&channel=<channel>&
 
 ## Keep it running on macOS with launchd
 
-Use a per-user LaunchAgent. Replace `/Users/YOU/src/clawkie-talkie` with the real absolute path.
+Use a per-user LaunchAgent. Replace `/Users/YOU/workspace/clawkie-talkie` with the real absolute path.
 
 Create `~/Library/LaunchAgents/app.clawkietalkie.daemon.plist`:
 
@@ -133,13 +132,13 @@ Create `~/Library/LaunchAgents/app.clawkietalkie.daemon.plist`:
   <string>app.clawkietalkie.daemon</string>
 
   <key>WorkingDirectory</key>
-  <string>/Users/YOU/src/clawkie-talkie</string>
+  <string>/Users/YOU/workspace/clawkie-talkie</string>
 
   <key>ProgramArguments</key>
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>cd /Users/YOU/src/clawkie-talkie &amp;&amp; npm run daemon</string>
+    <string>cd /Users/YOU/workspace/clawkie-talkie &amp;&amp; npm run daemon</string>
   </array>
 
   <key>EnvironmentVariables</key>
@@ -189,7 +188,7 @@ If you installed Node with `nvm`, `asdf`, or another shell-managed tool, launchd
 
 ## Keep it running on Linux with systemd user services
 
-Use a per-user systemd service. This starts after your user session starts. Replace paths if you installed somewhere other than `~/src/clawkie-talkie`.
+Use a per-user systemd service. This starts after your user session starts. Replace paths if you installed somewhere other than `~/workspace/clawkie-talkie`.
 
 Create `~/.config/systemd/user/clawkie-talkie.service`:
 
@@ -201,7 +200,7 @@ After=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/src/clawkie-talkie
+WorkingDirectory=%h/workspace/clawkie-talkie
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/env npm run daemon
 Restart=always
@@ -268,24 +267,17 @@ There is no inbound HTTP port for the daemon to expose. It reaches the signaling
 If installed from a ZIP, download the latest ZIP and refresh the source folder. Preserve your `.env` (it lives in the repo root and is not in the ZIP, but make a backup if you keep it elsewhere):
 
 ```bash
-cd ~/src
+cd ~/workspace
 curl -L -o clawkie-talkie.zip \
-  https://github.com/davidguttman/clawkie-talkie/archive/refs/heads/master.zip
+  https://github.com/davidguttman/clawkietalkie/archive/HEAD.zip
 cp clawkie-talkie/.env /tmp/clawkie-talkie.env.bak
 unzip -q -o clawkie-talkie.zip
+extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkietalkie-*' | head -n 1)
 rm -rf clawkie-talkie
-mv clawkie-talkie-master clawkie-talkie
+mv "$extracted_dir" clawkie-talkie
 mv /tmp/clawkie-talkie.env.bak clawkie-talkie/.env
 rm clawkie-talkie.zip
 cd clawkie-talkie
-npm install
-```
-
-If installed from Git:
-
-```bash
-cd ~/src/clawkie-talkie
-git pull --ff-only
 npm install
 ```
 

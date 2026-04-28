@@ -27,16 +27,17 @@ Public GitHub repo: `davidguttman/clawkietalkie`
 
 ## Fetch and inspect
 
-1. Download the GitHub source ZIP and unzip it into a durable source folder such as `~/src/clawkie-talkie`. Prefer the ZIP path over `git clone` so installs do not require Git:
+1. Download the GitHub source ZIP and unzip it into a durable workspace folder such as `~/workspace/clawkie-talkie`. This keeps installs in the agent workspace and avoids requiring Git:
 
    ```bash
-   mkdir -p ~/src
-   cd ~/src
+   mkdir -p ~/workspace
+   cd ~/workspace
    curl -L -o clawkie-talkie.zip \
-     https://github.com/davidguttman/clawkie-talkie/archive/refs/heads/master.zip
+     https://github.com/davidguttman/clawkietalkie/archive/HEAD.zip
    unzip -q clawkie-talkie.zip
+   extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkietalkie-*' | head -n 1)
    rm -rf clawkie-talkie
-   mv clawkie-talkie-master clawkie-talkie
+   mv "$extracted_dir" clawkie-talkie
    rm clawkie-talkie.zip
    ```
 2. Inspect the repo before installing. Expected items include:
