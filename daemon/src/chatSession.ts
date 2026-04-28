@@ -5,10 +5,11 @@
 // plugin):
 //   1. Post the user transcript as a quoted Discord message.
 //   2. Run `openclaw agent --session-id agent:main:discord:<target>
-//      --message ...`. Discord-bound agent sessions post the reply
-//      to the bound channel themselves; we capture stdout only so we
-//      can feed the same text to TTS. We do NOT pass --deliver or
-//      --reply-to (either causes a duplicate Discord post on top of
+//      --channel voice --message ...`. Discord-bound agent sessions post
+//      the reply to the bound channel themselves; we capture stdout only
+//      so we can feed the same text to TTS. The voice channel context
+//      hides media/TTS reply tools so stdout remains text. We do NOT pass
+//      --deliver or --reply-to (either causes a duplicate Discord post on top of
 //      the session-bound delivery), and we do NOT post the reply
 //      explicitly with `openclaw message send` for the same reason.
 //
@@ -32,7 +33,8 @@ const BENIGN_AUTH_PROFILE_DIAGNOSTIC = /^\s*\[agents\/auth-profiles\].*$/gim;
 
 const VOICE_REPLY_GUIDANCE =
   'Your reply will be turned back into a voice message for the user, so keep it concise ' +
-  'by default but complete enough when needed, and read-aloud friendly. Avoid markdown, lists, and code blocks.';
+  'by default but complete enough when needed, and read-aloud friendly. Return text only; ' +
+  'do not call TTS/media tools, emit MEDIA directives, or return media paths. Avoid markdown, lists, and code blocks.';
 
 const RAW_STT_GUIDANCE =
   'The following is a raw speech-to-text transcript from the user. It may contain ' +
@@ -169,10 +171,12 @@ export function deriveDiscordMessageTarget(opts: {
   return ids.at(-1);
 }
 
-// Helper: get assistant reply text. External-channel turns avoid
-// `--deliver` so they do not double-post; internal/webchat session-only
-// turns use OpenClaw's `--channel last --deliver` fallback because there
-// is no external `openclaw message send` target.
+// Helper: get assistant reply text. External-channel turns run the
+// agent with `--channel voice` so OpenClaw filters media/TTS tools and
+// stdout remains text. They avoid `--deliver` so they do not double-post;
+// internal/webchat session-only turns use OpenClaw's
+// `--channel last --deliver` fallback because there is no external
+// `openclaw message send` target.
 async function runOpenClawTurn(opts: {
   apiKey: string;
   sessionId: string;
@@ -194,6 +198,7 @@ async function runOpenClawTurn(opts: {
     : [
         'agent',
         '--session-id', await resolveOpenClawSessionId(opts),
+        '--channel', 'voice',
         '--message', message,
       ];
 

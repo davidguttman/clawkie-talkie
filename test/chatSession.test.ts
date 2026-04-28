@@ -90,7 +90,7 @@ describe('runChat OpenClaw CLI integration', () => {
     expect(agentCommand).toContain('"--session-id" "session-1"');
   });
 
-  it('never invokes the agent with --deliver or an explicit reply target', async () => {
+  it('runs external Discord agent turns in voice channel context without --deliver or an explicit reply target', async () => {
     execMock.mockResolvedValue({ stdout: 'ok\n', stderr: '' });
 
     await runChat('hello', {
@@ -101,6 +101,7 @@ describe('runChat OpenClaw CLI integration', () => {
     });
 
     const agentCommand = findAgentCommand();
+    expect(agentCommand).toContain('"--channel" "voice"');
     expect(agentCommand).not.toContain('"--deliver"');
     expect(agentCommand).not.toContain('"--reply-channel"');
     expect(agentCommand).not.toContain('"--reply-to"');
@@ -225,6 +226,7 @@ describe('runChat OpenClaw CLI integration', () => {
     expect(execMock.mock.calls[1]?.[0]).toContain('openclaw "sessions"');
     const agentCommand = findAgentCommand();
     expect(agentCommand).toContain('"--session-id" "stored-session-id"');
+    expect(agentCommand).toContain('"--channel" "voice"');
   });
 
   it('runs session-only webchat through OpenClaw channel last delivery', async () => {
@@ -282,6 +284,7 @@ describe('runChat OpenClaw CLI integration', () => {
     expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "sessions"'))).toBe(true);
     const agentCommand = findAgentCommand();
     expect(agentCommand).toContain('"--session-id" "base-session-id"');
+    expect(agentCommand).toContain('"--channel" "voice"');
     expect(agentCommand).not.toContain('"--channel" "last"');
     expect(agentCommand).not.toContain('"--deliver"');
   });
@@ -457,7 +460,8 @@ describe('Discord transcript formatting and target derivation', () => {
         'hello world\n' +
         '</raw-stt-transcript>\n\n' +
         'Your reply will be turned back into a voice message for the user, so keep it concise ' +
-        'by default but complete enough when needed, and read-aloud friendly. Avoid markdown, lists, and code blocks.',
+        'by default but complete enough when needed, and read-aloud friendly. Return text only; ' +
+        'do not call TTS/media tools, emit MEDIA directives, or return media paths. Avoid markdown, lists, and code blocks.',
     );
     expect(message.indexOf('<raw-stt-transcript>')).toBeLessThan(message.indexOf('hello world'));
     expect(message.indexOf('hello world')).toBeLessThan(message.indexOf('</raw-stt-transcript>'));
@@ -468,6 +472,9 @@ describe('Discord transcript formatting and target derivation', () => {
     expect(message).not.toContain('one or two short spoken sentences');
     expect(message).not.toContain('You are Clawkie');
     expect(message).not.toContain('Reply as Clawkie');
+    expect(message).toContain('Return text only');
+    expect(message).toContain('do not call TTS/media tools');
+    expect(message).toContain('emit MEDIA directives');
   });
 
   it('block-quotes each line of the user transcript without a header', () => {
