@@ -37,22 +37,18 @@ import { phoneToDaemon } from './protocol';
 
 export { MicPermissionError } from './audioSource';
 
-export const STT_CHUNK_MIN_MS = 64;
-export const STT_CHUNK_MAX_MS = 3000;
-
 export interface SttChunkConfig {
   chunkMs: number;
   chunkBytes: number;
 }
 
-// Parses `?sttChunkMs=` debug param. Returns null for missing/invalid/
-// out-of-bounds values so callers fall back to default per-frame send.
+// Parses `?sttChunkMs=` debug param. Returns null for missing/invalid
+// values so callers fall back to default per-frame send.
 export function parseSttChunkMs(raw: string | null | undefined): SttChunkConfig | null {
   if (raw == null) return null;
   if (!/^\d+$/.test(raw)) return null;
   const ms = Number(raw);
   if (!Number.isFinite(ms)) return null;
-  if (ms < STT_CHUNK_MIN_MS || ms > STT_CHUNK_MAX_MS) return null;
   const chunkBytes = Math.round((ms * SAMPLE_RATE * 2) / 1000);
   return { chunkMs: ms, chunkBytes };
 }

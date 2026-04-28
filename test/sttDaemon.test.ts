@@ -59,21 +59,21 @@ describe('startDaemonSTT mic framing', () => {
 });
 
 describe('parseSttChunkMs', () => {
-  it('accepts integer values within bounds', () => {
+  it('accepts non-negative integer values', () => {
     expect(parseSttChunkMs('1000')).toEqual({ chunkMs: 1000, chunkBytes: 32000 });
     expect(parseSttChunkMs('64')).toEqual({ chunkMs: 64, chunkBytes: 2048 });
     expect(parseSttChunkMs('3000')).toEqual({ chunkMs: 3000, chunkBytes: 96000 });
+    expect(parseSttChunkMs('63')).toEqual({ chunkMs: 63, chunkBytes: 2016 });
+    expect(parseSttChunkMs('3001')).toEqual({ chunkMs: 3001, chunkBytes: 96032 });
   });
 
-  it('ignores missing, malformed, and out-of-bounds values', () => {
+  it('ignores missing and malformed values', () => {
     expect(parseSttChunkMs(null)).toBeNull();
     expect(parseSttChunkMs(undefined)).toBeNull();
     expect(parseSttChunkMs('')).toBeNull();
     expect(parseSttChunkMs('abc')).toBeNull();
     expect(parseSttChunkMs('1000ms')).toBeNull();
     expect(parseSttChunkMs('-500')).toBeNull();
-    expect(parseSttChunkMs('63')).toBeNull();
-    expect(parseSttChunkMs('3001')).toBeNull();
     expect(parseSttChunkMs('1.5')).toBeNull();
   });
 });
