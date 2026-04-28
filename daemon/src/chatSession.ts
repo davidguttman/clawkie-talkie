@@ -4,14 +4,12 @@
 // Two-step turn (same shape as the Rambly OpenClaw thread-linked
 // plugin):
 //   1. Post the user transcript as a quoted Discord message.
-//   2. Run `openclaw agent --session-id agent:main:discord:<target>
-//      --channel voice --message ...`. Discord-bound agent sessions post
-//      the reply to the bound channel themselves; we capture stdout only
-//      so we can feed the same text to TTS. The voice channel context
-//      hides media/TTS reply tools so stdout remains text. We do NOT pass
-//      --deliver or --reply-to (either causes a duplicate Discord post on top of
-//      the session-bound delivery), and we do NOT post the reply
-//      explicitly with `openclaw message send` for the same reason.
+//   2. Run `openclaw agent --agent main --session-id <session>
+//      --channel last --deliver -m ...`. The agent receives the full
+//      transcript in its own message payload, so reply generation does not
+//      depend on the transcript post completing. OpenClaw delivery posts
+//      the assistant reply; the daemon captures stdout for TTS and does
+//      not mirror the assistant text with `openclaw message send`.
 //
 // The daemon never calls xAI directly. Debug activity notifications
 // are sent before/after key events (STT start/stop, TTS start/stop,
@@ -171,12 +169,10 @@ export function deriveDiscordMessageTarget(opts: {
   return ids.at(-1);
 }
 
-// Helper: get assistant reply text. External-channel turns run the
-// agent with `--channel voice` so OpenClaw filters media/TTS tools and
-// stdout remains text. They avoid `--deliver` so they do not double-post;
-// internal/webchat session-only turns use OpenClaw's
-// `--channel last --deliver` fallback because there is no external
-// `openclaw message send` target.
+// Helper: get assistant reply text. The agent receives the full raw-STT
+// transcript in its own `-m` payload and uses OpenClaw's channel-last
+// delivery path for the assistant reply. Transcript posting is a separate
+// fire-and-observe side effect, not a prerequisite for reply generation.
 async function runOpenClawTurn(opts: {
   apiKey: string;
   sessionId: string;
@@ -186,21 +182,17 @@ async function runOpenClawTurn(opts: {
   signal?: AbortSignal;
 }): Promise<string> {
   const message = buildAgentTurnMessage(opts.userText);
-  const args = isSessionOnlyWebchatTurn(opts.sessionId, opts.delivery)
-    ? [
-        'agent',
-        '--agent', 'main',
-        '--session-id', normalizeWebchatSessionKey(opts.sessionId),
-        '--channel', 'last',
-        '--deliver',
-        '--message', message,
-      ]
-    : [
-        'agent',
-        '--session-id', await resolveOpenClawSessionId(opts),
-        '--channel', 'voice',
-        '--message', message,
-      ];
+  const sessionId = isSessionOnlyWebchatTurn(opts.sessionId, opts.delivery)
+    ? normalizeWebchatSessionKey(opts.sessionId)
+    : await resolveOpenClawSessionId(opts);
+  const args = [
+    'agent',
+    '--agent', 'main',
+    '--session-id', sessionId,
+    '--channel', 'last',
+    '--deliver',
+    '-m', message,
+  ];
 
   const env = openClawEnv(opts.apiKey);
 
@@ -370,7 +362,9 @@ function extractOpenClawErrorDetails(err: unknown, fallbackLabel: string): ChatE
 function sanitizeOpenClawLogText(text: string): string {
   return stripBenignOpenClawDiagnostics(text)
     .replace(/("--message"\s+)"(?:\\.|[^"\\])*"/g, '$1"[redacted]"')
+    .replace(/("-m"\s+)"(?:\\.|[^"\\])*"/g, '$1"[redacted]"')
     .replace(/(--message\s+)(?:"(?:\\.|[^"\\])*"|'[^']*'|\S+)/g, '$1[redacted]')
+    .replace(/(-m\s+)(?:"(?:\\.|[^"\\])*"|'[^']*'|\S+)/g, '$1[redacted]')
     .replace(/(xai[_-]?api[_-]?key\s*[=:]\s*)\S+/gi, '$1[redacted]')
     .replace(/(authorization:\s*bearer\s+)\S+/gi, '$1[redacted]')
     .replace(/\s+/g, ' ')
@@ -394,11 +388,13 @@ export async function runChat(userText: string, opts: ChatOptionsWithSession): P
   const trimmed = userText.trim();
   if (!trimmed) throw new ChatError('empty_transcript', 'empty_transcript');
 
-  await sendTranscriptMessage(
-    opts.apiKey,
-    { threadId: opts.threadId, sessionId: opts.sessionId, delivery: opts.delivery },
-    trimmed,
-    opts.signal,
+  observeTranscriptPost(
+    sendTranscriptMessage(
+      opts.apiKey,
+      { threadId: opts.threadId, sessionId: opts.sessionId, delivery: opts.delivery },
+      trimmed,
+      opts.signal,
+    ),
   );
 
   try {
@@ -410,23 +406,6 @@ export async function runChat(userText: string, opts: ChatOptionsWithSession): P
       delivery: opts.delivery,
       signal: opts.signal,
     });
-
-    // The voice handoff path (rendezvous-bound `delivery`) is not a
-    // Discord-bound OpenClaw session, so the agent invocation does
-    // *not* mirror its reply back to the originating channel/thread.
-    // Post it explicitly here. The legacy `threadId`-only path goes
-    // through a Discord-bound agent session that posts the reply
-    // itself, so we skip the explicit send to avoid the double-post
-    // that prompted the original "no reply send" guard.
-    if (opts.delivery) {
-      await sendGenericMessage(
-        opts.apiKey,
-        opts.delivery,
-        reply,
-        opts.signal,
-        'openclaw_reply_post_failed',
-      );
-    }
 
     await sendDebugNotification(opts.apiKey, opts.threadId, 'reply delivered');
 
@@ -440,6 +419,19 @@ export async function runChat(userText: string, opts: ChatOptionsWithSession): P
     );
     throw err;
   }
+}
+
+
+function observeTranscriptPost(promise: Promise<void>): void {
+  void promise.catch((err) => {
+    const chatError = err instanceof ChatError ? err : toOpenClawChatError(err, 'openclaw_transcript_post_failed');
+    const details = chatError.details;
+    const detailText = [details?.rootMessage, details?.stderr]
+      .filter((part): part is string => Boolean(part))
+      .join(' | ');
+    const suffix = detailText ? `: ${sanitizeOpenClawLogText(detailText)}` : '';
+    console.error(`[openclaw] transcript_post_failed: ${chatError.code}${suffix}`);
+  });
 }
 
 export class ChatError extends Error {
