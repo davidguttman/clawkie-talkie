@@ -457,6 +457,8 @@ describe('Discord transcript formatting and target derivation', () => {
 });
 
 describe('classifyOpenClawError', () => {
+  const authProfileNoise = '[agents/auth-profiles] kept local oauth over external cli bootstrap-only provider';
+
   it('uses precise OpenClaw runtime failure codes', () => {
     expect(classifyOpenClawError(new Error('EROFS: read-only file system, open device-auth.json'))).toBe(
       'openclaw_auth_unavailable',
@@ -466,6 +468,44 @@ describe('classifyOpenClawError', () => {
     );
     expect(classifyOpenClawError(new Error('delivery channel is required'))).toBe(
       'openclaw_delivery_unavailable',
+    );
+  });
+
+  it('ignores benign auth-profile diagnostics when classifying failures', () => {
+    expect(classifyOpenClawError(new Error(authProfileNoise))).toBe('openclaw_failed');
+    expect(
+      classifyOpenClawError(
+        Object.assign(new Error('Command failed'), {
+          stderr: authProfileNoise,
+        }),
+      ),
+    ).toBe('openclaw_failed');
+  });
+
+  it('keeps concrete gateway and delivery errors ahead of auth-profile noise', () => {
+    expect(
+      classifyOpenClawError(
+        Object.assign(new Error(`Command failed\n${authProfileNoise}`), {
+          stderr: `${authProfileNoise}\nconnect ECONNREFUSED 127.0.0.1:18789`,
+        }),
+      ),
+    ).toBe('openclaw_gateway_unavailable');
+
+    expect(
+      classifyOpenClawError(
+        Object.assign(new Error(`delivery channel is required\n${authProfileNoise}`), {
+          stderr: authProfileNoise,
+        }),
+      ),
+    ).toBe('openclaw_delivery_unavailable');
+  });
+
+  it('keeps real auth failures classified as auth unavailable', () => {
+    expect(classifyOpenClawError(new Error(`EROFS: read-only file system, open device-auth.json\n${authProfileNoise}`))).toBe(
+      'openclaw_auth_unavailable',
+    );
+    expect(classifyOpenClawError(new Error(`device-auth bootstrap failed: unauthorized\n${authProfileNoise}`))).toBe(
+      'openclaw_auth_unavailable',
     );
   });
 });

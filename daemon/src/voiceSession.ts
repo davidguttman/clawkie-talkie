@@ -124,6 +124,17 @@ export type TtsSessionFactory = (
   cb: TtsSessionCallbacks,
 ) => TtsSessionLike;
 
+function sanitizeReplyFailureLogText(text: string): string {
+  return text
+    .replace(/("--message"\s+)"(?:\\.|[^"\\])*"/g, '$1"[redacted]"')
+    .replace(/(--message\s+)(?:"(?:\\.|[^"\\])*"|'[^']*'|\S+)/g, '$1[redacted]')
+    .replace(/(xai[_-]?api[_-]?key\s*[=:]\s*)\S+/gi, '$1[redacted]')
+    .replace(/(authorization:\s*bearer\s+)\S+/gi, '$1[redacted]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 1000);
+}
+
 export interface VoiceSessionRuntimeOptions {
   apiKey: string;
   sttLanguage?: string;
@@ -733,6 +744,7 @@ export class VoiceSession {
       this.chatAbort = null;
       if (!this.state.turnInFlight) return;
       const code = err instanceof ChatError ? err.code : 'reply_failed';
+      this.logReplyFailure(code, err);
       this.send(daemonToPhone.replyError(code));
       this.state.resetTurn();
       return;
@@ -742,6 +754,30 @@ export class VoiceSession {
     this.send(daemonToPhone.replyDone(replyText));
 
     this.openTts(replyText);
+  }
+
+
+  private logReplyFailure(code: string, err: unknown): void {
+    const details = err && typeof err === 'object'
+      ? (err as { details?: { rootMessage?: string; stderr?: string; exitCode?: string } }).details
+      : undefined;
+    const rootMessage = sanitizeReplyFailureLogText(
+      details?.rootMessage ?? (err instanceof Error ? err.message : 'unknown'),
+    );
+    const stderr = details?.stderr ? sanitizeReplyFailureLogText(details.stderr) : undefined;
+    const exitCode = details?.exitCode;
+    const target = this.state.chatTarget();
+    const delivery = target.delivery ? `${target.delivery.channel}:${target.delivery.target}` : 'session-bound';
+    const fields = [
+      `[voice ${this.roomId}] reply failed`,
+      `session=${sanitizeReplyFailureLogText(target.sessionId)}`,
+      `delivery=${sanitizeReplyFailureLogText(delivery)}`,
+      `code=${sanitizeReplyFailureLogText(code)}`,
+      exitCode ? `exit=${sanitizeReplyFailureLogText(exitCode)}` : undefined,
+      `message=${rootMessage}`,
+      stderr ? `stderr=${stderr}` : undefined,
+    ].filter((field): field is string => Boolean(field));
+    console.error(fields.join(' '));
   }
 
   private openTts(text: string): void {

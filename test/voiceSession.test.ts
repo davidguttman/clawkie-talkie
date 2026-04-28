@@ -58,10 +58,12 @@ vi.mock('../daemon/src/chatSession.js', () => ({
   runChat: chatMocks.runChat,
   ChatError: class ChatError extends Error {
     code: string;
+    details?: { rootMessage?: string; stderr?: string; exitCode?: string };
 
-    constructor(code: string) {
-      super(code);
+    constructor(message: string, code = message, details?: { rootMessage?: string; stderr?: string; exitCode?: string }) {
+      super(message);
       this.code = code;
+      this.details = details;
     }
   },
 }));
@@ -85,6 +87,7 @@ vi.mock('../daemon/src/vad.js', () => ({
   })),
 }));
 
+import { ChatError } from '../daemon/src/chatSession.js';
 import {
   createVoiceSessionState,
   decidePhoneConnection,
@@ -391,6 +394,42 @@ describe('voice session OpenClaw infer STT runtime', () => {
     ]);
     expect(sentBinary(peer)).toEqual([Buffer.from([1, 2, 3, 4])]);
     expect((session as unknown as { state: { turnInFlight: boolean } }).state.turnInFlight).toBe(false);
+  });
+
+  it('logs OpenClaw reply failures with context, code, and sanitized cause details', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    chatMocks.runChat.mockRejectedValue(
+      new ChatError(
+        'Command failed: openclaw "agent" "--message" "secret transcript"',
+        'openclaw_gateway_unavailable',
+        {
+          rootMessage: 'Command failed: openclaw "agent" "--message" "[redacted]"',
+          stderr: 'connect ECONNREFUSED 127.0.0.1:18789',
+          exitCode: '1',
+        },
+      ),
+    );
+    const { session, peer } = makeVoiceSession();
+
+    try {
+      sendControl(session, { t: 'stt.start' });
+      await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+      const fakeStt = sttMocks.inferCtor.mock.results[0].value;
+
+      fakeStt.cb.onDone('hello');
+      await vi.waitFor(() => expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('reply failed')));
+
+      const logLine = String(consoleError.mock.calls.find(([msg]) => String(msg).includes('reply failed'))?.[0]);
+      expect(logLine).toContain('[voice host-1:session-1] reply failed');
+      expect(logLine).toContain('session=session-1');
+      expect(logLine).toContain('delivery=discord:channel:thread-1');
+      expect(logLine).toContain('code=openclaw_gateway_unavailable');
+      expect(logLine).toContain('stderr=connect ECONNREFUSED 127.0.0.1:18789');
+      expect(logLine).not.toContain('secret transcript');
+      expect(sentJson(peer)).toContainEqual({ t: 'reply.error', message: 'openclaw_gateway_unavailable' });
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it('routes OpenClaw infer TTS failures through tts.error, not reply.error', async () => {

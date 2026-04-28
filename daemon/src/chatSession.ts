@@ -22,6 +22,14 @@ import type { ChatOptions, ChatResult } from './types.js';
 
 const execAsync = promisify(exec);
 
+export interface ChatErrorDetails {
+  rootMessage?: string;
+  stderr?: string;
+  exitCode?: string;
+}
+
+const BENIGN_AUTH_PROFILE_DIAGNOSTIC = /^\s*\[agents\/auth-profiles\].*$/gim;
+
 const VOICE_REPLY_GUIDANCE =
   'Your reply will be turned back into a voice message for the user, so keep it concise ' +
   'by default but complete enough when needed, and read-aloud friendly. Avoid markdown, lists, and code blocks.';
@@ -100,8 +108,7 @@ async function sendGenericMessage(
     });
   } catch (err) {
     if (signal?.aborted) throw new ChatError('aborted', 'aborted');
-    const msg = err instanceof Error ? err.message : failureLabel;
-    throw new ChatError(msg, classifyOpenClawError(err));
+    throw toOpenClawChatError(err, failureLabel);
   }
 }
 
@@ -125,8 +132,7 @@ async function sendDiscordMessage(
     });
   } catch (err) {
     if (signal?.aborted) throw new ChatError('aborted', 'aborted');
-    const msg = err instanceof Error ? err.message : failureLabel;
-    throw new ChatError(msg, classifyOpenClawError(err));
+    throw toOpenClawChatError(err, failureLabel);
   }
 }
 
@@ -201,8 +207,7 @@ async function runOpenClawTurn(opts: {
     return stdout.trim();
   } catch (err: unknown) {
     if (opts.signal?.aborted) throw new ChatError('aborted', 'aborted');
-    const msg = err instanceof Error ? err.message : 'openclaw_failed';
-    throw new ChatError(msg, classifyOpenClawError(err));
+    throw toOpenClawChatError(err, 'openclaw_failed');
   }
 }
 
@@ -259,8 +264,7 @@ async function resolveOpenClawSessionId(opts: {
   } catch (err) {
     if (err instanceof ChatError) throw err;
     if (opts.signal?.aborted) throw new ChatError('aborted', 'aborted');
-    const msg = err instanceof Error ? err.message : 'openclaw_session_lookup_failed';
-    throw new ChatError(msg, classifyOpenClawError(err));
+    throw toOpenClawChatError(err, 'openclaw_session_lookup_failed');
   }
 }
 
@@ -284,24 +288,62 @@ function parseOpenClawSessions(stdout: string): Array<{ key: string; sessionId: 
 }
 
 export function classifyOpenClawError(err: unknown): string {
-  const parts: string[] = [];
-  if (err instanceof Error) parts.push(err.message);
-  if (err && typeof err === 'object') {
-    const maybe = err as { code?: unknown; stderr?: unknown; stdout?: unknown };
-    if (typeof maybe.code === 'string') parts.push(maybe.code);
-    if (typeof maybe.stderr === 'string') parts.push(maybe.stderr);
-    if (typeof maybe.stdout === 'string') parts.push(maybe.stdout);
-  }
-  const text = parts.join('\n').toLowerCase();
+  const text = stripBenignOpenClawDiagnostics(collectOpenClawErrorText(err)).toLowerCase();
   if (/\b(command not found|not found|enoent)\b/.test(text)) return 'openclaw_unavailable';
-  if (/\b(auth|token|credential|unauthorized|forbidden|device-auth|read-only file system|erofs)\b/.test(text)) {
-    return 'openclaw_auth_unavailable';
-  }
   if (/\bdelivery channel is required\b/.test(text)) return 'openclaw_delivery_unavailable';
   if (/\b(econnrefused|gateway|fetch failed|failed to connect|127\.0\.0\.1|18789)\b/.test(text)) {
     return 'openclaw_gateway_unavailable';
   }
+  if (/\b(auth|token|credential|unauthorized|forbidden|device-auth|read-only file system|erofs)\b/.test(text)) {
+    return 'openclaw_auth_unavailable';
+  }
   return 'openclaw_failed';
+}
+
+function collectOpenClawErrorText(err: unknown): string {
+  const parts: string[] = [];
+  if (err instanceof Error) parts.push(err.message);
+  if (err && typeof err === 'object') {
+    const maybe = err as { code?: unknown; stderr?: unknown; stdout?: unknown };
+    if (typeof maybe.code === 'string' || typeof maybe.code === 'number') parts.push(String(maybe.code));
+    if (typeof maybe.stderr === 'string') parts.push(maybe.stderr);
+    if (typeof maybe.stdout === 'string') parts.push(maybe.stdout);
+  }
+  return parts.join('\n');
+}
+
+function stripBenignOpenClawDiagnostics(text: string): string {
+  return text.replace(BENIGN_AUTH_PROFILE_DIAGNOSTIC, '');
+}
+
+function toOpenClawChatError(err: unknown, fallbackLabel: string): ChatError {
+  const message = err instanceof Error && err.message ? err.message : fallbackLabel;
+  return new ChatError(message, classifyOpenClawError(err), extractOpenClawErrorDetails(err, fallbackLabel));
+}
+
+function extractOpenClawErrorDetails(err: unknown, fallbackLabel: string): ChatErrorDetails {
+  const details: ChatErrorDetails = {};
+  if (err instanceof Error && err.message) details.rootMessage = sanitizeOpenClawLogText(err.message);
+  if (err && typeof err === 'object') {
+    const maybe = err as { code?: unknown; stderr?: unknown };
+    if (typeof maybe.stderr === 'string' && maybe.stderr.trim()) {
+      details.stderr = sanitizeOpenClawLogText(maybe.stderr);
+    }
+    if (typeof maybe.code === 'string' || typeof maybe.code === 'number') details.exitCode = String(maybe.code);
+  }
+  if (!details.rootMessage) details.rootMessage = sanitizeOpenClawLogText(fallbackLabel);
+  return details;
+}
+
+function sanitizeOpenClawLogText(text: string): string {
+  return stripBenignOpenClawDiagnostics(text)
+    .replace(/("--message"\s+)"(?:\\.|[^"\\])*"/g, '$1"[redacted]"')
+    .replace(/(--message\s+)(?:"(?:\\.|[^"\\])*"|'[^']*'|\S+)/g, '$1[redacted]')
+    .replace(/(xai[_-]?api[_-]?key\s*[=:]\s*)\S+/gi, '$1[redacted]')
+    .replace(/(authorization:\s*bearer\s+)\S+/gi, '$1[redacted]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 1000);
 }
 
 export interface DeliveryTarget {
@@ -372,6 +414,7 @@ export class ChatError extends Error {
   constructor(
     message: string,
     readonly code: string,
+    readonly details?: ChatErrorDetails,
   ) {
     super(message);
     this.name = 'ChatError';
