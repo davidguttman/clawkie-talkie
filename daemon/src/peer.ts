@@ -24,11 +24,9 @@ import { SignalClient, type SignalData } from './signal.js';
 import { classifySignal, decideForwardToLivePeer, decideIncomingSignal } from './signalKind.js';
 
 const MAX_BUFFERED_CANDIDATES_PER_PEER = 32;
+import { DEFAULT_SIGNAL_SERVER } from './signalServer.js';
 import { makeVoiceRoomId } from './voiceRoom.js';
 import { VoiceSession } from './voiceSession.js';
-
-const DEFAULT_SIGNAL_SERVER =
-  process.env.SIGNAL_SERVER?.trim() || 'https://api.rambly.app';
 
 const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
