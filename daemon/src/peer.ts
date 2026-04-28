@@ -2,7 +2,7 @@
 // rendezvous/control room named after `opts.peerId` (`host=H` in the
 // public URL). Browsers join that room, send a single
 // `rendezvous.join` control message with the OpenClaw `sessionId` and
-// generic delivery `{channel,target}`, and receive back a
+// optional generic delivery `{channel,target}`, and receive back a
 // `rendezvous.accept` containing a deterministic per-session
 // `roomId = makeVoiceRoomId({ host, session })`. The browser then
 // re-connects to the voice room. Actual voice/STT/TTS/OpenClaw turns
@@ -17,7 +17,7 @@ import wrtc from '@roamhq/wrtc';
 import SimplePeer from 'simple-peer';
 import {
   daemonToPhone,
-  type DeliveryTarget,
+  validateRendezvousDelivery,
   type PhoneToDaemon,
 } from './protocol.js';
 import { SignalClient, type SignalData } from './signal.js';
@@ -279,14 +279,16 @@ export class DaemonPeer {
       return;
     }
     const sessionId = (msg.sessionId ?? '').trim();
-    const delivery: DeliveryTarget = {
-      channel: (msg.delivery?.channel ?? '').trim(),
-      target: (msg.delivery?.target ?? '').trim(),
-    };
-    if (!sessionId || !delivery.channel || !delivery.target) {
-      this.sendRendezvous(rp, daemonToPhone.rendezvousError('missing_session_or_delivery'));
+    const deliveryValidation = validateRendezvousDelivery(msg.delivery);
+    if (!sessionId) {
+      this.sendRendezvous(rp, daemonToPhone.rendezvousError('missing_session'));
       return;
     }
+    if (!deliveryValidation.ok) {
+      this.sendRendezvous(rp, daemonToPhone.rendezvousError(deliveryValidation.message));
+      return;
+    }
+    const delivery = deliveryValidation.delivery;
 
     if (this.voiceSessions.size >= this.maxVoiceSessions) {
       const existing = this.voiceSessions.get(makeVoiceRoomId({ hostPeerId: this.opts.peerId, sessionId }));

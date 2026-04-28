@@ -46,6 +46,16 @@ describe('parseHandoffUrl', () => {
     });
   });
 
+  it('parses session-only webchat handoff args without a target', () => {
+    expect(
+      parseHandoffUrl('/voice#host=host-1&session=session-1&channel=webchat'),
+    ).toEqual({
+      hostPeerId: 'host-1',
+      sessionId: 'session-1',
+      delivery: { channel: 'webchat' },
+    });
+  });
+
   it('parses handoff args from query params for compatibility', () => {
     expect(
       parseHandoffUrl('/voice?host=host-1&session=session-1&channel=discord&target=channel%3Athread-1'),
@@ -71,6 +81,8 @@ describe('parseHandoffUrl', () => {
   it('returns null when required args are missing', () => {
     expect(parseHandoffUrl('/voice')).toBeNull();
     expect(parseHandoffUrl('/voice#host=h&session=s')).toBeNull();
+    expect(parseHandoffUrl('/voice#host=h&channel=webchat')).toBeNull();
+    expect(parseHandoffUrl('/voice#host=h&session=s&channel=discord')).toBeNull();
   });
 });
 
@@ -87,6 +99,22 @@ describe('initial handoff routing', () => {
       sessionId: 'session-1',
       handoff: {
         delivery: { channel: 'discord', target: 'channel:thread-1' },
+      },
+    });
+  });
+
+  it('opens session-only webchat voice handoff URLs directly in Driving', () => {
+    expect(
+      parseInitialLocation({
+        search: '',
+        hash: '#host=host-1&session=session-1&channel=webchat',
+      }),
+    ).toMatchObject({
+      screen: 'driving',
+      hostPeerId: 'host-1',
+      sessionId: 'session-1',
+      handoff: {
+        delivery: { channel: 'webchat' },
       },
     });
   });

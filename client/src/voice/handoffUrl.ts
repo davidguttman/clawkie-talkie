@@ -8,7 +8,7 @@ export interface HandoffRoute {
   sessionId: string;
   delivery: {
     channel: string;
-    target: string;
+    target?: string;
   };
 }
 
@@ -29,12 +29,20 @@ export function parseHandoffUrl(raw: string): HandoffRoute | null {
   const channel = get('channel').trim();
   const target = get('target').trim();
 
-  if (!hostPeerId || !sessionId || !channel || !target) return null;
+  if (!hostPeerId || !sessionId || !channel) return null;
+
+  const delivery = channel === 'webchat'
+    ? { channel }
+    : target
+      ? { channel, target }
+      : null;
+
+  if (delivery === null) return null;
 
   return {
     hostPeerId,
     sessionId,
-    delivery: { channel, target },
+    delivery,
   };
 }
 

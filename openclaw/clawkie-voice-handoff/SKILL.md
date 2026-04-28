@@ -34,10 +34,16 @@ I can’t create the voice link: Clawkie Talkie is not installed/configured for 
 
 ## URL contract
 
-Generate this URL:
+Generate this URL for external delivery targets:
 
 ```txt
 https://clawkietalkie.app/voice#host=<host>&session=<sessionId>&channel=<channel>&target=<target>
+```
+
+For internal/webchat sessions where no external delivery target exists, omit `target`:
+
+```txt
+https://clawkietalkie.app/voice#host=<host>&session=<sessionId>&channel=webchat
 ```
 
 Use hash args so `sessionId`, UUID-like values, and provider targets are not sent to web servers. Query params are compatibility-only; do not generate them unless explicitly requested.
@@ -90,11 +96,13 @@ Use the trusted inbound metadata `channel` value, e.g.:
 
 If absent, use the runtime channel only if explicit. Do not infer from labels.
 
-### `target`
+### `target` (optional for internal/webchat)
 
-Use the OpenClaw message target for mirroring transcripts back to the originating conversation.
+Use the OpenClaw message target for mirroring transcripts back to the originating conversation when an external delivery target exists.
 
 Preferred source: `Conversation info` → `chat_id`, exactly as provided.
+
+If this is an internal/webchat session and no external delivery target exists, do **not** block; omit `target` from the URL. The daemon will run `openclaw agent --session-id` and return the spoken reply to the phone without calling `openclaw message send`.
 
 Examples:
 
@@ -110,6 +118,12 @@ room:!roomId:server
 
 Do not use display labels like `#general` unless that is the provider’s actual target format.
 
+For external channels, do not guess a target. If the channel requires external delivery and no target is available, stop and say:
+
+```txt
+I can’t create the voice link: missing target.
+```
+
 ## Build the URL
 
 URL-encode all hash values. Equivalent JS:
@@ -119,7 +133,7 @@ const params = new URLSearchParams();
 params.set('host', CLAWKIE_DAEMON_HOST_ID);
 params.set('session', sessionId);
 params.set('channel', channel);
-params.set('target', target);
+if (target) params.set('target', target);
 const url = `https://clawkietalkie.app/voice#${params.toString()}`;
 ```
 
