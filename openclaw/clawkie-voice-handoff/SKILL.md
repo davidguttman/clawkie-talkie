@@ -15,9 +15,9 @@ The installer patches the runtime-installed copy of this skill (not the repo sou
 - Install date:
 - CLAWKIE_DAEMON_HOST_ID = `<CONFIGURE_DAEMON_PEER_ID>`
 
-`CLAWKIE_DAEMON_HOST_ID` is the stable daemon host UUID the installer generated and wrote to the daemon's `.env` as `DAEMON_PEER_ID`. The runtime-installed skill stores the same UUID and uses it directly when building a handoff URL. The repo-source copy stays at `<CONFIGURE_DAEMON_PEER_ID>` so it cannot leak a real machine ID.
+`CLAWKIE_DAEMON_HOST_ID` is the stable daemon host UUID the installer generated and wrote to the daemon's `.env` as `DAEMON_PEER_ID`. The runtime-installed skill stores the same UUID and uses it directly when building a handoff URL. The repo-source copy keeps a non-secret sentinel in the configuration bullet above so it cannot leak a real machine ID.
 
-If `INSTALLED` is not `true`, or `CLAWKIE_DAEMON_HOST_ID` is empty / still contains `<CONFIGURE_...>`, do not generate a link. Reply:
+If `INSTALLED` is not `true`, or `CLAWKIE_DAEMON_HOST_ID` is empty / not replaced with a real host ID, do not generate a link. Reply:
 
 ```txt
 I can’t create the voice link: Clawkie Talkie is not installed/configured for this OpenClaw runtime.
@@ -50,7 +50,7 @@ Use hash args so `sessionId`, UUID-like values, and provider targets are not sen
 
 Use `CLAWKIE_DAEMON_HOST_ID` from the installed configuration section above.
 
-If it is missing or still a placeholder, stop and say:
+If it is missing or not a real host ID, stop and say:
 
 ```txt
 I can’t create the voice link: missing Clawkie host ID.
