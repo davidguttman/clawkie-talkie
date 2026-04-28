@@ -2,42 +2,97 @@
 //
 // Settings live on the device only. xAI API keys are held by the daemon
 // (from the repo-root `.env`), NOT the phone — the browser never sees
-// a key. Fields here are strictly UI/voice preferences.
+// a key. Fields here are strictly UI/voice/export preferences.
 
-export interface Settings {
-  voice: string;
-  speed: number;
-  format: 'md' | 'txt' | 'json';
+// Voice ids supported by the xAI TTS daemon path. Keep this list in
+// sync with the daemon (`daemon/src/ttsSession.ts`).
+export const VOICE_IDS = ['eve', 'ara', 'rex', 'sal', 'leo'] as const;
+export type VoiceId = (typeof VOICE_IDS)[number];
+
+export const VOICE_LABELS: Record<VoiceId, string> = {
+  eve: 'Eve',
+  ara: 'Ara',
+  rex: 'Rex',
+  sal: 'Sal',
+  leo: 'Leo',
+};
+
+export function isVoiceId(value: unknown): value is VoiceId {
+  return typeof value === 'string' && (VOICE_IDS as readonly string[]).includes(value);
+}
+
+export type ExportFormat = 'md' | 'txt' | 'json';
+
+export interface ExportSettings {
+  format: ExportFormat;
   timestamps: boolean;
+}
+
+export interface Settings extends ExportSettings {
+  voice: VoiceId;
+  speed: number;
 }
 
 const KEY = 'clawkie.settings.v1';
 const TRANSCRIPTS_KEY = 'clawkie.transcripts.v1';
 
-export const DEFAULT_SETTINGS: Settings = {
-  voice: 'Samantha (en-US)',
-  speed: 1.05,
+export const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
   format: 'md',
   timestamps: false,
 };
 
+export const DEFAULT_SETTINGS: Settings = {
+  voice: 'eve',
+  speed: 1.05,
+  ...DEFAULT_EXPORT_SETTINGS,
+};
+
 export function loadSettings(): Settings {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return DEFAULT_SETTINGS;
-    const parsed = JSON.parse(raw);
-    return { ...DEFAULT_SETTINGS, ...parsed };
-  } catch {
-    return DEFAULT_SETTINGS;
-  }
+  return normalizeSettings(readRawSettings());
 }
 
 export function saveSettings(settings: Settings): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify(settings));
+    localStorage.setItem(KEY, JSON.stringify(normalizeSettings(settings)));
   } catch {
     // storage full or disabled — settings won't persist, but the app still works.
   }
+}
+
+// Export settings boundary — callers that only need export/history work
+// can read these without importing the full Settings UI surface.
+export function loadExportSettings(): ExportSettings {
+  const settings = normalizeSettings(readRawSettings());
+  return { format: settings.format, timestamps: settings.timestamps };
+}
+
+function readRawSettings(): unknown {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeSettings(value: unknown): Settings {
+  const source = (value && typeof value === 'object') ? (value as Partial<Settings>) : {};
+  const voice = isVoiceId(source.voice) ? source.voice : DEFAULT_SETTINGS.voice;
+  const speed = typeof source.speed === 'number' && Number.isFinite(source.speed)
+    ? clamp(source.speed, 0.5, 2)
+    : DEFAULT_SETTINGS.speed;
+  const format: ExportFormat = source.format === 'txt' || source.format === 'json'
+    ? source.format
+    : 'md';
+  const timestamps = typeof source.timestamps === 'boolean'
+    ? source.timestamps
+    : DEFAULT_SETTINGS.timestamps;
+  return { voice, speed, format, timestamps };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 export type TranscriptRole = 'user' | 'assistant';
@@ -144,7 +199,7 @@ export function latestAssistantText(session: TranscriptSession | null): string |
 
 export function exportTranscript(
   session: TranscriptSession,
-  settings: Pick<Settings, 'format' | 'timestamps'>,
+  settings: ExportSettings,
 ): TranscriptExport {
   const baseName = safeFilePart(session.id || 'transcript');
   const filename = `${baseName}.${settings.format}`;

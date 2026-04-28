@@ -34,6 +34,31 @@ describe('phone → daemon factories', () => {
     });
   });
 
+  it('includes voice settings in rendezvous join when provided', () => {
+    expect(
+      phoneClient.rendezvousJoin({
+        sessionId: 'session-1',
+        delivery: { channel: 'discord', target: 'channel:thread-1' },
+        settings: { voice: 'ara' },
+      }),
+    ).toEqual({
+      t: 'rendezvous.join',
+      sessionId: 'session-1',
+      delivery: { channel: 'discord', target: 'channel:thread-1' },
+      settings: { voice: 'ara' },
+    });
+  });
+
+  it('emits settings.update for voice changes mid-session', () => {
+    expect(phoneClient.settingsUpdate({ voice: 'rex' })).toEqual({
+      t: 'settings.update',
+      settings: { voice: 'rex' },
+    });
+    expect(phoneClient.settingsUpdate({ voice: 'rex' })).toEqual(
+      phoneDaemon.settingsUpdate({ voice: 'rex' }),
+    );
+  });
+
   it('matches the daemon copy of the protocol', () => {
     expect(phoneClient.sttStart()).toEqual(phoneDaemon.sttStart());
     expect(phoneClient.sttAudioDone()).toEqual(phoneDaemon.sttAudioDone());

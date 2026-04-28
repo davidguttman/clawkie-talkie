@@ -183,6 +183,7 @@ export function App() {
             }
           : null
       }
+      voiceSettings={{ voice: settings.voice }}
     >
       <RtcDisconnectGate isNarrow={isNarrow}>
         <ResponsiveRuntime isNarrow={isNarrow}>{screenContent}</ResponsiveRuntime>

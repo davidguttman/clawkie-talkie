@@ -300,7 +300,12 @@ export class DaemonPeer {
 
     const roomId = makeVoiceRoomId({ hostPeerId: this.opts.peerId, sessionId });
 
-    if (!this.voiceSessions.has(roomId)) {
+    const ttsVoice = msg.settings && typeof msg.settings.voice === 'string'
+      ? msg.settings.voice.trim() || undefined
+      : undefined;
+
+    const existingSession = this.voiceSessions.get(roomId);
+    if (!existingSession) {
       const session = new VoiceSession({
         apiKey: this.opts.apiKey,
         sttLanguage: this.opts.sttLanguage,
@@ -310,11 +315,16 @@ export class DaemonPeer {
         roomId,
         sessionId,
         delivery,
+        ttsVoice,
         onClose: (id) => {
           this.voiceSessions.delete(id);
         },
       });
       this.voiceSessions.set(roomId, session);
+    } else if (ttsVoice) {
+      // A returning phone may have changed its voice preference between
+      // joins; apply it so the next TTS turn picks up the new voice.
+      existingSession.applyVoiceSettings({ voice: ttsVoice });
     }
 
     this.sendRendezvous(rp, daemonToPhone.rendezvousAccept(roomId));
