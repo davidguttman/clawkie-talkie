@@ -179,6 +179,7 @@ class FakeAudioElement {
   currentTime = 0;
   duration = Number.NaN;
   loop = false;
+  muted = false;
   preload = '';
   play = vi.fn(() => Promise.resolve());
   pause = vi.fn();
@@ -271,6 +272,38 @@ describe('radio static generation', () => {
 });
 
 describe('HoldMusicController', () => {
+  it('persists mute preference and applies it to the active music and static bed', async () => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn((key: string) => storage.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => storage.set(key, value)),
+      removeItem: vi.fn((key: string) => storage.delete(key)),
+    });
+    storage.set('clawkie.holdMusic.muted.v1', '1');
+    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+    vi.stubGlobal('Audio', FakeAudioElement);
+    const { HoldMusicController, getHoldMusicMuted, setHoldMusicMuted } = await import(
+      '../client/src/voice/holdMusic'
+    );
+
+    const controller = new HoldMusicController();
+    controller.start();
+
+    const ctx = FakeAudioContext.instances[0];
+    const audio = FakeAudioElement.instances[0];
+    expect(getHoldMusicMuted()).toBe(true);
+    expect(audio.muted).toBe(true);
+    expect(ctx.gains[3].gain.value).toBe(0);
+    expect(ctx.gains[4].gain.value).toBe(0);
+
+    setHoldMusicMuted(false);
+
+    expect(storage.has('clawkie.holdMusic.muted.v1')).toBe(false);
+    expect(audio.muted).toBe(false);
+    expect(ctx.gains[3].gain.value).toBeCloseTo(0.15);
+    expect(ctx.gains[4].gain.value).toBeCloseTo(0.001);
+  });
+
   it('waits for metadata, seeks into the middle of the track, loops, and routes through Web Audio', async () => {
     vi.stubGlobal('window', { AudioContext: FakeAudioContext });
     vi.stubGlobal('Audio', FakeAudioElement);

@@ -33,6 +33,20 @@ describe('DrivingScreen settings button', () => {
   });
 });
 
+describe('DrivingScreen hold music mute control', () => {
+  it('replaces the thinking icon with a speaker/mute toggle wired to hold music storage', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    expect(source).toContain('getHoldMusicMuted');
+    expect(source).toContain('setHoldMusicMuted(!getHoldMusicMuted())');
+    expect(source).toContain('subscribeHoldMusicMuted(setHoldMusicMutedState)');
+    expect(source).toContain("'Mute hold music'");
+    expect(source).toContain("'Unmute hold music'");
+    expect(source).toContain("holdMusicMuted ? '🔇' : '🔊'");
+    expect(source).not.toContain("state === 'thinking' ? '◐'");
+  });
+});
+
 describe('DrivingScreen media debug surface', () => {
   it('keeps the hardware-event conclusion and keeper counters visible in debug mode', () => {
     const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');

@@ -16,6 +16,11 @@ import {
 } from '../voice/tts';
 import { useRtc } from '../rtc/RtcContext';
 import { readSttChunkConfigFromLocation } from '../voice/sttDaemon';
+import {
+  getHoldMusicMuted,
+  setHoldMusicMuted,
+  subscribeHoldMusicMuted,
+} from '../voice/holdMusic';
 import type { Settings } from '../storage';
 
 // Runtime driving surface driven by the daemon-owned state machine in
@@ -49,6 +54,7 @@ export function DrivingScreen({
   const accentCfg = HIFI.accents[accent] || HIFI.accents.amber;
   const debugMode = useDebugMode();
   const [replayNotice, setReplayNotice] = useState<string | null>(null);
+  const [holdMusicMuted, setHoldMusicMutedState] = useState(() => getHoldMusicMuted());
 
   const rtc = useRtc();
 
@@ -82,6 +88,10 @@ export function DrivingScreen({
   // entrypoint the on-screen PTT button uses. Feature-detected and a
   // no-op when navigator.mediaSession is unavailable.
   useMediaSessionControls(state, tap);
+
+  useEffect(() => {
+    return subscribeHoldMusicMuted(setHoldMusicMutedState);
+  }, []);
 
   // Tear down the silent media-session keeper when the Driving
   // screen unmounts. The keeper itself is started lazily from the
@@ -322,6 +332,8 @@ export function DrivingScreen({
       >
         <PTTButton
           onTap={tap}
+          onToggleHoldMusicMuted={() => setHoldMusicMuted(!getHoldMusicMuted())}
+          holdMusicMuted={holdMusicMuted}
           state={state}
           stateColor={stateColor}
           stateGlow={stateGlow}
@@ -976,6 +988,8 @@ function errorLabelFor(code: string): string {
 
 function PTTButton({
   onTap,
+  onToggleHoldMusicMuted,
+  holdMusicMuted,
   state,
   stateColor,
   stateGlow,
@@ -984,6 +998,8 @@ function PTTButton({
   size,
 }: {
   onTap: () => void;
+  onToggleHoldMusicMuted: () => void;
+  holdMusicMuted: boolean;
   state: DrivingState;
   stateColor: string;
   stateGlow: string;
@@ -998,12 +1014,25 @@ function PTTButton({
   const isIdle = state === 'idle';
   const isRec = state === 'recording';
   const isAI = state === 'ai';
+  const isThink = state === 'thinking';
 
   const pressScale = pressed ? 0.94 : isRec ? 1.02 : 1;
 
   return (
     <button
+      type="button"
+      aria-label={
+        isThink
+          ? holdMusicMuted
+            ? 'Unmute hold music'
+            : 'Mute hold music'
+          : label
+      }
       onClick={() => {
+        if (isThink) {
+          onToggleHoldMusicMuted();
+          return;
+        }
         if (disabled) return;
         const handledByPointer = clickHandledByPointerRef.current;
         clickHandledByPointerRef.current = false;
@@ -1019,6 +1048,10 @@ function PTTButton({
         onTap();
       }}
       onPointerDown={() => {
+        if (isThink) {
+          setPressed(true);
+          return;
+        }
         if (disabled) return;
         clickHandledByPointerRef.current = true;
         void unlockDaemonTtsAudio();
@@ -1031,7 +1064,6 @@ function PTTButton({
         clickHandledByPointerRef.current = false;
         setPressed(false);
       }}
-      disabled={disabled}
       style={{
         position: 'relative',
         width: size,
@@ -1040,7 +1072,7 @@ function PTTButton({
         flexShrink: 0,
         borderRadius: '50%',
         border: 'none',
-        cursor: disabled ? 'default' : 'pointer',
+        cursor: disabled && !isThink ? 'default' : 'pointer',
         background: isIdle
           ? `radial-gradient(circle at 30% 28%, ${pressed ? '#2a2a2e' : '#1a1a1d'} 0%, #0a0a0b 100%)`
           : `radial-gradient(circle at 30% 28%, ${stateColor} 0%, ${stateColor}88 100%)`,
@@ -1060,7 +1092,7 @@ function PTTButton({
       <ButtonAura active={isRec || isAI} color={stateColor} />
       <div style={{ position: 'relative', zIndex: 2, textAlign: 'center' }}>
         <div style={{ fontSize: 48, lineHeight: 1, fontWeight: 500 }}>
-          {isRec ? '■' : isAI ? '◉' : state === 'thinking' ? '◐' : '●'}
+          {isRec ? '■' : isAI ? '◉' : isThink ? (holdMusicMuted ? '🔇' : '🔊') : '●'}
         </div>
         <div
           style={{
