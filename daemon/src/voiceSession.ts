@@ -16,9 +16,7 @@ import SimplePeer from 'simple-peer';
 import { runChat, ChatError, type DeliveryTarget as ChatDeliveryTarget } from './chatSession.js';
 import { XaiTtsSession, TTS_SAMPLE_RATE } from './ttsSession.js';
 import { daemonToPhone, type PhoneToDaemon } from './protocol.js';
-import { OpenClawInferSttSession, type OpenClawInferSttSessionOptions } from './inferSttSession.js';
-import type { SttSessionCallbacks } from './sttTypes.js';
-import { createWasmVad, type SpeechDetector, type WasmVadOptions } from './vad.js';
+import { XaiSttSession } from './sttSession.js';
 import { SignalClient, type SignalData } from './signal.js';
 import { classifySignal, decideForwardToLivePeer, decideIncomingSignal } from './signalKind.js';
 
@@ -89,7 +87,6 @@ export function decidePhoneConnection(input: {
 
 const CONNECT_TIMEOUT_MS = 12_000;
 const REPLACED_REMOTE_IGNORE_TTL_MS = 30_000;
-const STT_SAMPLE_RATE = 16000;
 
 type SignalPayload = Parameters<SimplePeer.Instance['signal']>[0];
 
@@ -102,19 +99,6 @@ interface MediaStreamLike {
   addTrack(track: unknown): void;
 }
 
-export interface SttSessionLike {
-  sendAudio(bytes: Uint8Array): void;
-  signalAudioDone(): void | Promise<void>;
-  close(): void;
-}
-
-export type SttSessionFactory = (
-  opts: OpenClawInferSttSessionOptions,
-  cb: SttSessionCallbacks,
-) => SttSessionLike;
-
-export type SpeechDetectorFactory = (opts: WasmVadOptions) => Promise<SpeechDetector>;
-
 export interface VoiceSessionRuntimeOptions {
   apiKey: string;
   sttLanguage?: string;
@@ -125,8 +109,6 @@ export interface VoiceSessionRuntimeOptions {
   sessionId: string;
   delivery?: ChatDeliveryTarget;
   ttsVoice?: string;
-  sttSessionFactory?: SttSessionFactory;
-  createSpeechDetector?: SpeechDetectorFactory;
   onClose: (roomId: string) => void;
 }
 
@@ -141,7 +123,7 @@ export class VoiceSession {
   private acceptedAnswer = false;
   private connected = false;
   private connectionTimeout: NodeJS.Timeout | null = null;
-  private stt: SttSessionLike | null = null;
+  private stt: XaiSttSession | null = null;
   private tts: XaiTtsSession | null = null;
   private chatAbort: AbortController | null = null;
   private audioSource: AudioSourceLike | null = null;
@@ -154,7 +136,6 @@ export class VoiceSession {
   private resampledRemainder: Buffer = Buffer.alloc(0);
   private closing = false;
   private ttsVoice: string | undefined;
-  private sttOpenToken = 0;
   private readonly replacedRemoteIds = new Set<string>();
   private readonly pendingCandidates = new Map<string, SignalPayload[]>();
 
@@ -598,7 +579,7 @@ export class VoiceSession {
       this.resetTurn('stt_restart');
       // Routing is room-bound — ignore any payload on stt.start.
       this.state.handleStartTurn();
-      void this.openStt();
+      this.openStt();
       return;
     }
     if (msg.t === 'stt.audio.done') {
@@ -619,45 +600,10 @@ export class VoiceSession {
     }
   }
 
-  private async openStt(): Promise<void> {
-    const token = ++this.sttOpenToken;
-    console.error(`[voice ${this.roomId}] opening OpenClaw infer STT session`);
-    const createStt = this.opts.sttSessionFactory ?? ((opts, cb) => new OpenClawInferSttSession(opts, cb));
-    const createSpeechDetector = this.opts.createSpeechDetector ?? createWasmVad;
-    let speechDetector: SpeechDetector | undefined;
-    let detectorDestroyed = false;
-    const destroySpeechDetector = () => {
-      if (detectorDestroyed) return;
-      detectorDestroyed = true;
-      try {
-        speechDetector?.destroy?.();
-      } catch {
-        // best effort cleanup
-      }
-    };
-
-    try {
-      speechDetector = await createSpeechDetector({ sampleRate: STT_SAMPLE_RATE });
-    } catch (err) {
-      if (token !== this.sttOpenToken || !this.state.turnInFlight) return;
-      console.error(`[voice ${this.roomId}] WASM VAD init failed; continuing without phrase chunks: ${err instanceof Error ? err.message : String(err)}`);
-    }
-
-    if (token !== this.sttOpenToken || !this.state.turnInFlight) {
-      destroySpeechDetector();
-      return;
-    }
-
-    const enablePhraseChunks = !!speechDetector;
-    const sttOptions: OpenClawInferSttSessionOptions = {
-      language: this.opts.sttLanguage,
-      sampleRate: STT_SAMPLE_RATE,
-      enablePhraseChunks,
-    };
-    if (speechDetector) sttOptions.speechDetector = speechDetector;
-
-    const session = createStt(
-      sttOptions,
+  private openStt(): void {
+    console.error(`[voice ${this.roomId}] opening xAI STT session`);
+    this.stt = new XaiSttSession(
+      { apiKey: this.opts.apiKey, language: this.opts.sttLanguage },
       {
         onReady: () => {
           this.send(daemonToPhone.sttReady());
@@ -666,35 +612,20 @@ export class VoiceSession {
           this.send(daemonToPhone.sttPartial(text, isFinal));
         },
         onDone: (text) => {
-          destroySpeechDetector();
           this.send(daemonToPhone.sttDone(text));
           this.stt = null;
           void this.runReplyTurn(text);
         },
         onError: (message) => {
-          destroySpeechDetector();
           this.send(daemonToPhone.sttError(message));
           this.stt = null;
           this.state.resetTurn();
         },
         onClosed: () => {
-          destroySpeechDetector();
           this.send(daemonToPhone.sttClosed());
         },
       },
     );
-
-    this.stt = {
-      sendAudio: (bytes) => session.sendAudio(bytes),
-      signalAudioDone: () => session.signalAudioDone(),
-      close: () => {
-        try {
-          session.close();
-        } finally {
-          destroySpeechDetector();
-        }
-      },
-    };
   }
 
   private async runReplyTurn(transcript: string): Promise<void> {
@@ -792,7 +723,6 @@ export class VoiceSession {
   }
 
   private resetTurn(_reason: string): void {
-    this.sttOpenToken += 1;
     this.state.resetTurn();
     try {
       this.stt?.close();
