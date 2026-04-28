@@ -332,7 +332,7 @@ describe('HoldMusicController', () => {
     expect(ctx.biquads[3].connect).toHaveBeenCalledWith(ctx.biquads[4]);
     expect(ctx.biquads[4].connect).toHaveBeenCalledWith(ctx.biquads[5]);
     expect(ctx.biquads[5].connect).toHaveBeenCalledWith(ctx.gains[4]);
-    expect(ctx.gains[4].gain.value).toBeCloseTo(0.006);
+    expect(ctx.gains[4].gain.value).toBeCloseTo(0.001);
     expect(ctx.gains[4].connect).toHaveBeenCalledWith(ctx.destination);
     expect(ctx.bufferSources[0].buffer).not.toBe(ctx.bufferSources[1].buffer);
     expect(countSamplesAbove(ctx.bufferSources[0].buffer?.getChannelData(0) ?? new Float32Array(), 0))
@@ -396,8 +396,8 @@ describe('HoldMusicController', () => {
     const ctx = FakeAudioContext.instances[0];
     expect(ctx.analysers).toHaveLength(1);
     const analyser = ctx.analysers[0];
-    expect(analyser.fftSize).toBe(512);
-    expect(analyser.smoothingTimeConstant).toBeCloseTo(0.45);
+    expect(analyser.fftSize).toBe(64);
+    expect(analyser.smoothingTimeConstant).toBeCloseTo(0.1);
     expect(ctx.gains[3].connect).toHaveBeenCalledWith(ctx.destination);
     expect(ctx.gains[3].connect).toHaveBeenCalledWith(analyser);
     expect(getActiveHoldMusicAnalyser()).toBe(analyser as unknown as AnalyserNode);

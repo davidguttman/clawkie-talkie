@@ -1,8 +1,7 @@
 import { HOLD_MUSIC_TRACKS } from 'virtual:hold-music-tracks';
 
 const MUSIC_GAIN = 0.15;
-const NOISE_TO_MUSIC_RATIO = 0.04;
-const NOISE_GAIN = MUSIC_GAIN * NOISE_TO_MUSIC_RATIO;
+const NOISE_GAIN = 0.001;
 const MUSIC_HIGHPASS_HZ = 300;
 const MUSIC_LOWPASS_HZ = 4500;
 const MUSIC_MIDRANGE_HZ = 1500;
@@ -20,8 +19,8 @@ const BITCRUSHER_WORKLET_URL = '/audio/bitcrusher-processor.js';
 const BITCRUSHER_PROCESSOR_NAME = 'hold-music-bitcrusher';
 const BITCRUSHER_BITS = 8;
 const BITCRUSHER_NORM_FREQ = 0.4;
-const HOLD_MUSIC_FFT_SIZE = 512;
-const HOLD_MUSIC_SMOOTHING = 0.45;
+const HOLD_MUSIC_FFT_SIZE = 64;
+const HOLD_MUSIC_SMOOTHING = 0.1;
 
 let sharedAudioCtx: AudioContext | null = null;
 let activeHoldMusicAnalyser: AnalyserNode | null = null;
