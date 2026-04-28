@@ -1,10 +1,10 @@
 # Clawkie Talkie — Agent Install Instructions
 
-These instructions are for an agent installing Clawkie Talkie on a user's Mac or Linux machine.
+These instructions are for an agent installing, reinstalling, or upgrading Clawkie Talkie on a user's Mac or Linux machine.
 
 Your goals:
 
-1. Install the Clawkie Talkie daemon from this repo.
+1. Install or upgrade the Clawkie Talkie daemon from this repo.
 2. Configure it with user-provided credentials and a stable daemon host ID.
 3. Make it persistent after login/reboot.
 4. Install the OpenClaw `clawkie-voice-handoff` skill so the user can say "switch to voice" and receive a working handoff link.
@@ -26,25 +26,47 @@ Do not install credentials into the browser. The daemon holds credentials locall
 
 Public GitHub repo: `davidguttman/clawkietalkie`
 
+## Choose install mode first
+
+Before fetching or replacing files, decide which mode applies:
+
+- **Fresh install:** no existing Clawkie Talkie source directory, daemon `.env`, persistence service, or installed OpenClaw handoff skill exists.
+- **Upgrade:** Clawkie Talkie is already installed and should keep the same `.env`, `DAEMON_PEER_ID`, persistence method, and installed skill configuration while code/docs are refreshed.
+- **Reinstall/repair:** an install exists but source files or dependencies are broken. Treat it like an upgrade: preserve secrets and IDs first, then replace code.
+
+For upgrades/reinstalls, do **not** delete the existing source directory until you have preserved and verified:
+
+- repo-root `.env`
+- the existing `DAEMON_PEER_ID`
+- the installed OpenClaw skill's `CLAWKIE_DAEMON_HOST_ID`
+- the active persistence mechanism (`launchd` or `systemd --user`)
+
+The preserved daemon `DAEMON_PEER_ID` and installed skill `CLAWKIE_DAEMON_HOST_ID` must stay identical after the upgrade.
+
 ## Fetch and inspect
 
 1. Identify the installing agent's own OpenClaw workspace directory from the current runtime/session context. Do **not** invent a separate home-directory workspace and do **not** copy any path from this repository author's machine. If the active OpenClaw workspace cannot be determined, stop and ask the user.
 
-   Download the GitHub source ZIP into that workspace, for example under `<OPENCLAW_WORKSPACE>/external/clawkie-talkie`:
+   For a fresh install, download the GitHub source ZIP into that workspace, for example under `<OPENCLAW_WORKSPACE>/external/clawkie-talkie`. Refuse to overwrite an existing target in this mode:
 
    ```bash
    OPENCLAW_WORKSPACE="/absolute/path/to/this-openclaw-workspace"
    CLAWKIE_SOURCE_DIR="$OPENCLAW_WORKSPACE/external/clawkie-talkie"
 
-   mkdir -p "$(dirname "$CLAWKIE_SOURCE_DIR")"
-   cd "$(dirname "$CLAWKIE_SOURCE_DIR")"
+   if [ -e "$CLAWKIE_SOURCE_DIR" ]; then
+     echo "$CLAWKIE_SOURCE_DIR already exists; use the upgrade/reinstall flow instead of overwriting it" >&2
+     exit 1
+   fi
+
+   workdir=$(mktemp -d)
+   trap 'rm -rf "$workdir"' EXIT
+   cd "$workdir"
    curl -L -o clawkie-talkie.zip \
      https://github.com/davidguttman/clawkietalkie/archive/HEAD.zip
    unzip -q clawkie-talkie.zip
    extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkietalkie-*' | head -n 1)
-   rm -rf "$CLAWKIE_SOURCE_DIR"
+   mkdir -p "$(dirname "$CLAWKIE_SOURCE_DIR")"
    mv "$extracted_dir" "$CLAWKIE_SOURCE_DIR"
-   rm clawkie-talkie.zip
    cd "$CLAWKIE_SOURCE_DIR"
    ```
 2. Inspect the repo before installing. Expected items include:
@@ -58,6 +80,67 @@ Public GitHub repo: `davidguttman/clawkietalkie`
    - unexpected remote shell execution
    - install-time scripts that mutate global state without user consent
    - code that exfiltrates `.env`, OpenClaw config, browser cookies, or arbitrary files
+
+## Upgrade or reinstall/repair an existing install
+
+Use this flow when `CLAWKIE_SOURCE_DIR` already exists, the daemon has run before, or the OpenClaw handoff skill is already installed.
+
+1. Locate the current source directory. Prefer the configured service command/path if it exists; otherwise use the known install path under the OpenClaw workspace.
+2. Preserve current local configuration before touching source files:
+
+   ```bash
+   : "${CLAWKIE_SOURCE_DIR:?set to existing Clawkie Talkie source directory}"
+   cd "$CLAWKIE_SOURCE_DIR"
+
+   test -f .env || { echo "missing .env; stop and ask before reinstalling" >&2; exit 1; }
+   chmod 600 .env
+   DAEMON_PEER_ID=$(awk -F= '/^DAEMON_PEER_ID=/{print $2; exit}' .env)
+   test -n "$DAEMON_PEER_ID" || { echo "missing DAEMON_PEER_ID in .env; stop before changing files" >&2; exit 1; }
+   ```
+
+   Do not print the xAI key. Do not generate a new daemon peer ID unless the user explicitly asks to create a new identity.
+
+3. Stop only the Clawkie Talkie user service while replacing files:
+
+   - macOS: unload/stop the `app.clawkietalkie.daemon` LaunchAgent for the current user.
+   - Linux: `systemctl --user stop clawkie-talkie.service`.
+
+   Do not stop unrelated OpenClaw, browser, Docker, or system services.
+
+4. Refresh the source safely:
+
+   - If the source directory is a git checkout and has no relevant local changes, use `git fetch --prune` followed by a fast-forward update to the desired branch/revision.
+   - If the source came from a ZIP or the git state is unclear, download a fresh ZIP into a temporary directory and copy it over the existing source while preserving local runtime files:
+
+   ```bash
+   : "${CLAWKIE_SOURCE_DIR:?set to existing Clawkie Talkie source directory}"
+   workdir=$(mktemp -d)
+   trap 'rm -rf "$workdir"' EXIT
+   cd "$workdir"
+
+   curl -L -o clawkie-talkie.zip \
+     https://github.com/davidguttman/clawkietalkie/archive/HEAD.zip
+   unzip -q clawkie-talkie.zip
+   extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkietalkie-*' | head -n 1)
+
+   rsync -a --delete \
+     --exclude '.env' \
+     --exclude 'node_modules' \
+     --exclude '.git' \
+     "$extracted_dir"/ "$CLAWKIE_SOURCE_DIR"/
+
+   cd "$CLAWKIE_SOURCE_DIR"
+   ```
+
+5. Run dependency install again from the source directory:
+
+   ```bash
+   npm install
+   ```
+
+6. Reinstall/update the OpenClaw skill from the refreshed source, then patch the installed copy using the preserved `DAEMON_PEER_ID`. Never leave the installed skill with `<CONFIGURE_DAEMON_PEER_ID>` after an upgrade.
+7. Restart only the Clawkie Talkie user service and run the same daemon, service, and skill verification checks listed below.
+8. If verification fails, keep the preserved `.env` and report the failing command/output. Do not keep retrying with a new host ID.
 
 ## Prerequisites to verify
 
@@ -84,10 +167,12 @@ npm install
 
 ## Configure `.env`
 
-Create the repo-root `.env` file from the example:
+For a fresh install, create the repo-root `.env` file from the example. For an upgrade/reinstall, preserve the existing `.env` and skip this copy step unless the file is missing and the user approved recreating it:
 
 ```bash
-cp .env.example .env
+if [ ! -f .env ]; then
+  cp .env.example .env
+fi
 chmod 600 .env
 ```
 
@@ -108,14 +193,14 @@ DAEMON_PEER_ID=<installer-generated-uuid>
 
 Credential source order for `XAI_API_KEY`:
 
-1. Preserve an existing repo-root `.env` value if this is an update and it is already present.
+1. Preserve an existing repo-root `.env` value if this is an upgrade/reinstall and it is already present.
 2. Check the local OpenClaw config/auth profile for an existing xAI API key. Use `openclaw config file`/`openclaw config get ...` or the runtime's config tooling to find the active config; if the value is a SecretRef, resolve it through the configured local secret provider. Copy the key locally into `.env` without printing it.
 3. Check only user-designated local secret sources, if the user already named one.
 4. Only then ask the user for a safe way to provide the key. Do **not** tell them to paste it into chat.
 
 When reporting a blocker, be specific: say whether the key was absent from OpenClaw config, present but unresolved, or unavailable because the secret provider was locked/unconfigured. Do not summarize that as merely "no key in the shell environment."
 
-Do not regenerate the UUID on later updates — keep it stable so existing handoff links and the installed skill remain valid.
+Do not regenerate the UUID on later updates, reinstalls, dependency repairs, or service repairs — keep it stable so existing handoff links and the installed skill remain valid.
 
 The installed daemon defaults the client origin to `https://clawkietalkie.app`, so `CT_CLIENT_ORIGIN` is not required. Only set it as an override if the user explicitly wants to point at a non-default client deployment. The signaling server is also non-configurable for end-user installs.
 
@@ -223,6 +308,7 @@ The dry-run URL must include `host`, `session`, `channel`, and `target` in the h
 
 Report only non-secret facts:
 
+- Install mode: fresh install, upgrade, or reinstall/repair
 - Daemon source path
 - Whether dependencies installed
 - Whether `.env` exists and contains required keys, without printing key values
