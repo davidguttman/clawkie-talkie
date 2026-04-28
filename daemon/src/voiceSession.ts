@@ -18,6 +18,9 @@ import { XaiTtsSession, TTS_SAMPLE_RATE } from './ttsSession.js';
 import { daemonToPhone, type DeliveryTarget, type PhoneToDaemon } from './protocol.js';
 import { XaiSttSession } from './sttSession.js';
 import { SignalClient, type SignalData } from './signal.js';
+import { classifySignal, decideIncomingSignal } from './signalKind.js';
+
+const MAX_BUFFERED_CANDIDATES_PER_PEER = 32;
 import {
   FRAME_10MS,
   WEBRTC_SAMPLE_RATE,
@@ -129,6 +132,7 @@ export class VoiceSession {
   private resampledRemainder: Buffer = Buffer.alloc(0);
   private closing = false;
   private readonly replacedRemoteIds = new Set<string>();
+  private readonly pendingCandidates = new Map<string, SignalPayload[]>();
 
   constructor(private readonly opts: VoiceSessionRuntimeOptions) {
     this.roomId = opts.roomId;
@@ -159,15 +163,43 @@ export class VoiceSession {
 
     this.signalClient.on('signal', (event) => {
       if (this.replacedRemoteIds.has(event.from)) return;
-      if (this.peer && this.remoteId === event.from && !this.peer.destroyed) {
+      const payload = event.data as SignalPayload;
+      const livePeer = !!this.peer && this.remoteId === event.from && !this.peer.destroyed;
+      const kind = classifySignal(payload);
+      const action = decideIncomingSignal({ hasLivePeer: livePeer, kind });
+
+      if (action === 'forward') {
         try {
-          this.peer.signal(event.data as SignalPayload);
+          this.peer!.signal(payload);
         } catch (err) {
           console.error(`[voice ${opts.roomId}] peer.signal failed: ${err instanceof Error ? err.message : err}`);
         }
         return;
       }
-      this.acceptPhone(event.from, false, event.data as SignalPayload);
+
+      if (action === 'create-non-initiator') {
+        const buffered = this.pendingCandidates.get(event.from) ?? [];
+        this.pendingCandidates.delete(event.from);
+        this.acceptPhone(event.from, false, payload);
+        if (this.peer && this.remoteId === event.from) {
+          for (const cand of buffered) {
+            try { this.peer.signal(cand); } catch (err) {
+              console.error(`[voice ${opts.roomId}] replay candidate failed: ${err instanceof Error ? err.message : err}`);
+            }
+          }
+        }
+        return;
+      }
+
+      if (action === 'buffer-candidate') {
+        const list = this.pendingCandidates.get(event.from) ?? [];
+        if (list.length >= MAX_BUFFERED_CANDIDATES_PER_PEER) return;
+        list.push(payload);
+        this.pendingCandidates.set(event.from, list);
+        return;
+      }
+
+      console.error(`[voice ${opts.roomId}] ignoring ${kind} signal from ${event.from} with no live peer`);
     });
 
     this.signalClient.subscribe();
@@ -185,6 +217,7 @@ export class VoiceSession {
     this.peer = null;
     this.remoteId = null;
     this.connected = false;
+    this.pendingCandidates.clear();
     this.clearConnectionTimeout();
     this.stopKeepalive();
     this.closeOutboundAudio();
@@ -310,6 +343,7 @@ export class VoiceSession {
 
   private ignoreReplacedRemote(remoteId: string): void {
     this.replacedRemoteIds.add(remoteId);
+    this.pendingCandidates.delete(remoteId);
     setTimeout(() => {
       this.replacedRemoteIds.delete(remoteId);
     }, REPLACED_REMOTE_IGNORE_TTL_MS).unref?.();
