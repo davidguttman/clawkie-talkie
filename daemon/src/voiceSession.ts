@@ -108,6 +108,7 @@ export interface VoiceSessionRuntimeOptions {
   roomId: string;
   sessionId: string;
   delivery: DeliveryTarget;
+  ttsVoice?: string;
   onClose: (roomId: string) => void;
 }
 
@@ -134,11 +135,13 @@ export class VoiceSession {
   private rawRemainder: Buffer = Buffer.alloc(0);
   private resampledRemainder: Buffer = Buffer.alloc(0);
   private closing = false;
+  private ttsVoice: string | undefined;
   private readonly replacedRemoteIds = new Set<string>();
   private readonly pendingCandidates = new Map<string, SignalPayload[]>();
 
   constructor(private readonly opts: VoiceSessionRuntimeOptions) {
     this.roomId = opts.roomId;
+    this.ttsVoice = opts.ttsVoice;
     this.state = createVoiceSessionState({
       roomId: opts.roomId,
       sessionId: opts.sessionId,
@@ -220,6 +223,19 @@ export class VoiceSession {
     });
 
     this.signalClient.subscribe();
+  }
+
+  applyVoiceSettings(settings: { voice?: string } | null | undefined): void {
+    if (!settings) return;
+    const next = typeof settings.voice === 'string' ? settings.voice.trim() : '';
+    if (!next) return;
+    this.ttsVoice = next;
+  }
+
+  // Test/manager hook so callers can inspect the voice currently applied
+  // to the next TTS turn.
+  get currentTtsVoice(): string | undefined {
+    return this.ttsVoice;
   }
 
   close(): void {
@@ -578,6 +594,10 @@ export class VoiceSession {
       this.resetTurn('reply_cancelled');
       return;
     }
+    if (msg.t === 'settings.update') {
+      this.applyVoiceSettings(msg.settings);
+      return;
+    }
   }
 
   private openStt(): void {
@@ -654,7 +674,7 @@ export class VoiceSession {
 
       const useTrack = !!this.audioSource;
       this.tts = new XaiTtsSession(
-        { apiKey: this.opts.apiKey, text },
+        { apiKey: this.opts.apiKey, text, voice: this.ttsVoice },
         {
           onOpen: () => {
             this.send(daemonToPhone.ttsStart(useTrack ? WEBRTC_SAMPLE_RATE : TTS_SAMPLE_RATE));

@@ -4,15 +4,28 @@
 //
 // Routing (sessionId, delivery channel/target) is bound once at
 // rendezvous when the per-session voice room is created. `stt.start`
-// no longer carries routing per turn.
+// no longer carries routing per turn. Voice settings (TTS voice id)
+// flow over the voice room: an initial value is included in
+// `rendezvous.join` so the first reply uses it, and `settings.update`
+// applies subsequent changes without reconnecting.
 
 export interface DeliveryTarget {
   channel: string;
   target: string;
 }
 
+export interface VoiceSettings {
+  voice: string;
+}
+
 export type PhoneToDaemon =
-  | { t: 'rendezvous.join'; sessionId: string; delivery: DeliveryTarget }
+  | {
+      t: 'rendezvous.join';
+      sessionId: string;
+      delivery: DeliveryTarget;
+      settings?: VoiceSettings;
+    }
+  | { t: 'settings.update'; settings: VoiceSettings }
   | { t: 'stt.start' }
   | { t: 'stt.audio.done' }
   | { t: 'stt.cancel' }
@@ -35,10 +48,19 @@ export type DaemonToPhone =
   | { t: 'tts.error'; message: string };
 
 export const phoneToDaemon = {
-  rendezvousJoin: (input: { sessionId: string; delivery: DeliveryTarget }): PhoneToDaemon => ({
+  rendezvousJoin: (input: {
+    sessionId: string;
+    delivery: DeliveryTarget;
+    settings?: VoiceSettings;
+  }): PhoneToDaemon => ({
     t: 'rendezvous.join',
     sessionId: input.sessionId,
     delivery: input.delivery,
+    ...(input.settings ? { settings: input.settings } : {}),
+  }),
+  settingsUpdate: (settings: VoiceSettings): PhoneToDaemon => ({
+    t: 'settings.update',
+    settings,
   }),
   sttStart: (): PhoneToDaemon => ({ t: 'stt.start' }),
   sttAudioDone: (): PhoneToDaemon => ({ t: 'stt.audio.done' }),
