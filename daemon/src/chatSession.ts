@@ -31,6 +31,9 @@ const RAW_STT_GUIDANCE =
   "mistranscriptions, missing punctuation, or incorrect words. Use your best judgment to infer the user's " +
   'intended meaning and actual spoken words before replying.';
 
+const WEBCHAT_BASE_SESSION_KEY = 'agent:main:webchat';
+const WEBCHAT_CONCRETE_SESSION_PREFIX = `${WEBCHAT_BASE_SESSION_KEY}:`;
+
 // Helper: send a debug/activity notification to the Discord thread
 async function sendDebugNotification(
   apiKey: string,
@@ -211,11 +214,24 @@ async function resolveOpenClawSessionId(opts: {
       'openclaw "sessions" "--json" "--all-agents" "--active" "10080"',
       { env: openClawEnv(opts.apiKey), signal: opts.signal },
     );
-    const match = parseOpenClawSessions(stdout).find((entry) => entry.key === requested);
-    if (!match?.sessionId) {
-      throw new ChatError('openclaw_session_not_found', 'openclaw_session_not_found');
+    const sessions = parseOpenClawSessions(stdout);
+    const exactMatch = sessions.find((entry) => entry.key === requested);
+    if (exactMatch?.sessionId) return exactMatch.sessionId;
+
+    if (requested === WEBCHAT_BASE_SESSION_KEY) {
+      const webchatMatches = sessions.filter(
+        (entry) => entry.sessionId && entry.key.startsWith(WEBCHAT_CONCRETE_SESSION_PREFIX),
+      );
+      if (webchatMatches.length === 1) return webchatMatches[0].sessionId;
+      if (webchatMatches.length > 1) {
+        throw new ChatError(
+          `openclaw_session_ambiguous: ${requested} matched ${webchatMatches.length} active webchat sessions`,
+          'openclaw_session_ambiguous',
+        );
+      }
     }
-    return match.sessionId;
+
+    throw new ChatError('openclaw_session_not_found', 'openclaw_session_not_found');
   } catch (err) {
     if (err instanceof ChatError) throw err;
     if (opts.signal?.aborted) throw new ChatError('aborted', 'aborted');
