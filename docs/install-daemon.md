@@ -32,15 +32,22 @@ The daemon uses `@roamhq/wrtc` for native WebRTC. Its package includes prebuilt 
 
 The currently supported install path is from this repo. There is no published npm package installer for the daemon yet.
 
+Download the latest source ZIP from GitHub and unzip it into a durable folder such as `~/src/clawkie-talkie`. This avoids needing Git for a one-time install.
+
 ```bash
 mkdir -p ~/src
 cd ~/src
-git clone https://github.com/davidguttman/clawkie-talkie.git
+curl -L -o clawkie-talkie.zip \
+  https://github.com/davidguttman/clawkie-talkie/archive/refs/heads/master.zip
+unzip -q clawkie-talkie.zip
+rm -rf clawkie-talkie
+mv clawkie-talkie-master clawkie-talkie
+rm clawkie-talkie.zip
 cd clawkie-talkie
 npm install
 ```
 
-If you downloaded a ZIP instead of using Git, unzip it into a durable folder such as `~/src/clawkie-talkie`, then run `npm install` from that folder.
+If you prefer Git, `git clone https://github.com/davidguttman/clawkie-talkie.git` into the same folder also works and makes later updates easier.
 
 ## Configure the daemon
 
@@ -61,11 +68,9 @@ XAI_API_KEY=xai-...
 # Required for a persistent install. Generate once and keep it stable.
 DAEMON_PEER_ID=REPLACE_WITH_A_RANDOM_UUID
 
-# Recommended for normal end-user installs.
-CT_CLIENT_ORIGIN=https://clawkietalkie.app
-
-# Optional. Leave blank to use https://api.rambly.app.
-SIGNAL_SERVER=
+# Optional. The daemon defaults to https://clawkietalkie.app — only set this
+# to override the default client deployment.
+# CT_CLIENT_ORIGIN=
 
 # Optional examples.
 CT_STT_LANGUAGE=en
@@ -260,6 +265,22 @@ There is no inbound HTTP port for the daemon to expose. It reaches the signaling
 
 ## Update later
 
+If installed from a ZIP, download the latest ZIP and refresh the source folder. Preserve your `.env` (it lives in the repo root and is not in the ZIP, but make a backup if you keep it elsewhere):
+
+```bash
+cd ~/src
+curl -L -o clawkie-talkie.zip \
+  https://github.com/davidguttman/clawkie-talkie/archive/refs/heads/master.zip
+cp clawkie-talkie/.env /tmp/clawkie-talkie.env.bak
+unzip -q -o clawkie-talkie.zip
+rm -rf clawkie-talkie
+mv clawkie-talkie-master clawkie-talkie
+mv /tmp/clawkie-talkie.env.bak clawkie-talkie/.env
+rm clawkie-talkie.zip
+cd clawkie-talkie
+npm install
+```
+
 If installed from Git:
 
 ```bash
@@ -277,8 +298,6 @@ launchctl kickstart -k gui/$(id -u)/app.clawkietalkie.daemon
 # Linux
 systemctl --user restart clawkie-talkie.service
 ```
-
-If installed from a ZIP, download the new ZIP, replace the source folder carefully, preserve your `.env`, run `npm install`, and restart the service.
 
 ## Troubleshooting
 

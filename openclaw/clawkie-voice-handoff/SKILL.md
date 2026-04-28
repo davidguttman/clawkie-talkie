@@ -7,15 +7,15 @@ description: Use when a user asks to switch to voice, move/continue this convers
 
 When the user asks to switch the current OpenClaw session to voice, reply with a Clawkie Talkie URL for this exact conversation.
 
-## Installed configuration
+## Install State
 
-The installer must replace these values in the runtime-installed copy of this skill:
+The installer patches the runtime-installed copy of this skill (not the repo source) with the values it generated when it configured the local daemon:
 
-```txt
-INSTALLED = false
-CLAWKIE_DAEMON_HOST_ID = "<CONFIGURE_DAEMON_PEER_ID>"
-INSTALL_DATE = ""
-```
+- INSTALLED = false
+- Install date:
+- CLAWKIE_DAEMON_HOST_ID = `<CONFIGURE_DAEMON_PEER_ID>`
+
+`CLAWKIE_DAEMON_HOST_ID` is the stable daemon host UUID the installer generated and wrote to the daemon's `.env` as `DAEMON_PEER_ID`. The runtime-installed skill stores the same UUID and uses it directly when building a handoff URL. The repo-source copy stays at `<CONFIGURE_DAEMON_PEER_ID>` so it cannot leak a real machine ID.
 
 If `INSTALLED` is not `true`, or `CLAWKIE_DAEMON_HOST_ID` is empty / still contains `<CONFIGURE_...>`, do not generate a link. Reply:
 

@@ -74,9 +74,8 @@ key appears in both, the hash wins. All values must be URL-encoded.
 
 ## Signaling
 
-Daemon and browser share the hosted rambly-style signaling broker. Default is
-`https://api.rambly.app`; override with `SIGNAL_SERVER` (daemon) and
-`VITE_SIGNAL_SERVER` (client). The signaling server only carries SDP/ICE;
+Daemon and browser share the hosted rambly-style signaling broker at
+`https://api.rambly.app`. The signaling server only carries SDP/ICE;
 application traffic flows over the WebRTC DataChannel directly between phone
 and daemon.
 

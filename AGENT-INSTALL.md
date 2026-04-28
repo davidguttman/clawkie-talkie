@@ -27,7 +27,18 @@ Public GitHub repo: `davidguttman/clawkietalkie`
 
 ## Fetch and inspect
 
-1. Download or clone the repo into a durable source folder such as `~/src/clawkie-talkie`.
+1. Download the GitHub source ZIP and unzip it into a durable source folder such as `~/src/clawkie-talkie`. Prefer the ZIP path over `git clone` so installs do not require Git:
+
+   ```bash
+   mkdir -p ~/src
+   cd ~/src
+   curl -L -o clawkie-talkie.zip \
+     https://github.com/davidguttman/clawkie-talkie/archive/refs/heads/master.zip
+   unzip -q clawkie-talkie.zip
+   rm -rf clawkie-talkie
+   mv clawkie-talkie-master clawkie-talkie
+   rm clawkie-talkie.zip
+   ```
 2. Inspect the repo before installing. Expected items include:
    - Node/npm project files
    - TypeScript daemon under `daemon/src/`
@@ -72,28 +83,32 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-Set these values:
+You — the installer — generate one stable daemon host UUID for this machine. The same UUID goes into the daemon's `.env` as `DAEMON_PEER_ID` and into the runtime-installed handoff skill as `CLAWKIE_DAEMON_HOST_ID`. This works the same way LobsterLink stores its discovered Chrome extension ID into the LobsterLink skill: a value generated/discovered at install time, written into the runtime skill, and used directly thereafter. The user does not need to know or configure this UUID.
 
-```env
-XAI_API_KEY=<user-provided-xai-key>
-DAEMON_PEER_ID=<generated-stable-uuid>
-CT_CLIENT_ORIGIN=https://clawkietalkie.app
-```
-
-Generate the stable host ID once:
+Generate it once:
 
 ```bash
 node -e "console.log(require('node:crypto').randomUUID())"
 ```
 
-Put that UUID in `.env` as `DAEMON_PEER_ID`. Do not regenerate it on later updates. The OpenClaw handoff skill and browser links depend on this value staying stable.
+Set these values in `.env`:
+
+```env
+XAI_API_KEY=<user-provided-xai-key>
+DAEMON_PEER_ID=<installer-generated-uuid>
+```
+
+Do not regenerate the UUID on later updates — keep it stable so existing handoff links and the installed skill remain valid.
+
+The installed daemon defaults the client origin to `https://clawkietalkie.app`, so `CT_CLIENT_ORIGIN` is not required. Only set it as an override if the user explicitly wants to point at a non-default client deployment. The signaling server is also non-configurable for end-user installs.
 
 Optional `.env` values:
 
 ```env
-SIGNAL_SERVER=
 CT_STT_LANGUAGE=en
 CT_THREAD_ID=
+# Override the default client origin (https://clawkietalkie.app):
+# CT_CLIENT_ORIGIN=
 ```
 
 ## Manual daemon verification
@@ -148,13 +163,15 @@ mkdir -p ~/clawd/skills/clawkie-voice-handoff
 cp openclaw/clawkie-voice-handoff/SKILL.md ~/clawd/skills/clawkie-voice-handoff/SKILL.md
 ```
 
-Then patch the installed copy only:
+Then patch the installed copy only (mirroring how the LobsterLink installer writes its discovered extension ID into the LobsterLink runtime skill):
 
 - `INSTALLED = false` → `INSTALLED = true`
-- `CLAWKIE_DAEMON_HOST_ID = "<CONFIGURE_DAEMON_PEER_ID>"` → the exact `DAEMON_PEER_ID` from `.env`
-- `INSTALL_DATE = ""` → today's date in `YYYY-MM-DD` format
+- `Install date:` → today's date in `YYYY-MM-DD` format
+- `CLAWKIE_DAEMON_HOST_ID = `<CONFIGURE_DAEMON_PEER_ID>`` → the exact `DAEMON_PEER_ID` from `.env`
 
-Do not patch the source copy in the repo with the user's host ID.
+Do not patch the source copy in the repo with the real host ID.
+
+Invariant: the daemon `.env` `DAEMON_PEER_ID` must equal the installed skill's `CLAWKIE_DAEMON_HOST_ID`. If they ever diverge, the skill emits handoff links that point at the wrong rendezvous room.
 
 ## Verify the skill install
 

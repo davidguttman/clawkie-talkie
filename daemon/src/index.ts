@@ -18,6 +18,7 @@
 
 import { parseArgs } from 'node:util';
 import { DaemonPeer } from './peer.js';
+import { resolveClientOrigin } from './clientOrigin.js';
 import { resolveDaemonPeerId } from './peerId.js';
 
 async function main(): Promise<void> {
@@ -29,7 +30,6 @@ async function main(): Promise<void> {
     peerId: cli.peerId,
     sessionId: cli.sessionId,
     threadId: cli.threadId,
-    signalServer: cli.signalServer,
     onReady: (peerId) => {
       const joinUrl = cli.clientOrigin.replace(/\/$/, '') + '/?host=' + peerId;
       console.log(`Session:  ${cli.sessionId}`);
@@ -60,7 +60,6 @@ function parseCli(): CliOptions {
     options: {
       'session-id': { type: 'string' },
       'client-origin': { type: 'string' },
-      'signal-server': { type: 'string' },
       'stt-language': { type: 'string' },
       'thread-id': { type: 'string' },
     },
@@ -75,11 +74,7 @@ function parseCli(): CliOptions {
   return {
     sessionId: values['session-id'] || 'dev-local',
     threadId: values['thread-id'] || process.env.CT_THREAD_ID,
-    clientOrigin:
-      values['client-origin'] ||
-      process.env.CT_CLIENT_ORIGIN ||
-      'http://localhost:5173',
-    signalServer: values['signal-server'] || process.env.SIGNAL_SERVER,
+    clientOrigin: resolveClientOrigin(values['client-origin']),
     sttLanguage: values['stt-language'] || process.env.CT_STT_LANGUAGE,
     xaiApiKey,
     peerId: resolveDaemonPeerId(),
@@ -90,7 +85,6 @@ interface CliOptions {
   sessionId: string;
   threadId?: string;
   clientOrigin: string;
-  signalServer?: string;
   xaiApiKey: string;
   sttLanguage?: string;
   peerId: string;
