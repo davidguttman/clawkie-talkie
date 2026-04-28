@@ -18,7 +18,7 @@ import { XaiTtsSession, TTS_SAMPLE_RATE } from './ttsSession.js';
 import { daemonToPhone, type DeliveryTarget, type PhoneToDaemon } from './protocol.js';
 import { XaiSttSession } from './sttSession.js';
 import { SignalClient, type SignalData } from './signal.js';
-import { classifySignal, decideIncomingSignal } from './signalKind.js';
+import { classifySignal, decideForwardToLivePeer, decideIncomingSignal } from './signalKind.js';
 
 const MAX_BUFFERED_CANDIDATES_PER_PEER = 32;
 import {
@@ -117,6 +117,9 @@ export class VoiceSession {
   private readonly signalClient: SignalClient;
   private peer: SimplePeer.Instance | null = null;
   private remoteId: string | null = null;
+  private peerInitiator = false;
+  private acceptedOffer = false;
+  private acceptedAnswer = false;
   private connected = false;
   private connectionTimeout: NodeJS.Timeout | null = null;
   private stt: XaiSttSession | null = null;
@@ -169,8 +172,22 @@ export class VoiceSession {
       const action = decideIncomingSignal({ hasLivePeer: livePeer, kind });
 
       if (action === 'forward') {
+        const decision = decideForwardToLivePeer(
+          {
+            initiator: this.peerInitiator,
+            acceptedOffer: this.acceptedOffer,
+            acceptedAnswer: this.acceptedAnswer,
+          },
+          kind,
+        );
+        if (decision !== 'forward') {
+          console.error(`[voice ${opts.roomId}] dropping ${kind} from ${event.from}: ${decision}`);
+          return;
+        }
         try {
           this.peer!.signal(payload);
+          if (kind === 'offer') this.acceptedOffer = true;
+          if (kind === 'answer') this.acceptedAnswer = true;
         } catch (err) {
           console.error(`[voice ${opts.roomId}] peer.signal failed: ${err instanceof Error ? err.message : err}`);
         }
@@ -257,6 +274,9 @@ export class VoiceSession {
     }
 
     this.remoteId = remoteId;
+    this.peerInitiator = initiator;
+    this.acceptedOffer = false;
+    this.acceptedAnswer = false;
     console.error(`[voice ${this.roomId}] establishing connection with phone=${remoteId} initiator=${initiator}`);
 
     const { stream } = this.openOutboundAudio();
@@ -308,6 +328,9 @@ export class VoiceSession {
     if (initialSignal) {
       try {
         peer.signal(initialSignal);
+        const initialKind = classifySignal(initialSignal);
+        if (initialKind === 'offer') this.acceptedOffer = true;
+        if (initialKind === 'answer') this.acceptedAnswer = true;
       } catch (err) {
         console.error(`[voice ${this.roomId}] peer.signal (initial) failed: ${err instanceof Error ? err.message : err}`);
       }

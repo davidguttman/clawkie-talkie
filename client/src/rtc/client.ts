@@ -10,7 +10,7 @@
 
 import SimplePeer from 'simple-peer';
 import { SignalClient, type SignalData, type SignalEvent } from './signal';
-import { classifySignal, decideIncomingSignal } from './signalKind';
+import { classifySignal, decideForwardToLivePeer, decideIncomingSignal } from './signalKind';
 
 const MAX_BUFFERED_CANDIDATES_PER_PEER = 32;
 
@@ -54,6 +54,9 @@ export class RtcClient {
   private readonly signalClient: SignalClient;
   private readonly peerId: string;
   private peer: SimplePeer.Instance | null = null;
+  private peerInitiator = false;
+  private acceptedOffer = false;
+  private acceptedAnswer = false;
   private remotePeerId: string | null = null;
   private status: RtcStatus = 'idle';
   private closed = false;
@@ -148,8 +151,22 @@ export class RtcClient {
     const action = decideIncomingSignal({ hasLivePeer: livePeer, kind });
 
     if (action === 'forward') {
+      const decision = decideForwardToLivePeer(
+        {
+          initiator: this.peerInitiator,
+          acceptedOffer: this.acceptedOffer,
+          acceptedAnswer: this.acceptedAnswer,
+        },
+        kind,
+      );
+      if (decision !== 'forward') {
+        console.warn(`[rtc] dropping ${kind} from ${event.from}: ${decision}`);
+        return;
+      }
       try {
         this.peer!.signal(payload);
+        if (kind === 'offer') this.acceptedOffer = true;
+        if (kind === 'answer') this.acceptedAnswer = true;
       } catch (err) {
         console.error('[rtc] peer.signal failed', err);
       }
@@ -191,6 +208,9 @@ export class RtcClient {
       config: { iceServers: this.iceServers },
     });
     this.peer = peer;
+    this.peerInitiator = initiator;
+    this.acceptedOffer = false;
+    this.acceptedAnswer = false;
 
     peer.on('signal', (data) => {
       const target = this.remotePeerId;
@@ -245,6 +265,9 @@ export class RtcClient {
     if (initialSignal) {
       try {
         peer.signal(initialSignal);
+        const initialKind = classifySignal(initialSignal);
+        if (initialKind === 'offer') this.acceptedOffer = true;
+        if (initialKind === 'answer') this.acceptedAnswer = true;
       } catch (err) {
         console.error('[rtc] peer.signal (initial) failed', err);
       }

@@ -43,3 +43,37 @@ export function decideIncomingSignal(input: {
   if (input.kind === 'candidate') return 'buffer-candidate';
   return 'ignore';
 }
+
+// Tracks per-peer SDP application state so we can drop duplicates and
+// role-invalid SDP on the forward path. The rambly signaling server has
+// been observed to redeliver `answer` frames (e.g. on SSE reconnect),
+// which then poisons RTCPeerConnection with `Called in wrong state:
+// stable` when simple-peer.signal() retries setRemoteDescription.
+export interface SdpRouteState {
+  initiator: boolean;
+  acceptedOffer: boolean;
+  acceptedAnswer: boolean;
+}
+
+export type ForwardDecision =
+  | 'forward'
+  | 'drop-duplicate-sdp'
+  | 'drop-unexpected-sdp';
+
+export function decideForwardToLivePeer(
+  state: SdpRouteState,
+  kind: SignalKind,
+): ForwardDecision {
+  if (kind === 'candidate') return 'forward';
+  if (kind === 'offer') {
+    if (state.initiator) return 'drop-unexpected-sdp';
+    if (state.acceptedOffer) return 'drop-duplicate-sdp';
+    return 'forward';
+  }
+  if (kind === 'answer') {
+    if (!state.initiator) return 'drop-unexpected-sdp';
+    if (state.acceptedAnswer) return 'drop-duplicate-sdp';
+    return 'forward';
+  }
+  return 'drop-unexpected-sdp';
+}

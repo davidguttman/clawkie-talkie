@@ -21,7 +21,7 @@ import {
   type PhoneToDaemon,
 } from './protocol.js';
 import { SignalClient, type SignalData } from './signal.js';
-import { classifySignal, decideIncomingSignal } from './signalKind.js';
+import { classifySignal, decideForwardToLivePeer, decideIncomingSignal } from './signalKind.js';
 
 const MAX_BUFFERED_CANDIDATES_PER_PEER = 32;
 import { makeVoiceRoomId } from './voiceRoom.js';
@@ -60,6 +60,9 @@ interface RendezvousPeer {
   remoteId: string;
   timeout: NodeJS.Timeout;
   connected: boolean;
+  initiator: boolean;
+  acceptedOffer: boolean;
+  acceptedAnswer: boolean;
 }
 
 export class DaemonPeer {
@@ -111,8 +114,23 @@ export class DaemonPeer {
       const action = decideIncomingSignal({ hasLivePeer: livePeer, kind });
 
       if (action === 'forward') {
+        const rp = existing!;
+        const decision = decideForwardToLivePeer(
+          {
+            initiator: rp.initiator,
+            acceptedOffer: rp.acceptedOffer,
+            acceptedAnswer: rp.acceptedAnswer,
+          },
+          kind,
+        );
+        if (decision !== 'forward') {
+          console.error(`[peer] rendezvous dropping ${kind} for ${event.from}: ${decision}`);
+          return;
+        }
         try {
-          existing!.peer.signal(payload);
+          rp.peer.signal(payload);
+          if (kind === 'offer') rp.acceptedOffer = true;
+          if (kind === 'answer') rp.acceptedAnswer = true;
         } catch (err) {
           console.error(`[peer] rendezvous peer.signal failed: ${err instanceof Error ? err.message : err}`);
         }
@@ -189,7 +207,15 @@ export class DaemonPeer {
     }, RENDEZVOUS_TIMEOUT_MS);
     timeout.unref?.();
 
-    const rp: RendezvousPeer = { peer, remoteId, timeout, connected: false };
+    const rp: RendezvousPeer = {
+      peer,
+      remoteId,
+      timeout,
+      connected: false,
+      initiator,
+      acceptedOffer: false,
+      acceptedAnswer: false,
+    };
     this.rendezvousPeers.set(remoteId, rp);
 
     peer.on('signal', (data) => {
@@ -221,6 +247,9 @@ export class DaemonPeer {
     if (initialSignal) {
       try {
         peer.signal(initialSignal);
+        const initialKind = classifySignal(initialSignal);
+        if (initialKind === 'offer') rp.acceptedOffer = true;
+        if (initialKind === 'answer') rp.acceptedAnswer = true;
       } catch (err) {
         console.error(`[peer] rendezvous initial signal failed: ${err instanceof Error ? err.message : err}`);
       }
