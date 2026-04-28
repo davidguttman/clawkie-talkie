@@ -12,9 +12,9 @@
 // DAEMON_PEER_ID env). The phone discovers the daemon via
 // `?host=<uuid>` and joins the same room. simple-peer + @roamhq/wrtc
 // drive the WebRTC DataChannel; the daemon owns the full turn:
-// xAI STT on inbound mic PCM, xAI chat on the final transcript, xAI
-// TTS on the reply, with resulting PCM16 audio streamed back to the
-// phone. The browser never holds an xAI key.
+// OpenClaw infer transcription on inbound mic PCM, xAI chat on the final
+// transcript, and xAI TTS on the reply, with resulting PCM16 audio streamed
+// back to the phone. The browser never holds an xAI key.
 
 import { parseArgs } from 'node:util';
 import { DaemonPeer } from './peer.js';
