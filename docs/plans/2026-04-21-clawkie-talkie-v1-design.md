@@ -1,11 +1,13 @@
 # Clawkie-Talkie V1 Design Kickoff
 
 Date: 2026-04-21
-Status: validated brainstorming artifact — **partially superseded (2026-04-23)**
+Status: validated brainstorming artifact — **partially superseded (2026-04-28)**
 Project path: `/mnt/data/play/web/clawkie-talkie`
 Primary design reference: `docs/design/Clawkie-Talkie Hi-Fi.html`
 
-> **Superseded on 2026-04-23:** the "custom rendezvous service" bullet below is no longer the path forward. LobsterLink does not run a rendezvous server — it uses the public **PeerJS** broker and embeds the assigned peer ID directly in the join URL (`?host=<uuid>`). Clawkie-Talkie is being migrated to the same convention. Treat every mention of a dedicated rendezvous server in this document as historical context, not current intent.
+> **Superseded on 2026-04-23:** the "custom rendezvous service" bullet below is no longer the path forward. LobsterLink does not run a rendezvous server — it uses the public **PeerJS** broker and embeds the assigned peer ID directly in the join URL (`?host=<uuid>`). Clawkie-Talkie uses the same convention. Treat every mention of a dedicated rendezvous server in this document as historical context, not current intent.
+
+> **Superseded on 2026-04-28:** browser-owned xAI STT/TTS and browser/localStorage xAI-key handling are no longer current intent. Current Clawkie-Talkie keeps `XAI_API_KEY` only in the local daemon's repo-root `.env`; the browser never receives or stores it. The daemon owns STT/TTS and sends transcript/audio events over WebRTC.
 
 ## One-line product definition
 
@@ -48,9 +50,9 @@ Build the fastest real playable slice that lets an OpenClaw user:
 
 ### Architecture constraints
 
-- Browser does streaming STT directly with xAI.
-- Browser does streaming TTS directly with xAI.
-- Do not move xAI STT/TTS server-side.
+- Current implementation: daemon owns xAI STT/TTS using `XAI_API_KEY` from its local `.env`.
+- Browser must not receive, store, log, or transmit the xAI API key.
+- Browser acts as the WebRTC audio/control surface and plays daemon-provided audio.
 - Front-end to daemon communication uses WebRTC.
 - Running a user-managed public HTTP(S) server is a non-starter.
 - Installation/run flow must be easy for normal OpenClaw users.
@@ -77,7 +79,7 @@ Responsibilities:
 - join a voice session via handoff/join URL,
 - establish WebRTC connection to the local daemon,
 - capture microphone audio,
-- stream audio to xAI STT directly from the browser,
+- stream microphone audio/control events to the daemon over WebRTC,
 - render live transcript while the user is speaking,
 - finalize transcript text when the user taps Stop,
 - send final transcript text to the daemon,
@@ -143,10 +145,10 @@ The product flow is:
 
 1. Phone client is connected to the daemon over WebRTC.
 2. User taps the main button to start a turn.
-3. Browser streams transcription with xAI and shows live transcript on-screen.
+3. Daemon streams transcription with xAI and sends transcript updates to the browser.
 4. If transcription is wrong, the user keeps talking and clarifies verbally.
 5. User taps Stop.
-6. Browser finalizes the transcript text.
+6. Daemon finalizes the transcript text.
 7. Browser sends final transcript text to the daemon.
 
 ### Thread sync + assistant turn
@@ -156,7 +158,7 @@ The product flow is:
 3. Daemon waits for the final assistant reply.
 4. Assistant reply is delivered into the thread.
 5. Daemon returns final assistant text to the phone client.
-6. Browser requests xAI TTS directly and plays the reply aloud.
+6. Daemon requests xAI TTS and sends playable audio to the browser.
 
 ## OpenClaw integration shape for V1
 
@@ -221,12 +223,12 @@ Visible but disabled or placeholder in V1.
 
 Implemented enough to support the actual loop.
 
-Minimum V1 expectations:
+Minimum V1 expectations (updated 2026-04-28):
 
-- xAI API key entry,
-- any necessary validation/test affordance,
+- no browser xAI API key entry; the key is daemon-held in `.env`,
+- any necessary daemon/key status or validation affordance,
 - voice selection if needed by the design,
-- only the minimum real controls needed for browser-owned STT/TTS.
+- only the minimum real controls needed for daemon-owned STT/TTS.
 
 Extra settings can remain visible but disabled.
 
@@ -281,7 +283,7 @@ V1 is done when the following full loop works against a real existing OpenClaw s
 9. The daemon submits that same turn into the correct OpenClaw session.
 10. The assistant reply is delivered into the thread.
 11. The daemon returns final assistant text to the phone client.
-12. The browser generates and plays assistant reply audio through xAI TTS.
+12. The daemon generates assistant reply audio through xAI TTS and the browser plays it.
 13. Not-yet-built surfaces remain present but disabled/grayed out rather than removed.
 
 ## References

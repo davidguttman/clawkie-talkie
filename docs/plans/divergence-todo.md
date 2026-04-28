@@ -44,7 +44,7 @@
 - Remove unused xAI API key handling from frontend
 - Verify all error handling follows OpenClaw patterns
 - Update documentation to match implementation
-**Status:** NOT STARTED
+**Status:** IN PROGRESS — stale browser/localStorage xAI-key references in the historical V1 plan and design notes were marked obsolete on 2026-04-28.
 
 ## Implementation Status Summary
 

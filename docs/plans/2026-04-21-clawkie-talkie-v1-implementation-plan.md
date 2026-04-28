@@ -1,12 +1,14 @@
 # Clawkie-Talkie V1 Implementation Plan
 
 Date: 2026-04-21
-Status: **superseded (2026-04-23) on the signaling axis** — rest still usable as context
+Status: **superseded (2026-04-28) on signaling, xAI key handling, and STT/TTS ownership** — historical context only
 Kickoff artifact: `docs/plans/2026-04-21-clawkie-talkie-v1-design.md`
 Canonical shell: `docs/design/Clawkie-Talkie Hi-Fi.html`
 Project path: `/mnt/data/play/web/clawkie-talkie`
 
-> **Superseded on 2026-04-23.** The "custom rendezvous service" path described here (the `rendezvous/` workspace, `--rendezvous-url`, SSE-based `/rooms/:token/subscribe`, `VITE_CT_RENDEZVOUS_URL`) has been abandoned. Clawkie-Talkie is migrating to **PeerJS** against its public broker (LobsterLink's actual convention), with `?host=<peerId>` join URLs. Ignore Phase 1 as written, the rendezvous dir in the target layout, and every mention of "rendezvous server" / "signaling service" in this file. The rest of the plan (UX, STT/TTS, OpenClaw integration, phasing intent) remains useful.
+> **Superseded on 2026-04-23.** The "custom rendezvous service" path described here (the `rendezvous/` workspace, `--rendezvous-url`, SSE-based `/rooms/:token/subscribe`, `VITE_CT_RENDEZVOUS_URL`) has been abandoned. Clawkie-Talkie uses **PeerJS** against its public broker (LobsterLink's actual convention), with `?host=<peerId>` join URLs. Ignore Phase 1 as written, the rendezvous dir in the target layout, and every mention of "rendezvous server" / "signaling service" in this file.
+
+> **Superseded on 2026-04-28.** The browser/localStorage xAI-key flow in this historical plan is obsolete. Current Clawkie-Talkie keeps `XAI_API_KEY` only in the local daemon's repo-root `.env`; the browser never receives or stores the key. STT/TTS are daemon-owned in the current implementation, with the browser acting as the WebRTC audio/control surface.
 
 This plan is optimized for the **fastest real playable loop**, not completeness. Anything not required to land acceptance criteria 1–13 in the kickoff is explicitly deferred.
 
@@ -15,7 +17,7 @@ This plan is optimized for the **fastest real playable loop**, not completeness.
 These are load-bearing. Do not silently relax any of them during implementation.
 
 - **Transport:** phone ⇄ daemon is **WebRTC**. No localhost HTTP shim, no direct phone→xAI→OpenClaw plane that bypasses the daemon.
-- **STT/TTS:** **browser-owned, streaming, direct to xAI**. STT streams during recording; TTS streams on the final assistant reply. Neither ever traverses the daemon.
+- **STT/TTS:** **superseded** — current implementation is daemon-owned. The browser does not call xAI directly and does not receive/store `XAI_API_KEY`.
 - **Rendezvous:** LobsterLink-style token/UUID join handle. Signaling goes through a shared public rendezvous service — users do **not** run a public HTTP(S) server.
 - **Shell:** `docs/design/Clawkie-Talkie Hi-Fi.html` is the canonical UI. Do not redesign. Unbuilt surfaces (History, Transcript, extra settings) stay **visible but disabled/grayed**.
 - **Thread sync:** Every spoken user turn is posted as a **quoted block** into the canonical Discord/OpenClaw thread. Every assistant reply is **delivered into the same thread** via OpenClaw's `--deliver` path. The thread is the V1 source of truth; the app is not.
@@ -30,8 +32,8 @@ These are load-bearing. Do not silently relax any of them during implementation.
   │ (static PWA,        │     public rendezvous server     │ (Node process on     │
   │  hi-fi shell)       │                                  │  OpenClaw machine)   │
   │                     │                                  │                      │
-  │  ├─ xAI STT stream  │                                  │  ├─ token registry   │
-  │  ├─ xAI TTS stream  │                                  │  ├─ WebRTC peer      │
+  │  ├─ audio/control UI │                                  │  ├─ token registry   │
+  │  ├─ PCM playback     │                                  │  ├─ WebRTC peer      │
   │  └─ WebRTC peer     │                                  │  └─ OpenClaw bridge  │
   └─────────────────────┘                                  └──────────┬───────────┘
                                                                       │
@@ -45,7 +47,7 @@ These are load-bearing. Do not silently relax any of them during implementation.
 
 - Public static phone client is served from a fixed public URL (no per-user hosting).
 - Public rendezvous server holds offers/answers/ICE candidates keyed by join token. It is thin and stateless per session; no media, no transcripts, no keys.
-- Daemon holds xAI-less state only (tokens, peer connections, OpenClaw invocation).
+- Daemon holds the local `XAI_API_KEY` in `.env`, plus tokens, peer connections, STT/TTS, and OpenClaw invocation state.
 
 ## Target directory layout
 
@@ -74,7 +76,7 @@ clawkie-talkie/
 │   │   │   └── tts.ts                  # streaming TTS client + playback
 │   │   ├── state/
 │   │   │   └── drivingMachine.ts       # IDLE→REC→THINK→AI (from hifi-driving.jsx)
-│   │   ├── storage.ts                  # localStorage for xAI key, settings
+│   │   ├── storage.ts                  # historical only: settings persistence; no xAI key in current client
 │   │   └── tokens.css / tokens.ts      # ported from hifi-tokens.js
 │   ├── package.json
 │   └── vite.config.ts                  # Vite + TS is fine; keep it small
@@ -113,7 +115,7 @@ Note: `docs/design/hifi-*.jsx` stay as read-only design references. The client p
 
 ## External dependencies
 
-- **xAI API:** streaming STT and streaming TTS endpoints. Exact endpoint paths/formats need to be pinned during Phase 2 — this is a named risk below.
+- **xAI API:** current implementation uses the daemon-side `XAI_API_KEY` from `.env` for STT/TTS. Historical browser-owned endpoint work below is obsolete.
 - **OpenClaw CLI:** `openclaw agent --session-id <sid> --message <text> --deliver` for the agent turn. User-quote posting uses OpenClaw's messaging/channel-send path (TBD: whether that's a flag on `openclaw agent`, a separate subcommand, or a small direct Discord post via the session's already-authed integration — resolved in Phase 3).
 - **WebRTC on node:** `werift` (pure-JS, no native build) or `@roamhq/wrtc` (native, faster). Start with `werift` to keep install painless for OpenClaw users — install-ergonomics is a hard constraint.
 - **Rendezvous hosting:** one small public HTTP service. Cheapest viable: Render/Fly/Cloudflare Workers. Must be reachable from both phone (any network) and daemon (user's home network).
@@ -133,7 +135,7 @@ Work:
 - Wire screen routing: `?screen=handoff|driving|history|transcript|settings|error` matches the prototype. Settings and error screens must be reachable.
 - Mark History and Transcript screens disabled/grayed per the kickoff. They stay in nav.
 - Add `?join=<token>` URL parsing to route to Handoff.
-- Add `localStorage`-backed settings persistence for the xAI API key.
+- Historical only: settings persistence existed in this plan, but xAI key storage in the browser is obsolete. Current client must not store `XAI_API_KEY`.
 
 Verify:
 - Load the dev build on a real phone; Driving, Handoff, Settings render and look like the hi-fi.
@@ -167,14 +169,14 @@ Verify:
 - Phone opens URL → DataChannel opens within a few seconds → echo round-trip works.
 - Kill daemon → phone shows the "daemon/session connectivity failure" error screen.
 
-### Phase 2 — Browser-owned xAI STT + TTS on the driving screen (target: ~1–1.5 days)
+### Phase 2 — Historical browser-owned xAI STT + TTS plan (obsolete)
 
-**Goal:** the driving screen performs real streaming STT while recording and real streaming TTS on a provided reply string. Still no OpenClaw; the assistant reply is stubbed from the daemon.
+**Goal:** obsolete historical direction. Current implementation keeps STT/TTS daemon-side and keeps the xAI key out of the browser.
 
 Work:
-- `client/src/xai/stt.ts`: open a streaming STT session against xAI, feed captured mic audio (e.g. `MediaRecorder` chunks or a `AudioWorklet` PCM stream — pick whichever xAI's streaming STT accepts), emit partial + final transcripts.
-- `client/src/xai/tts.ts`: call xAI streaming TTS with the final reply text; decode/play via `MediaSource` or chunked `AudioBufferSourceNode` so audio starts before full synthesis completes.
-- `client/src/state/drivingMachine.ts`: port the `IDLE → REC → THINK → AI → IDLE` machine from `hifi-driving.jsx`, replacing the scripted `streamText` with real STT partials, and replacing `speechSynthesis` with `xai/tts`.
+- Obsolete: do not add client-side xAI STT or browser API-key handling. Daemon owns STT.
+- Obsolete: do not add client-side xAI TTS or browser API-key handling. Daemon owns TTS and the browser plays returned audio.
+- `client/src/state/drivingMachine.ts`: port the `IDLE → REC → THINK → AI → IDLE` machine from `hifi-driving.jsx`; current implementation receives transcript/reply/audio events from the daemon instead of calling xAI directly.
 - Tap-Stop behavior: finalize STT, immediately (no edit step) send final transcript to daemon over DataChannel as `{type:"user_turn_final", text}`.
 - Daemon: on `user_turn_final`, stub a reply like `"(stub) you said: ..."` and send `{type:"assistant_reply_final", text}` back after ~1s.
 - Silence button: stops TTS playback only. Does not send anything to the daemon.
@@ -183,7 +185,7 @@ Work:
 Verify:
 - On a phone, tap Start → see live partial transcript tracking what you say.
 - Tap Stop → transcript finalizes → Thinking state → AI state plays audio from xAI TTS.
-- xAI key is read from Settings (localStorage). Missing/invalid key routes to a sensible error.
+- xAI key is read by the daemon from `.env`. Missing/invalid daemon key routes to a sensible error. The browser must not store the key.
 - Silence during playback kills audio but keeps the turn record intact.
 - Driving state machine matches the hi-fi prototype's visual states.
 
@@ -224,12 +226,12 @@ Verify:
 **Goal:** nothing rough-edged remains on the paths exercised by acceptance criteria; unbuilt surfaces feel intentional.
 
 Work:
-- Settings: xAI API key entry with a one-shot "test key" affordance (can be a tiny streaming call to xAI STT or TTS with a minimal payload). Voice selection if the design requires it for TTS. Everything else stays visible but disabled with a consistent "coming soon" treatment.
+- Settings: no xAI API key entry in the browser. Show a daemon-held-key notice/status instead. Voice selection can remain if needed; everything else stays visible but disabled with a consistent "coming soon" treatment.
 - History and Transcript: final pass to ensure they're present, styled, and consistently disabled. Do **not** wire them to any backing store.
 - Error screens: sweep all five priority errors (invalid/expired token, mic denied, STT failure, TTS/playback failure, daemon/session connectivity failure) and confirm each can actually trigger and renders the right hi-fi state.
 
 Verify:
-- Fresh install: open Settings, paste xAI key, run test, complete a full turn.
+- Fresh install: configure daemon `.env`, confirm Settings shows daemon-held-key status, complete a full turn.
 - Disabled surfaces never throw and never pretend to work.
 - Each priority error can be forced and shows the correct screen.
 
@@ -263,14 +265,14 @@ Everything in the kickoff's "Explicit non-goals for V1" section still applies. C
 
 Each of these should be touched in or before the phase named — if it breaks, the plan shape has to change, so do not discover it in Phase 6.
 
-1. **xAI streaming STT/TTS API shape (Phase 2, validate in Phase 0–1).** Pin exact endpoints, auth, audio formats, and partial-result framing before writing `xai/stt.ts`. If streaming STT is not actually available from the browser against xAI, the entire UX collapses — validate with a 50-line throwaway script before Phase 2 begins.
+1. **xAI streaming STT/TTS API shape (current daemon-owned path).** Pin exact daemon-side endpoints, auth, audio formats, and partial-result framing. Do not add browser-side xAI calls or browser API-key storage.
 2. **Node WebRTC install ergonomics (Phase 1).** `@roamhq/wrtc` native build has historically been painful cross-platform. If installing the daemon for a normal OpenClaw user means a native compile, that violates the installability constraint. Default to `werift` unless perf forces otherwise.
 3. **OpenClaw `--deliver` reply capture (Phase 3).** Confirm exactly how to read the final assistant text from the CLI. If stdout isn't structured, we may need JSON-mode or a supported alternative. Do not guess — read the CLI's current behavior or ask the user.
 4. **Quoted user-turn posting path (Phase 3).** Verify whether OpenClaw has a supported "post into the thread on behalf of the user" primitive, or whether we need to post via the same integration the session already uses. Do not invent a new ingress path silently.
 5. **NAT traversal without a TURN server (Phase 1).** Home networks with symmetric NATs may fail WebRTC even with STUN. If any test network fails to connect over cellular, either add a public STUN/TURN (Twilio, Cloudflare, self-hosted coturn) or budget for this as a known gap. Test early.
 6. **Mobile browser audio capture constraints (Phase 2).** iOS Safari has quirks around `getUserMedia`, background audio, and `MediaRecorder` codecs. Test on iOS early; if the chosen capture path doesn't work there, swap to `AudioWorklet` + raw PCM before finishing Phase 2.
 7. **Rendezvous hosting reachability (Phase 1).** Confirm both a residential home network and mobile carriers can reach the chosen rendezvous host over HTTPS and keep a long-lived SSE connection open.
-8. **xAI key handling on the phone (Phase 2/5).** The key lives in `localStorage`. Document this clearly in the UI — users may not realize the phone client calls xAI directly. Avoid accidentally logging or transmitting the key anywhere else.
+8. **xAI key handling (current).** The key lives only in the daemon `.env`. The phone/browser must not store it in `localStorage`, log it, or transmit it outside the daemon's xAI calls.
 
 ## Verification summary
 
@@ -282,7 +284,7 @@ A V1 build is accepted when, on a phone over cellular, against a daemon running 
 4. Keep talking, self-correct verbally.
 5. Tap Stop → instant auto-send.
 6. Discord thread shows the quoted user turn, then the assistant reply, in that order.
-7. Phone plays the reply via xAI TTS.
+7. Phone plays daemon-provided audio generated via xAI TTS.
 8. Silence stops playback but does not kill the turn record.
 9. History and Transcript are visible, styled, and disabled.
 10. The five priority error screens are each reachable under their real failure conditions.
