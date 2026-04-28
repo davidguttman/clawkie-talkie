@@ -50,6 +50,8 @@ class FakeAnalyserNode extends FakeAudioNode {
   fftSize = 2048;
   smoothingTimeConstant = 0.8;
   frequencyBinCount = 1024;
+  minDecibels = -100;
+  maxDecibels = -30;
 }
 
 class FakeAudioBufferSourceNode extends FakeAudioNode {
@@ -398,6 +400,8 @@ describe('HoldMusicController', () => {
     const analyser = ctx.analysers[0];
     expect(analyser.fftSize).toBe(64);
     expect(analyser.smoothingTimeConstant).toBeCloseTo(0.1);
+    expect(analyser.minDecibels).toBe(-90);
+    expect(analyser.maxDecibels).toBe(-10);
     expect(ctx.gains[3].connect).toHaveBeenCalledWith(ctx.destination);
     expect(ctx.gains[3].connect).toHaveBeenCalledWith(analyser);
     expect(getActiveHoldMusicAnalyser()).toBe(analyser as unknown as AnalyserNode);

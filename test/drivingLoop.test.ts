@@ -1,5 +1,9 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AnalyserScratch } from '../client/src/voice/drivingLoop';
+
+const root = resolve(__dirname, '..');
 
 let activeMicAnalyser: AnalyserNode | null = null;
 let activeHoldMusicAnalyser: AnalyserNode | null = null;
@@ -54,6 +58,12 @@ beforeEach(() => {
 });
 
 describe('driving loop visualization band selection', () => {
+  it('mirrors unique low-to-high bands around the center', async () => {
+    const { mirrorCenterOutBands } = await import('../client/src/voice/drivingLoop');
+
+    expect(mirrorCenterOutBands([0.1, 0.25, 0.8])).toEqual([0.1, 0.25, 0.8, 0.8, 0.25, 0.1]);
+  });
+
   it('samples the live mic analyser on every recording tick', async () => {
     const { readTargetBands } = await import('../client/src/voice/drivingLoop');
     const analyser = new FakeAnalyser();
@@ -85,14 +95,16 @@ describe('driving loop thinking visualizer source selection', () => {
   it('uses the hold music analyser in thinking when no tts/remote analyser exists', async () => {
     const { readTargetBands } = await import('../client/src/voice/drivingLoop');
     const holdAnalyser = new FakeAnalyser();
-    holdAnalyser.pushFrame([[10, 96]]);
+    holdAnalyser.pushFrame([[50, 255]]);
     activeHoldMusicAnalyser = holdAnalyser as unknown as AnalyserNode;
     const scratch = new WeakMap<AnalyserNode, AnalyserScratch>();
 
     const bands = readTargetBands('thinking', [], null, scratch);
 
     expect(bands).toHaveLength(28);
-    expect(Math.max(...bands)).toBeGreaterThan(0.1);
+    expect(bands.slice(0, 14)).toEqual(bands.slice(14).reverse());
+    expect(bands[13]).toBe(bands[14]);
+    expect(bands[13]).toBeGreaterThan(bands[0]);
   });
 
   it('does not include the hold music analyser when state is ai', async () => {
@@ -146,5 +158,15 @@ describe('driving loop hold music state gates', () => {
     expect(shouldStopHoldMusicForControlMessage({ t: 'reply.error' })).toBe(true);
     expect(shouldStopHoldMusicForControlMessage({ t: 'reply.done' })).toBe(false);
     expect(shouldStopHoldMusicForControlMessage({ t: 'stt.partial' })).toBe(false);
+  });
+});
+
+describe('driving loop visualizer frame rendering', () => {
+  it('renders sequential recording frames directly without interpolation', () => {
+    const source = readFileSync(resolve(root, 'client/src/voice/drivingLoop.ts'), 'utf8');
+
+    expect(source).not.toContain('smoothBandIntensities');
+    expect(source).toContain('renderedBandsRef.current = target;');
+    expect(source).toContain('setIntensities(target);');
   });
 });

@@ -13,6 +13,12 @@ describe('DrivingScreen waveform wiring', () => {
     expect(source).not.toContain('waveIntensities');
     expect(source).toContain('intensities={intensities}');
   });
+
+  it('does not smooth LiveWave bar height changes in CSS', () => {
+    const source = readFileSync(resolve(root, 'client/src/components/Phone.tsx'), 'utf8');
+
+    expect(source).not.toContain('height 40ms ease-out');
+  });
 });
 
 describe('DrivingScreen settings button', () => {

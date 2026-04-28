@@ -203,7 +203,7 @@ export function LiveWave({
             background: color,
             height: `${Math.max(6, v * 100)}%`,
             borderRadius: 2,
-            transition: 'height 40ms ease-out',
+            transition: 'none',
             boxShadow: `0 0 8px ${color}66`,
           }}
         />
