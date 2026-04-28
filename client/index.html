@@ -587,6 +587,21 @@
         .cta { padding: 30px 24px; }
         section.block { padding: 44px 0; }
       }
+      .label-mobile { display: none; }
+      @media (max-width: 720px) {
+        .topbar .btn.primary { display: none; }
+        .hero-cta { flex-direction: column; align-items: stretch; }
+        .hero-cta .btn {
+          width: 100%;
+          padding: 0 16px;
+          font-size: 11px;
+          letter-spacing: 1.4px;
+        }
+        .cta { flex-direction: column; align-items: stretch; }
+        .cta .btn.primary { width: 100%; }
+        .label-desktop { display: none; }
+        .label-mobile { display: inline; }
+      }
     </style>
   </head>
   <body>
@@ -626,7 +641,8 @@
           </p>
           <div class="hero-cta">
             <button type="button" class="btn primary" data-copy-install>
-              COPY INSTALL INSTRUCTIONS FOR MY AGENT
+              <span class="label-desktop">COPY INSTALL INSTRUCTIONS FOR MY AGENT</span>
+              <span class="label-mobile">COPY AGENT INSTALL</span>
               <span class="icon">⧉</span>
             </button>
             <a class="btn" href="#how">HOW IT WORKS</a>
