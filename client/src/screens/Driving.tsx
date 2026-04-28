@@ -1100,7 +1100,7 @@ function PTTButton({
             marginTop: 12,
           }}
         >
-          {isThink ? (holdMusicMuted ? 'TAP FOR ◐' : 'TAP TO MUTE') : label}
+          {isThink ? (holdMusicMuted ? 'TAP FOR MUSIC' : 'TAP TO MUTE') : label}
         </div>
       </div>
     </button>
