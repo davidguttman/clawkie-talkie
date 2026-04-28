@@ -16,7 +16,6 @@
     "daemon": "tsx --env-file-if-exists=.env daemon/src/index.ts"
   },
   "dependencies": {
-    "@echogarden/fvad-wasm": "^0.2.0",
     "@roamhq/wrtc": "^0.8.0",
     "events": "^3.3.0",
     "react": "^18.3.1",

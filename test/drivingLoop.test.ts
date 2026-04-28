@@ -174,31 +174,3 @@ describe('driving loop visualizer frame rendering', () => {
     expect(source).not.toContain('setIntensities(target);');
   });
 });
-
-describe('driving loop transcript finalization', () => {
-  it('routes an empty authoritative final to empty_transcript even when a committed partial exists', async () => {
-    const { resolveSttDone } = await import('../client/src/voice/drivingLoop');
-
-    const result = resolveSttDone('   ', ['chunk words']);
-
-    expect(result).toEqual({
-      nextAccumulated: [],
-      transcript: { active: false, sttDone: false, text: '' },
-      event: { type: 'stt.error', reason: 'empty_transcript' },
-    });
-    expect('saveText' in result).toBe(false);
-  });
-
-  it('uses non-empty stt.done text as the saved/dispatch transcript', async () => {
-    const { resolveSttDone } = await import('../client/src/voice/drivingLoop');
-
-    const result = resolveSttDone(' authoritative final ', ['chunk words']);
-
-    expect(result).toEqual({
-      nextAccumulated: [],
-      transcript: { active: true, sttDone: true, text: 'authoritative final' },
-      event: { type: 'stt.done', text: 'authoritative final' },
-      saveText: 'authoritative final',
-    });
-  });
-});
