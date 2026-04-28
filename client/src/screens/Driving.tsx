@@ -236,7 +236,7 @@ export function DrivingScreen({
           />
           {statePill}
         </div>
-        {!compact && onSettings && (
+        {onSettings && (
           <button
             onClick={onSettings}
             style={{
@@ -340,8 +340,8 @@ export function DrivingScreen({
         />
       )}
 
-      {/* footer — REPLAY and HISTORY side-by-side. Settings (compact) is
-          intentionally not duplicated here; gear lives in header on desktop. */}
+      {/* footer — REPLAY and HISTORY side-by-side. Settings lives in the
+          header gear button (visible in both compact and desktop). */}
       <div
         style={{
           display: 'grid',

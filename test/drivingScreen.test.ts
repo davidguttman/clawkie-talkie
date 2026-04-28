@@ -15,6 +15,18 @@ describe('DrivingScreen waveform wiring', () => {
   });
 });
 
+describe('DrivingScreen settings button', () => {
+  it('renders the settings gear in both compact and desktop headers', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    // Settings button must not be gated on `!compact` — mobile users
+    // need an accessible path to Settings too.
+    expect(source).not.toContain('!compact && onSettings');
+    expect(source).toContain('{onSettings && (');
+    expect(source).toContain('aria-label="Settings"');
+  });
+});
+
 describe('DrivingScreen media debug surface', () => {
   it('keeps the hardware-event conclusion and keeper counters visible in debug mode', () => {
     const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
