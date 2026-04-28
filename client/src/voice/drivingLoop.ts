@@ -121,9 +121,8 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
   const holdMusicRef = useRef<HoldMusicController | null>(null);
   const micBandsRef = useRef<number[]>([...QUIET_INTENSITIES]);
   const renderedBandsRef = useRef<number[]>([...IDLE_INTENSITIES]);
-  // Accumulator for non-empty final partials. Used as fallback for
-  // `stt.done` when xAI ships an empty final transcript despite having
-  // committed real words during the turn.
+  // Accumulator for committed VAD/STT chunks. These drive the live caption
+  // only; the full-turn `stt.done` transcript remains authoritative.
   const accumulatedRef = useRef<string[]>([]);
   const rtcRef = useRef(rtc);
   const sessionMetaRef = useRef({
@@ -149,9 +148,10 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     const detach = rtc.addControlListener((msg) => {
       if (msg.t === 'stt.partial') {
         const text = typeof msg.text === 'string' ? msg.text : '';
-        // xAI can emit empty partials (and even empty *finals*) during
-        // silence tails. Either form would wipe the live caption, so
-        // drop them entirely — only commit non-empty text on screen.
+        // Some STT providers can emit empty partials (and even empty
+        // *finals*) during silence tails. Either form would wipe the
+        // live caption, so drop them entirely — only commit non-empty
+        // text on screen.
         if (!text.trim()) return;
         const isFinal = !!(msg as { is_final?: boolean }).is_final;
         if (isFinal) {
@@ -171,19 +171,11 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
         return;
       }
       if (msg.t === 'stt.done') {
-        const text = typeof msg.text === 'string' ? msg.text.trim() : '';
-        const fallback = accumulatedRef.current.join(' ').trim();
-        const finalText = text || fallback;
-        if (!finalText) {
-          accumulatedRef.current = [];
-          setCurrentTurnTranscript({ active: false, sttDone: false, text: '' });
-          dispatch({ type: 'stt.error', reason: 'empty_transcript' });
-          return;
-        }
-        accumulatedRef.current = [];
-        setCurrentTurnTranscript({ active: true, sttDone: true, text: finalText });
-        saveTranscriptTurn(sessionMetaRef.current, 'user', finalText);
-        dispatch({ type: 'stt.done', text: finalText });
+        const result = resolveSttDone(msg.text, accumulatedRef.current);
+        accumulatedRef.current = result.nextAccumulated;
+        setCurrentTurnTranscript(result.transcript);
+        if ('saveText' in result) saveTranscriptTurn(sessionMetaRef.current, 'user', result.saveText);
+        dispatch(result.event);
         return;
       }
       if (msg.t === 'stt.error') {
@@ -436,6 +428,39 @@ function saveTranscriptTurn(
     },
     { role, text, error },
   );
+}
+
+export type SttDoneResolution =
+  | {
+      nextAccumulated: string[];
+      transcript: CurrentTurnTranscript;
+      event: Extract<DrivingEvent, { type: 'stt.error' }>;
+    }
+  | {
+      nextAccumulated: string[];
+      transcript: CurrentTurnTranscript;
+      event: Extract<DrivingEvent, { type: 'stt.done' }>;
+      saveText: string;
+    };
+
+export function resolveSttDone(
+  msgText: unknown,
+  _committedChunks: readonly string[] = [],
+): SttDoneResolution {
+  const finalText = typeof msgText === 'string' ? msgText.trim() : '';
+  if (!finalText) {
+    return {
+      nextAccumulated: [],
+      transcript: { active: false, sttDone: false, text: '' },
+      event: { type: 'stt.error', reason: 'empty_transcript' },
+    };
+  }
+  return {
+    nextAccumulated: [],
+    transcript: { active: true, sttDone: true, text: finalText },
+    event: { type: 'stt.done', text: finalText },
+    saveText: finalText,
+  };
 }
 
 export function readTargetBands(

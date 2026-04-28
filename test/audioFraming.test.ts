@@ -1,8 +1,8 @@
 // Audio framing: Float32 → PCM16LE conversion used when piping mic
 // samples into the daemon, and the WAV fixture parser used by the
 // deterministic audio source. Regressions here corrupt the bytes we
-// ship to xAI STT, which is silent in production but catastrophic — so
-// the risky edges get pinned.
+// ship to daemon STT, which is silent in production but catastrophic —
+// so the risky edges get pinned.
 
 import { describe, it, expect } from 'vitest';
 import {

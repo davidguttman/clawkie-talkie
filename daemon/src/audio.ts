@@ -6,6 +6,8 @@
 export const WEBRTC_SAMPLE_RATE = 48000;
 export const FRAME_10MS = 480;
 
+const WAV_HEADER_BYTES = 44;
+
 function clamp16(value: number): number {
   return Math.max(-32768, Math.min(32767, value));
 }
@@ -40,6 +42,31 @@ export function resamplePcm(
   }
 
   return output;
+}
+
+export function pcm16ToWavBuffer(pcm: Buffer, sampleRate: number): Buffer {
+  const wav = Buffer.alloc(WAV_HEADER_BYTES + pcm.length);
+  const byteRate = sampleRate * 2;
+  const blockAlign = 2;
+
+  wav.write('RIFF', 0, 'ascii');
+  wav.writeUInt32LE(wav.length - 8, 4);
+  wav.write('WAVE', 8, 'ascii');
+
+  wav.write('fmt ', 12, 'ascii');
+  wav.writeUInt32LE(16, 16); // PCM fmt chunk size
+  wav.writeUInt16LE(1, 20); // PCM audio format
+  wav.writeUInt16LE(1, 22); // mono
+  wav.writeUInt32LE(sampleRate, 24);
+  wav.writeUInt32LE(byteRate, 28);
+  wav.writeUInt16LE(blockAlign, 32);
+  wav.writeUInt16LE(16, 34);
+
+  wav.write('data', 36, 'ascii');
+  wav.writeUInt32LE(pcm.length, 40);
+  pcm.copy(wav, WAV_HEADER_BYTES);
+
+  return wav;
 }
 
 // Slice a PCM16LE buffer into fixed-size Int16 frames. The final

@@ -783,8 +783,7 @@ function pickCaption({
     return {
       label: 'YOU · LIVE',
       color: accentRec,
-      // liveText is populated from xAI's streaming `transcript.partial`
-      // events — real words as they're spoken.
+      // liveText is populated by daemon STT progress when available.
       text: liveText || null,
       live: true,
     };
@@ -794,7 +793,7 @@ function pickCaption({
   }
   if (state === 'thinking') {
     return {
-      label: isTranscribing ? 'TRANSCRIBING · XAI' : 'THINKING',
+      label: isTranscribing ? 'TRANSCRIBING · OPENCLAW' : 'THINKING',
       color: stateColor,
       text: liveText || null,
       live: isTranscribing,
@@ -978,9 +977,8 @@ function errorLabelFor(code: string): string {
   if (code === 'media_recorder_unsupported')
     return 'AUDIO CAPTURE UNSUPPORTED ON THIS BROWSER';
   if (code === 'audio_unsupported') return 'AUDIO PLAYBACK UNSUPPORTED ON THIS BROWSER';
-  // Daemon-originated codes from xAI STT / chat / TTS upstreams.
+  // Daemon-originated codes from transcription / chat / TTS upstreams.
   if (code.startsWith('xai_http_')) return `DAEMON · XAI ${code.replace('xai_http_', 'HTTP ')}`;
-  if (code.startsWith('xai_stt_')) return `DAEMON · XAI STT · ${code.replace('xai_stt_', '')}`;
   if (code.startsWith('xai_tts_')) return `DAEMON · XAI TTS · ${code.replace('xai_tts_', '')}`;
   if (code === 'xai_empty_reply') return 'DAEMON · XAI EMPTY REPLY';
   return `VOICE ERROR · ${code}`;
