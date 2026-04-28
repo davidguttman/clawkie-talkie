@@ -27,18 +27,24 @@ Public GitHub repo: `davidguttman/clawkietalkie`
 
 ## Fetch and inspect
 
-1. Download the GitHub source ZIP and unzip it into a durable workspace folder such as `~/workspace/clawkie-talkie`. This keeps installs in the agent workspace and avoids requiring Git:
+1. Identify the installing agent's own OpenClaw workspace directory from the current runtime/session context. Do **not** invent a separate home-directory workspace and do **not** copy any path from this repository author's machine. If the active OpenClaw workspace cannot be determined, stop and ask the user.
+
+   Download the GitHub source ZIP into that workspace, for example under `<OPENCLAW_WORKSPACE>/external/clawkie-talkie`:
 
    ```bash
-   mkdir -p ~/workspace
-   cd ~/workspace
+   OPENCLAW_WORKSPACE="/absolute/path/to/this-openclaw-workspace"
+   CLAWKIE_SOURCE_DIR="$OPENCLAW_WORKSPACE/external/clawkie-talkie"
+
+   mkdir -p "$(dirname "$CLAWKIE_SOURCE_DIR")"
+   cd "$(dirname "$CLAWKIE_SOURCE_DIR")"
    curl -L -o clawkie-talkie.zip \
      https://github.com/davidguttman/clawkietalkie/archive/HEAD.zip
    unzip -q clawkie-talkie.zip
    extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkietalkie-*' | head -n 1)
-   rm -rf clawkie-talkie
-   mv "$extracted_dir" clawkie-talkie
+   rm -rf "$CLAWKIE_SOURCE_DIR"
+   mv "$extracted_dir" "$CLAWKIE_SOURCE_DIR"
    rm clawkie-talkie.zip
+   cd "$CLAWKIE_SOURCE_DIR"
    ```
 2. Inspect the repo before installing. Expected items include:
    - Node/npm project files
@@ -149,19 +155,19 @@ The skill source is:
 openclaw/clawkie-voice-handoff/SKILL.md
 ```
 
-Install it into the OpenClaw runtime skills directory for this user. In a standard OpenClaw workspace, this is usually:
+Install it into the runtime skills directory for **this OpenClaw install's workspace**. Use the workspace path from the current runtime/session context; do not hardcode the maintainer's workspace path or any other user-specific path.
 
-```text
-~/clawd/skills/clawkie-voice-handoff/SKILL.md
-```
-
-If this path does not exist, discover the active skills directory from the current OpenClaw runtime/session context. Do not guess. If you cannot determine the runtime skill path, stop and report that blocker.
+If the runtime exposes a specific skills directory, use it. Otherwise use `<OPENCLAW_WORKSPACE>/skills`. If you cannot determine the active workspace or skills directory, stop and report that blocker.
 
 Create the destination directory and copy the skill:
 
 ```bash
-mkdir -p ~/clawd/skills/clawkie-voice-handoff
-cp openclaw/clawkie-voice-handoff/SKILL.md ~/clawd/skills/clawkie-voice-handoff/SKILL.md
+: "${OPENCLAW_WORKSPACE:?set this to the installing agent's OpenClaw workspace directory}"
+OPENCLAW_SKILLS_DIR="${OPENCLAW_SKILLS_DIR:-$OPENCLAW_WORKSPACE/skills}"
+CLAWKIE_SKILL_DIR="$OPENCLAW_SKILLS_DIR/clawkie-voice-handoff"
+
+mkdir -p "$CLAWKIE_SKILL_DIR"
+cp openclaw/clawkie-voice-handoff/SKILL.md "$CLAWKIE_SKILL_DIR/SKILL.md"
 ```
 
 Then patch the installed copy only (mirroring how the LobsterLink installer writes its discovered extension ID into the LobsterLink runtime skill):
