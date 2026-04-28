@@ -19,7 +19,7 @@ Windows native packages exist for the WebRTC dependency, but this repo does not 
 - Node.js and npm. Use a current Node release; Node 22 LTS or newer is recommended.
 - `curl` and `unzip` for downloading the source ZIP.
 - OpenClaw installed, configured, and available on `PATH` as `openclaw` for the same user that runs the daemon.
-- An xAI API key for STT/TTS and OpenClaw turns.
+- An xAI API key for STT/TTS and OpenClaw turns. If OpenClaw is already configured with an xAI key, use that existing local configuration as the first source instead of asking the user for the key again.
 - Outbound network access to the signaling service, xAI, and any OpenClaw services you use.
 
 The daemon uses `@roamhq/wrtc` for native WebRTC. Its package includes prebuilt native packages for common macOS/Linux architectures. If your platform cannot use a prebuild, `npm install` may need native build tools:
@@ -64,7 +64,7 @@ chmod 600 .env
 Edit `.env`:
 
 ```env
-# Required. Keep this secret.
+# Required. Keep this secret. Use the existing local OpenClaw xAI key when one is configured.
 XAI_API_KEY=xai-...
 
 # Required for a persistent install. Generate once and keep it stable.
@@ -78,6 +78,15 @@ DAEMON_PEER_ID=REPLACE_WITH_A_RANDOM_UUID
 CT_STT_LANGUAGE=en
 CT_THREAD_ID=
 ```
+
+For agent installs, resolve `XAI_API_KEY` in this order before asking the user for anything:
+
+1. Preserve an existing `.env` value on updates.
+2. Check the active OpenClaw config/auth profile for an existing xAI API key. Use `openclaw config file`/`openclaw config get ...` or equivalent runtime config tooling; if the value is a SecretRef, resolve it through the configured local secret provider.
+3. Check only user-designated local secret sources, if the user already named one.
+4. If no usable key is available, ask for a safe secret handoff path. Do not ask the user to paste the key into a public/shared chat.
+
+Do not treat a missing `XAI_API_KEY` shell environment variable as proof that no key exists; OpenClaw may already have it in local config/auth settings. Do not print the key while copying it into `.env`.
 
 Generate the stable daemon ID with Node:
 
@@ -299,7 +308,7 @@ systemctl --user restart clawkie-talkie.service
 
 ### `XAI_API_KEY env var is required`
 
-The daemon did not find your xAI key. Make sure `.env` is in the repo root, contains `XAI_API_KEY=...`, and that the daemon is started from the repo root.
+The daemon did not find your xAI key. Make sure `.env` is in the repo root, contains `XAI_API_KEY=...`, and that the daemon is started from the repo root. If OpenClaw already has an xAI key configured, copy that existing local key into the daemon `.env` without printing it; OpenClaw config does not automatically become the daemon process environment.
 
 ### The host ID changes after reboot
 
