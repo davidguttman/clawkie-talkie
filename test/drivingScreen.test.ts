@@ -42,8 +42,7 @@ describe('DrivingScreen hold music mute control', () => {
     expect(source).toContain('subscribeHoldMusicMuted(setHoldMusicMutedState)');
     expect(source).toContain("'Mute hold music'");
     expect(source).toContain("'Unmute hold music'");
-    expect(source).toContain("holdMusicMuted ? '🔇' : '🔊'");
-    expect(source).not.toContain("state === 'thinking' ? '◐'");
+    expect(source).toContain("holdMusicMuted ? '⊘' : '◐'");
   });
 });
 
