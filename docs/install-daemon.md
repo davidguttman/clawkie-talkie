@@ -32,19 +32,22 @@ The daemon uses `@roamhq/wrtc` for native WebRTC. Its package includes prebuilt 
 
 The currently supported install path is from this repo. There is no published npm package installer for the daemon yet.
 
-Download the latest source ZIP from GitHub and unzip it into a durable workspace folder such as `~/workspace/clawkie-talkie`. This avoids needing Git for a one-time install.
+Download the latest source ZIP from GitHub into the installing agent's own OpenClaw workspace. Do **not** create a separate generic home-directory workspace and do **not** copy paths from this repo author's machine. Use the active OpenClaw workspace for the machine being installed; if you cannot determine it, stop and ask.
 
 ```bash
-mkdir -p ~/workspace
-cd ~/workspace
+OPENCLAW_WORKSPACE="/absolute/path/to/this-openclaw-workspace"
+CLAWKIE_SOURCE_DIR="$OPENCLAW_WORKSPACE/external/clawkie-talkie"
+
+mkdir -p "$(dirname "$CLAWKIE_SOURCE_DIR")"
+cd "$(dirname "$CLAWKIE_SOURCE_DIR")"
 curl -L -o clawkie-talkie.zip \
   https://github.com/davidguttman/clawkietalkie/archive/HEAD.zip
 unzip -q clawkie-talkie.zip
 extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkietalkie-*' | head -n 1)
-rm -rf clawkie-talkie
-mv "$extracted_dir" clawkie-talkie
+rm -rf "$CLAWKIE_SOURCE_DIR"
+mv "$extracted_dir" "$CLAWKIE_SOURCE_DIR"
 rm clawkie-talkie.zip
-cd clawkie-talkie
+cd "$CLAWKIE_SOURCE_DIR"
 npm install
 ```
 
@@ -53,7 +56,7 @@ npm install
 Create a repo-root `.env` file. Do not commit it or share it.
 
 ```bash
-cd ~/workspace/clawkie-talkie
+cd "$CLAWKIE_SOURCE_DIR"
 cp .env.example .env
 chmod 600 .env
 ```
@@ -95,7 +98,7 @@ Treat the ID as private-ish: it is not your xAI key, but it does identify the ro
 From the repo root:
 
 ```bash
-cd ~/workspace/clawkie-talkie
+cd "$CLAWKIE_SOURCE_DIR"
 npm run daemon
 ```
 
@@ -119,7 +122,7 @@ https://clawkietalkie.app/voice#host=<host>&session=<session>&channel=<channel>&
 
 ## Keep it running on macOS with launchd
 
-Use a per-user LaunchAgent. Replace `/Users/YOU/workspace/clawkie-talkie` with the real absolute path.
+Use a per-user LaunchAgent. Replace `/ABSOLUTE/PATH/TO/CLAWKIE_TALKIE` with the real absolute `CLAWKIE_SOURCE_DIR` path from this install.
 
 Create `~/Library/LaunchAgents/app.clawkietalkie.daemon.plist`:
 
@@ -132,13 +135,13 @@ Create `~/Library/LaunchAgents/app.clawkietalkie.daemon.plist`:
   <string>app.clawkietalkie.daemon</string>
 
   <key>WorkingDirectory</key>
-  <string>/Users/YOU/workspace/clawkie-talkie</string>
+  <string>/ABSOLUTE/PATH/TO/CLAWKIE_TALKIE</string>
 
   <key>ProgramArguments</key>
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>cd /Users/YOU/workspace/clawkie-talkie &amp;&amp; npm run daemon</string>
+    <string>cd /ABSOLUTE/PATH/TO/CLAWKIE_TALKIE &amp;&amp; npm run daemon</string>
   </array>
 
   <key>EnvironmentVariables</key>
@@ -154,10 +157,10 @@ Create `~/Library/LaunchAgents/app.clawkietalkie.daemon.plist`:
   <true/>
 
   <key>StandardOutPath</key>
-  <string>/Users/YOU/Library/Logs/clawkie-talkie.out.log</string>
+  <string>/ABSOLUTE/PATH/TO/HOME/Library/Logs/clawkie-talkie.out.log</string>
 
   <key>StandardErrorPath</key>
-  <string>/Users/YOU/Library/Logs/clawkie-talkie.err.log</string>
+  <string>/ABSOLUTE/PATH/TO/HOME/Library/Logs/clawkie-talkie.err.log</string>
 </dict>
 </plist>
 ```
@@ -188,7 +191,7 @@ If you installed Node with `nvm`, `asdf`, or another shell-managed tool, launchd
 
 ## Keep it running on Linux with systemd user services
 
-Use a per-user systemd service. This starts after your user session starts. Replace paths if you installed somewhere other than `~/workspace/clawkie-talkie`.
+Use a per-user systemd service. This starts after your user session starts. Replace `/ABSOLUTE/PATH/TO/CLAWKIE_TALKIE` with the real absolute `CLAWKIE_SOURCE_DIR` path from this install.
 
 Create `~/.config/systemd/user/clawkie-talkie.service`:
 
@@ -200,7 +203,7 @@ After=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/workspace/clawkie-talkie
+WorkingDirectory=/ABSOLUTE/PATH/TO/CLAWKIE_TALKIE
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/env npm run daemon
 Restart=always
@@ -267,17 +270,18 @@ There is no inbound HTTP port for the daemon to expose. It reaches the signaling
 If installed from a ZIP, download the latest ZIP and refresh the source folder. Preserve your `.env` (it lives in the repo root and is not in the ZIP, but make a backup if you keep it elsewhere):
 
 ```bash
-cd ~/workspace
+: "${CLAWKIE_SOURCE_DIR:?set this to the existing Clawkie Talkie source directory}"
+cd "$(dirname "$CLAWKIE_SOURCE_DIR")"
 curl -L -o clawkie-talkie.zip \
   https://github.com/davidguttman/clawkietalkie/archive/HEAD.zip
-cp clawkie-talkie/.env /tmp/clawkie-talkie.env.bak
+cp "$CLAWKIE_SOURCE_DIR/.env" /tmp/clawkie-talkie.env.bak
 unzip -q -o clawkie-talkie.zip
 extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkietalkie-*' | head -n 1)
-rm -rf clawkie-talkie
-mv "$extracted_dir" clawkie-talkie
-mv /tmp/clawkie-talkie.env.bak clawkie-talkie/.env
+rm -rf "$CLAWKIE_SOURCE_DIR"
+mv "$extracted_dir" "$CLAWKIE_SOURCE_DIR"
+mv /tmp/clawkie-talkie.env.bak "$CLAWKIE_SOURCE_DIR/.env"
 rm clawkie-talkie.zip
-cd clawkie-talkie
+cd "$CLAWKIE_SOURCE_DIR"
 npm install
 ```
 
