@@ -90,7 +90,7 @@ describe('runChat OpenClaw CLI integration', () => {
     expect(agentCommand).toContain('"--session-id" "session-1"');
   });
 
-  it('runs external Discord agent turns in voice channel context without --deliver or an explicit reply target', async () => {
+  it('runs agent turns through OpenClaw channel-last delivery without an explicit reply target', async () => {
     execMock.mockResolvedValue({ stdout: 'ok\n', stderr: '' });
 
     await runChat('hello', {
@@ -101,10 +101,87 @@ describe('runChat OpenClaw CLI integration', () => {
     });
 
     const agentCommand = findAgentCommand();
-    expect(agentCommand).toContain('"--channel" "voice"');
-    expect(agentCommand).not.toContain('"--deliver"');
+    expect(agentCommand).toContain('"--agent" "main"');
+    expect(agentCommand).toContain('"--channel" "last"');
+    expect(agentCommand).toContain('"--deliver"');
+    expect(agentCommand).toContain('"-m"');
     expect(agentCommand).not.toContain('"--reply-channel"');
     expect(agentCommand).not.toContain('"--reply-to"');
+  });
+
+  it('starts the agent turn without waiting for transcript posting to finish', async () => {
+    let transcriptPending = false;
+    let agentStartedWhileTranscriptPending = false;
+    let resolveTranscript: ((value: { stdout: string; stderr: string }) => void) | undefined;
+
+    execMock.mockImplementation((cmd) => {
+      const command = String(cmd);
+      if (command.includes('openclaw "message" "send"') && command.includes('> hi')) {
+        transcriptPending = true;
+        return new Promise<{ stdout: string; stderr: string }>((resolve) => {
+          resolveTranscript = (value) => {
+            transcriptPending = false;
+            resolve(value);
+          };
+        });
+      }
+      if (command.includes('openclaw "agent"')) {
+        agentStartedWhileTranscriptPending = transcriptPending;
+        return Promise.resolve({ stdout: 'hello back\n', stderr: '' });
+      }
+      return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+    });
+
+    const resultPromise = runChat('hi', {
+      apiKey: 'test-key',
+      sessionId: 'session-1',
+      threadId: 'thread-1',
+      deliver: true,
+    });
+
+    await vi.waitFor(() => expect(findAgentCommand()).toContain('"--channel" "last"'));
+    expect(agentStartedWhileTranscriptPending).toBe(true);
+    await expect(resultPromise).resolves.toEqual({ text: 'hello back', source: 'xai_via_openclaw' });
+
+    resolveTranscript?.({ stdout: 'transcript posted\n', stderr: '' });
+  });
+
+  it('logs transcript post rejection without failing the voice turn when the agent succeeds', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      execMock.mockImplementation((cmd) => {
+        const command = String(cmd);
+        if (command.includes('openclaw "message" "send"') && command.includes('> hi')) {
+          return Promise.reject(
+            Object.assign(
+              new Error('Command failed: openclaw "message" "send" "--message" "> hi" xai_api_key=secret'),
+              { stderr: 'bad --message "> hi" authorization: bearer token' },
+            ),
+          );
+        }
+        if (command.includes('openclaw "agent"')) {
+          return Promise.resolve({ stdout: 'hello back\n', stderr: '' });
+        }
+        return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+      });
+
+      await expect(
+        runChat('hi', {
+          apiKey: 'test-key',
+          sessionId: 'session-1',
+          threadId: 'thread-1',
+          deliver: true,
+        }),
+      ).resolves.toEqual({ text: 'hello back', source: 'xai_via_openclaw' });
+
+      await vi.waitFor(() => expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('transcript_post_failed')));
+      const logLine = String(errorSpy.mock.calls.find(([line]) => String(line).includes('transcript_post_failed'))?.[0]);
+      expect(logLine).not.toContain('> hi');
+      expect(logLine).not.toContain('secret');
+      expect(logLine).not.toContain('token');
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it('wraps the agent input with raw STT transcript guidance', async () => {
@@ -118,6 +195,7 @@ describe('runChat OpenClaw CLI integration', () => {
     });
 
     const agentCommand = findAgentCommand();
+    expect(agentCommand).toContain('"-m"');
     expect(agentCommand).toContain('raw speech-to-text transcript');
     expect(agentCommand).toContain('mistranscriptions');
     expect(agentCommand).toContain('infer the user');
@@ -225,8 +303,10 @@ describe('runChat OpenClaw CLI integration', () => {
 
     expect(execMock.mock.calls[1]?.[0]).toContain('openclaw "sessions"');
     const agentCommand = findAgentCommand();
+    expect(agentCommand).toContain('"--agent" "main"');
     expect(agentCommand).toContain('"--session-id" "stored-session-id"');
-    expect(agentCommand).toContain('"--channel" "voice"');
+    expect(agentCommand).toContain('"--channel" "last"');
+    expect(agentCommand).toContain('"--deliver"');
   });
 
   it('runs session-only webchat through OpenClaw channel last delivery', async () => {
@@ -245,6 +325,7 @@ describe('runChat OpenClaw CLI integration', () => {
     expect(agentCommand).toContain('"--session-id" "agent:main:main"');
     expect(agentCommand).toContain('"--channel" "last"');
     expect(agentCommand).toContain('"--deliver"');
+    expect(agentCommand).toContain('"-m"');
   });
 
   it('normalizes legacy webchat base links to the channel-last webchat session', async () => {
@@ -260,6 +341,7 @@ describe('runChat OpenClaw CLI integration', () => {
     expect(agentCommand).toContain('"--session-id" "agent:main:main"');
     expect(agentCommand).toContain('"--channel" "last"');
     expect(agentCommand).toContain('"--deliver"');
+    expect(agentCommand).toContain('"-m"');
   });
 
   it('keeps exact session resolution for webchat when an explicit external delivery is present', async () => {
@@ -272,8 +354,7 @@ describe('runChat OpenClaw CLI integration', () => {
         ]),
         stderr: '',
       })
-      .mockResolvedValueOnce({ stdout: 'reply\n', stderr: '' })
-      .mockResolvedValueOnce({ stdout: 'reply posted\n', stderr: '' });
+      .mockResolvedValueOnce({ stdout: 'reply\n', stderr: '' });
 
     await runChat('hello', {
       apiKey: 'test-key',
@@ -283,10 +364,10 @@ describe('runChat OpenClaw CLI integration', () => {
 
     expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "sessions"'))).toBe(true);
     const agentCommand = findAgentCommand();
+    expect(agentCommand).toContain('"--agent" "main"');
     expect(agentCommand).toContain('"--session-id" "base-session-id"');
-    expect(agentCommand).toContain('"--channel" "voice"');
-    expect(agentCommand).not.toContain('"--channel" "last"');
-    expect(agentCommand).not.toContain('"--deliver"');
+    expect(agentCommand).toContain('"--channel" "last"');
+    expect(agentCommand).toContain('"--deliver"');
   });
 
   it('does not apply webchat fallback to non-webchat base keys', async () => {
@@ -360,11 +441,10 @@ describe('runChat with explicit delivery target', () => {
     expect(transcriptCommand).toContain(`"--message" ${JSON.stringify('> hello')}`);
   });
 
-  it('mirrors the assistant reply to the same delivery target after the agent turn', async () => {
+  it('does not mirror the assistant reply through message send because agent delivery handles it', async () => {
     execMock
       .mockResolvedValueOnce({ stdout: 'transcript posted\n', stderr: '' })
-      .mockResolvedValueOnce({ stdout: 'hello back\n', stderr: '' })
-      .mockResolvedValueOnce({ stdout: 'reply posted\n', stderr: '' });
+      .mockResolvedValueOnce({ stdout: 'hello back\n', stderr: '' });
 
     const result = await runChat('hi', {
       apiKey: 'test-key',
@@ -378,19 +458,16 @@ describe('runChat with explicit delivery target', () => {
       .map(([cmd]) => String(cmd))
       .filter((cmd) => cmd.includes('openclaw "message" "send"'));
 
-    // One transcript post and one reply post — both via the same
-    // generic delivery target. No duplicate transcript post.
-    expect(sendCommands).toHaveLength(2);
+    expect(sendCommands).toHaveLength(1);
+    expect(sendCommands[0]).toContain('"--channel" "discord"');
+    expect(sendCommands[0]).toContain('"--target" "channel:thread-1"');
+    expect(sendCommands[0]).toContain(`"--message" ${JSON.stringify('> hi')}`);
+    expect(sendCommands[0]).not.toContain('hello back');
 
-    const transcriptCommand = sendCommands[0];
-    expect(transcriptCommand).toContain('"--channel" "discord"');
-    expect(transcriptCommand).toContain('"--target" "channel:thread-1"');
-    expect(transcriptCommand).toContain(`"--message" ${JSON.stringify('> hi')}`);
-
-    const replyCommand = sendCommands[1];
-    expect(replyCommand).toContain('"--channel" "discord"');
-    expect(replyCommand).toContain('"--target" "channel:thread-1"');
-    expect(replyCommand).toContain('"--message" "hello back"');
+    const agentCommand = findAgentCommand();
+    expect(agentCommand).toContain('"--agent" "main"');
+    expect(agentCommand).toContain('"--channel" "last"');
+    expect(agentCommand).toContain('"--deliver"');
   });
 
   it('does not post a reply when the agent turn fails', async () => {
@@ -418,10 +495,9 @@ describe('runChat with explicit delivery target', () => {
     expect(sendCommands[0]).toContain(`"--message" ${JSON.stringify('> hi')}`);
   });
 
-  it('classifies and surfaces a failure to post the reply', async () => {
+  it('classifies and surfaces an agent delivery failure', async () => {
     execMock
       .mockResolvedValueOnce({ stdout: 'transcript posted\n', stderr: '' })
-      .mockResolvedValueOnce({ stdout: 'hello back\n', stderr: '' })
       .mockRejectedValueOnce(
         Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:18789'), {
           stderr: 'connect ECONNREFUSED 127.0.0.1:18789',
