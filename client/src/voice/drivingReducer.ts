@@ -5,7 +5,7 @@
 //   idle       → waiting for the user to tap start
 //   recording  → mic is open; daemon is recording audio for OpenClaw infer STT
 //   thinking   → mic closed; daemon running xAI chat on the transcript
-//   ai         → daemon running xAI TTS; phone is playing audio
+//   ai         → daemon running OpenClaw infer TTS; phone is playing audio
 //
 // Events come from the UI (tap / silence) and from daemon control
 // messages (stt.done / stt.error / reply.done / reply.error / tts.done

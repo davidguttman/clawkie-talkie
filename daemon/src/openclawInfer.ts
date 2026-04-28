@@ -6,10 +6,20 @@ export interface InferTranscribeCommandOptions {
   model?: string;
 }
 
-export interface InferTranscribeCommand {
+export interface InferTtsCommandOptions {
+  text: string;
+  outputPath: string;
+  voice?: string;
+  model?: string;
+}
+
+export interface InferCommand {
   command: 'openclaw';
   args: string[];
 }
+
+export type InferTranscribeCommand = InferCommand;
+export type InferTtsCommand = InferCommand;
 
 export interface OpenClawInferExecRequest {
   command: string;
@@ -40,6 +50,12 @@ interface InferTranscriptEnvelope {
   outputs?: Array<{ text?: unknown }>;
 }
 
+interface InferTtsEnvelope {
+  ok?: boolean;
+  error?: unknown;
+  outputs?: Array<{ path?: unknown }>;
+}
+
 export class OpenClawInferError extends Error {
   readonly code = 'openclaw_infer_stt_failed';
   readonly stderr?: string;
@@ -56,6 +72,23 @@ export function buildInferTranscribeCommand(
 ): InferTranscribeCommand {
   const args = ['infer', 'audio', 'transcribe', '--file', opts.filePath, '--json'];
   if (opts.language) args.push('--language', opts.language);
+  if (opts.model) args.push('--model', opts.model);
+  return { command: 'openclaw', args };
+}
+
+export function buildInferTtsCommand(opts: InferTtsCommandOptions): InferTtsCommand {
+  const args = [
+    'infer',
+    'tts',
+    'convert',
+    '--text',
+    opts.text,
+    '--output',
+    opts.outputPath,
+    '--json',
+    '--local',
+  ];
+  if (opts.voice) args.push('--voice', opts.voice);
   if (opts.model) args.push('--model', opts.model);
   return { command: 'openclaw', args };
 }
@@ -81,6 +114,25 @@ export function parseInferTranscript(stdout: string): string {
   return text;
 }
 
+export function parseInferTtsOutput(stdout: string): void {
+  let parsed: InferTtsEnvelope;
+  try {
+    parsed = JSON.parse(stdout) as InferTtsEnvelope;
+  } catch {
+    throw new Error('Invalid OpenClaw infer JSON');
+  }
+
+  if (parsed.ok === false) {
+    const detail = typeof parsed.error === 'string' ? `: ${parsed.error}` : '';
+    throw new Error(`OpenClaw infer TTS failed${detail}`);
+  }
+
+  const path = parsed.outputs?.[0]?.path;
+  if (typeof path !== 'string' || path.length === 0) {
+    throw new Error('OpenClaw infer output missing TTS path');
+  }
+}
+
 export async function transcribeWithOpenClawInfer(
   opts: TranscribeWithOpenClawInferOptions,
 ): Promise<string> {
@@ -102,6 +154,37 @@ export async function transcribeWithOpenClawInfer(
       stderr,
       cause: error,
     });
+  }
+}
+
+export interface SynthesizeTtsWithOpenClawInferOptions {
+  text: string;
+  outputPath: string;
+  voice?: string;
+  model?: string;
+  signal?: AbortSignal;
+  exec?: OpenClawInferExec;
+}
+
+export async function synthesizeTtsWithOpenClawInfer(
+  opts: SynthesizeTtsWithOpenClawInferOptions,
+): Promise<void> {
+  const command = buildInferTtsCommand({
+    text: opts.text,
+    outputPath: opts.outputPath,
+    voice: opts.voice,
+    model: opts.model,
+  });
+  const runExec = opts.exec ?? execOpenClawInfer;
+
+  try {
+    const result = await runExec({ ...command, signal: opts.signal });
+    parseInferTtsOutput(result.stdout);
+  } catch (error) {
+    if (error instanceof OpenClawInferError) throw error;
+    const stderr = stderrFromError(error);
+    const detail = stderr ? `: ${stderr}` : errorMessage(error);
+    throw new Error(`openclaw_infer_tts_failed${detail}`, { cause: error });
   }
 }
 

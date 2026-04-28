@@ -30,8 +30,28 @@ const chatMocks = vi.hoisted(() => ({
   runChat: vi.fn(),
 }));
 
+const ttsMocks = vi.hoisted(() => {
+  function makeFakeTtsSession(this: unknown, opts: unknown, cb: unknown) {
+    const session: any = {
+      opts,
+      cb,
+      cancel: vi.fn(),
+    };
+    return session;
+  }
+
+  return {
+    inferTtsCtor: vi.fn(makeFakeTtsSession),
+  };
+});
+
 vi.mock('../daemon/src/inferSttSession.js', () => ({
   OpenClawInferSttSession: sttMocks.inferCtor,
+}));
+
+vi.mock('../daemon/src/ttsSession.js', () => ({
+  OpenClawInferTtsSession: ttsMocks.inferTtsCtor,
+  TTS_SAMPLE_RATE: 24000,
 }));
 
 vi.mock('../daemon/src/chatSession.js', () => ({
@@ -112,6 +132,13 @@ function sentJson(peer: { send: ReturnType<typeof vi.fn> }): unknown[] {
     .map(([payload]) => payload)
     .filter((payload): payload is string => typeof payload === 'string')
     .map((payload) => JSON.parse(payload));
+}
+
+function sentBinary(peer: { send: ReturnType<typeof vi.fn> }): Buffer[] {
+  return peer.send.mock.calls
+    .map(([payload]) => payload)
+    .filter((payload): payload is Uint8Array => payload instanceof Uint8Array)
+    .map((payload) => Buffer.from(payload));
 }
 
 describe('voice session state', () => {
@@ -195,6 +222,7 @@ describe('voice session state', () => {
 describe('voice session OpenClaw infer STT runtime', () => {
   beforeEach(() => {
     sttMocks.inferCtor.mockClear();
+    ttsMocks.inferTtsCtor.mockClear();
     chatMocks.runChat.mockReset();
     chatMocks.runChat.mockReturnValue(new Promise(() => {}));
   });
@@ -331,6 +359,62 @@ describe('voice session OpenClaw infer STT runtime', () => {
       expect.objectContaining({ deliver: true }),
     );
     expect(chatMocks.runChat).not.toHaveBeenCalledWith('chunk words', expect.anything());
+  });
+
+
+
+  it('uses OpenClaw infer TTS for the reply, emits tts.start/audio/tts.done, and resets the turn', async () => {
+    chatMocks.runChat.mockResolvedValue({ text: 'spoken reply' });
+    const { session, peer } = makeVoiceSession();
+
+    sendControl(session, { t: 'settings.update', settings: { voice: 'rex' } });
+    sendControl(session, { t: 'stt.start' });
+    await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+    const fakeStt = sttMocks.inferCtor.mock.results[0].value;
+
+    fakeStt.cb.onDone('hello');
+    await vi.waitFor(() => expect(ttsMocks.inferTtsCtor).toHaveBeenCalledTimes(1));
+    const fakeTts = ttsMocks.inferTtsCtor.mock.results[0].value;
+
+    expect(fakeTts.opts).toEqual({ text: 'spoken reply', voice: 'rex' });
+
+    fakeTts.cb.onOpen();
+    fakeTts.cb.onAudio(new Uint8Array([1, 2, 3, 4]));
+    fakeTts.cb.onDone();
+
+    expect(sentJson(peer)).toEqual([
+      { t: 'stt.done', text: 'hello' },
+      { t: 'reply.start', text: 'hello' },
+      { t: 'reply.done', text: 'spoken reply' },
+      { t: 'tts.start', sample_rate: 24000 },
+      { t: 'tts.done' },
+    ]);
+    expect(sentBinary(peer)).toEqual([Buffer.from([1, 2, 3, 4])]);
+    expect((session as unknown as { state: { turnInFlight: boolean } }).state.turnInFlight).toBe(false);
+  });
+
+  it('routes OpenClaw infer TTS failures through tts.error, not reply.error', async () => {
+    chatMocks.runChat.mockResolvedValue({ text: 'spoken reply' });
+    const { session, peer } = makeVoiceSession();
+
+    sendControl(session, { t: 'stt.start' });
+    await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+    const fakeStt = sttMocks.inferCtor.mock.results[0].value;
+
+    fakeStt.cb.onDone('hello');
+    await vi.waitFor(() => expect(ttsMocks.inferTtsCtor).toHaveBeenCalledTimes(1));
+    const fakeTts = ttsMocks.inferTtsCtor.mock.results[0].value;
+
+    fakeTts.cb.onError('openclaw_infer_tts_failed');
+
+    expect(sentJson(peer)).toEqual([
+      { t: 'stt.done', text: 'hello' },
+      { t: 'reply.start', text: 'hello' },
+      { t: 'reply.done', text: 'spoken reply' },
+      { t: 'tts.error', message: 'openclaw_infer_tts_failed' },
+    ]);
+    expect(sentJson(peer)).not.toContainEqual({ t: 'reply.error', message: 'openclaw_auth_unavailable' });
+    expect((session as unknown as { state: { turnInFlight: boolean } }).state.turnInFlight).toBe(false);
   });
 
   it('sends stt.error and resets the turn when OpenClaw infer STT fails', async () => {

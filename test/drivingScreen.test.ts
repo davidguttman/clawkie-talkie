@@ -47,10 +47,11 @@ describe('DrivingScreen hold music mute control', () => {
 });
 
 describe('DrivingScreen voice error labels', () => {
-  it('surfaces infer STT and reply auth failures with distinct labels', () => {
+  it('surfaces infer STT, infer TTS, and reply auth failures with distinct labels', () => {
     const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
 
     expect(source).toContain("if (code === 'openclaw_infer_stt_failed') return 'INFER ERROR");
+    expect(source).toContain("if (code === 'openclaw_infer_tts_failed') return 'TTS ERROR");
     expect(source).toContain("if (code === 'openclaw_auth_unavailable') return 'REPLY ERROR");
   });
 });

@@ -13,7 +13,7 @@
 // `?host=<uuid>` and joins the same room. simple-peer + @roamhq/wrtc
 // drive the WebRTC DataChannel; the daemon owns the full turn:
 // OpenClaw infer transcription on inbound mic PCM, xAI chat on the final
-// transcript, and xAI TTS on the reply, with resulting PCM16 audio streamed
+// transcript, and OpenClaw infer TTS on the reply, with resulting PCM16 audio streamed
 // back to the phone. The browser never holds an xAI key.
 
 import { parseArgs } from 'node:util';

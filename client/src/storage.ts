@@ -1,11 +1,11 @@
 // localStorage-backed settings persistence.
 //
-// Settings live on the device only. xAI API keys are held by the daemon
-// (from the repo-root `.env`), NOT the phone — the browser never sees
-// a key. Fields here are strictly UI/voice/export preferences.
+// Settings live on the device only. Reply upstream credentials are held by
+// the daemon (from the repo-root `.env`), NOT the phone — the browser never
+// sees a key. Fields here are strictly UI/voice/export preferences.
 
-// Voice ids supported by the xAI TTS daemon path. Keep this list in
-// sync with the daemon (`daemon/src/ttsSession.ts`).
+// Voice ids accepted by the daemon TTS path as OpenClaw infer voice hints.
+// Provider support may vary; unsupported hints fall back inside OpenClaw.
 export const VOICE_IDS = ['eve', 'ara', 'rex', 'sal', 'leo'] as const;
 export type VoiceId = (typeof VOICE_IDS)[number];
 

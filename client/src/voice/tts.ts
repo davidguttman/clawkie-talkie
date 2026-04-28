@@ -528,7 +528,7 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
       return;
     }
     if (msg.t === 'tts.error') {
-      const message = typeof msg.message === 'string' ? msg.message : 'xai_tts_error';
+      const message = typeof msg.message === 'string' ? msg.message : 'openclaw_infer_tts_failed';
       finish(message);
     }
   });

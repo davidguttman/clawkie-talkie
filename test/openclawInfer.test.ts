@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { pcm16ToWavBuffer } from '../daemon/src/audio';
 import {
   buildInferTranscribeCommand,
+  buildInferTtsCommand,
   parseInferTranscript,
+  parseInferTtsOutput,
+  synthesizeTtsWithOpenClawInfer,
   transcribeWithOpenClawInfer,
 } from '../daemon/src/openclawInfer';
 
@@ -53,6 +56,40 @@ describe('buildInferTranscribeCommand', () => {
   });
 });
 
+
+describe('buildInferTtsCommand', () => {
+  it('builds the default local OpenClaw infer TTS command', () => {
+    expect(buildInferTtsCommand({ text: 'hello', outputPath: '/tmp/reply.mp3' })).toEqual({
+      command: 'openclaw',
+      args: [
+        'infer',
+        'tts',
+        'convert',
+        '--text',
+        'hello',
+        '--output',
+        '/tmp/reply.mp3',
+        '--json',
+        '--local',
+      ],
+    });
+  });
+
+  it('appends voice and model only when provided', () => {
+    const command = buildInferTtsCommand({
+      text: 'hello',
+      outputPath: '/tmp/reply.mp3',
+      voice: 'rex',
+      model: 'configured/tts-provider',
+    });
+
+    expect(command.args).toContain('--voice');
+    expect(command.args).toContain('rex');
+    expect(command.args).toContain('--model');
+    expect(command.args).toContain('configured/tts-provider');
+  });
+});
+
 describe('parseInferTranscript', () => {
   it('extracts the first transcript text from the stable JSON envelope', () => {
     const stdout = JSON.stringify({
@@ -85,6 +122,28 @@ describe('parseInferTranscript', () => {
     expect(() =>
       parseInferTranscript(JSON.stringify({ ok: true, outputs: [{ text: null }] })),
     ).toThrow(/missing transcript text/i);
+  });
+});
+
+
+describe('parseInferTtsOutput', () => {
+  it('accepts the stable JSON envelope with an output path', () => {
+    expect(() =>
+      parseInferTtsOutput(JSON.stringify({ ok: true, outputs: [{ path: '/tmp/reply.mp3' }] })),
+    ).not.toThrow();
+  });
+
+  it('throws a clear error when infer reports ok false', () => {
+    expect(() => parseInferTtsOutput(JSON.stringify({ ok: false, error: 'provider failed' }))).toThrow(
+      /OpenClaw infer TTS failed/i,
+    );
+  });
+
+  it('throws a clear error for invalid JSON or missing path', () => {
+    expect(() => parseInferTtsOutput('not json')).toThrow(/Invalid OpenClaw infer JSON/i);
+    expect(() => parseInferTtsOutput(JSON.stringify({ ok: true, outputs: [] }))).toThrow(
+      /missing TTS path/i,
+    );
   });
 });
 
@@ -184,5 +243,44 @@ describe('transcribeWithOpenClawInfer', () => {
     });
 
     expect(calls[0]?.signal).toBe(controller.signal);
+  });
+});
+
+
+describe('synthesizeTtsWithOpenClawInfer', () => {
+  it('calls the local OpenClaw infer TTS command and parses the result', async () => {
+    const calls: Array<{ command: string; args: string[]; signal?: AbortSignal }> = [];
+
+    await synthesizeTtsWithOpenClawInfer({
+      text: 'reply text',
+      outputPath: '/tmp/reply.mp3',
+      voice: 'rex',
+      exec: async (request) => {
+        calls.push(request);
+        return {
+          stdout: JSON.stringify({ ok: true, outputs: [{ path: '/tmp/reply.mp3' }] }),
+          stderr: '',
+        };
+      },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject(
+      buildInferTtsCommand({ text: 'reply text', outputPath: '/tmp/reply.mp3', voice: 'rex' }),
+    );
+  });
+
+  it('maps exec failures to the stable TTS infer error prefix', async () => {
+    const failure = Object.assign(new Error('process failed'), { stderr: 'provider exploded' });
+
+    await expect(
+      synthesizeTtsWithOpenClawInfer({
+        text: 'reply text',
+        outputPath: '/tmp/reply.mp3',
+        exec: async () => {
+          throw failure;
+        },
+      }),
+    ).rejects.toThrow(/openclaw_infer_tts_failed/);
   });
 });

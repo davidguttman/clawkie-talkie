@@ -13,7 +13,7 @@ function clamp16(value: number): number {
 }
 
 // Linear-interpolation resampler over PCM16LE byte buffers. Suitable
-// for upsampling 24 kHz xAI TTS to 48 kHz WebRTC media.
+// for upsampling 24 kHz infer TTS to 48 kHz WebRTC media.
 export function resamplePcm(
   input: Buffer,
   inputSampleRate: number,

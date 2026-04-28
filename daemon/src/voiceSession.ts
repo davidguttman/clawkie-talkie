@@ -14,7 +14,7 @@
 import wrtc from '@roamhq/wrtc';
 import SimplePeer from 'simple-peer';
 import { runChat, ChatError, type DeliveryTarget as ChatDeliveryTarget } from './chatSession.js';
-import { XaiTtsSession, TTS_SAMPLE_RATE } from './ttsSession.js';
+import { OpenClawInferTtsSession, TTS_SAMPLE_RATE, type TtsSessionCallbacks, type TtsSessionOptions } from './ttsSession.js';
 import { daemonToPhone, type PhoneToDaemon } from './protocol.js';
 import { OpenClawInferSttSession, type OpenClawInferSttSessionOptions } from './inferSttSession.js';
 import type { SttSessionCallbacks } from './sttTypes.js';
@@ -115,6 +115,15 @@ export type SttSessionFactory = (
 
 export type SpeechDetectorFactory = (opts: WasmVadOptions) => Promise<SpeechDetector>;
 
+export interface TtsSessionLike {
+  cancel(): void;
+}
+
+export type TtsSessionFactory = (
+  opts: TtsSessionOptions,
+  cb: TtsSessionCallbacks,
+) => TtsSessionLike;
+
 export interface VoiceSessionRuntimeOptions {
   apiKey: string;
   sttLanguage?: string;
@@ -127,6 +136,7 @@ export interface VoiceSessionRuntimeOptions {
   ttsVoice?: string;
   sttSessionFactory?: SttSessionFactory;
   createSpeechDetector?: SpeechDetectorFactory;
+  ttsSessionFactory?: TtsSessionFactory;
   onClose: (roomId: string) => void;
 }
 
@@ -142,7 +152,7 @@ export class VoiceSession {
   private connected = false;
   private connectionTimeout: NodeJS.Timeout | null = null;
   private stt: SttSessionLike | null = null;
-  private tts: XaiTtsSession | null = null;
+  private tts: TtsSessionLike | null = null;
   private chatAbort: AbortController | null = null;
   private audioSource: AudioSourceLike | null = null;
   private outboundStream: unknown = null;
@@ -742,8 +752,9 @@ export class VoiceSession {
       this.audioPumpAwaitingDone = false;
 
       const useTrack = !!this.audioSource;
-      this.tts = new XaiTtsSession(
-        { apiKey: this.opts.apiKey, text, voice: this.ttsVoice },
+      const createTts = this.opts.ttsSessionFactory ?? ((opts, cb) => new OpenClawInferTtsSession(opts, cb));
+      this.tts = createTts(
+        { text, voice: this.ttsVoice },
         {
           onOpen: () => {
             this.send(daemonToPhone.ttsStart(useTrack ? WEBRTC_SAMPLE_RATE : TTS_SAMPLE_RATE));
@@ -785,8 +796,7 @@ export class VoiceSession {
         },
       );
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'xai_tts_open_failed';
-      this.send(daemonToPhone.ttsError(errorMsg));
+      this.send(daemonToPhone.ttsError('openclaw_infer_tts_failed'));
       this.state.resetTurn();
     }
   }

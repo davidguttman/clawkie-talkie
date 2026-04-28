@@ -979,9 +979,9 @@ function errorLabelFor(code: string): string {
   if (code === 'audio_unsupported') return 'AUDIO PLAYBACK UNSUPPORTED ON THIS BROWSER';
   // Daemon-originated codes from transcription / chat / TTS upstreams.
   if (code === 'openclaw_infer_stt_failed') return 'INFER ERROR · OPENCLAW INFER STT FAILED';
+  if (code === 'openclaw_infer_tts_failed') return 'TTS ERROR · OPENCLAW INFER TTS FAILED';
   if (code === 'openclaw_auth_unavailable') return 'REPLY ERROR · OPENCLAW AUTH UNAVAILABLE';
   if (code.startsWith('xai_http_')) return `DAEMON · XAI ${code.replace('xai_http_', 'HTTP ')}`;
-  if (code.startsWith('xai_tts_')) return `DAEMON · XAI TTS · ${code.replace('xai_tts_', '')}`;
   if (code === 'xai_empty_reply') return 'DAEMON · XAI EMPTY REPLY';
   return `VOICE ERROR · ${code}`;
 }
