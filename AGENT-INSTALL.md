@@ -194,11 +194,19 @@ Invariant: the daemon `.env` `DAEMON_PEER_ID` must equal the installed skill's `
 
 Before claiming success:
 
+A robust check should parse the configured host line instead of grepping the entire file for placeholder words. For example:
+
+```bash
+configured_host=$(awk -F'= ' '/^- CLAWKIE_DAEMON_HOST_ID = / {gsub(/`/, "", $2); print $2; exit}' "$CLAWKIE_SKILL_DIR/SKILL.md")
+test "$configured_host" = "$DAEMON_PEER_ID"
+```
+
 1. Confirm the installed skill exists at the runtime path.
-2. Confirm the installed skill no longer contains `<CONFIGURE_DAEMON_PEER_ID>`.
-3. Confirm the installed skill says `INSTALLED = true`.
-4. Confirm the installed skill's `CLAWKIE_DAEMON_HOST_ID` matches the daemon `.env` `DAEMON_PEER_ID`.
-5. Construct a dry-run handoff URL using the same algorithm as the skill:
+2. Confirm the installed skill says `INSTALLED = true`.
+3. Confirm the installed skill's **configuration bullet** for `CLAWKIE_DAEMON_HOST_ID` was patched from the repo placeholder to the daemon `.env` `DAEMON_PEER_ID`. Do not fail the install just because explanatory prose elsewhere mentions placeholders.
+4. Confirm no active config line remains exactly `CLAWKIE_DAEMON_HOST_ID = `<CONFIGURE_DAEMON_PEER_ID>``.
+5. Confirm the installed skill's `CLAWKIE_DAEMON_HOST_ID` matches the daemon `.env` `DAEMON_PEER_ID`.
+6. Construct a dry-run handoff URL using the same algorithm as the skill:
 
 ```js
 const params = new URLSearchParams();
