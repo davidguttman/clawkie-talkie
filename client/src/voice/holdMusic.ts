@@ -31,8 +31,68 @@ export function getActiveHoldMusicAnalyser(): AnalyserNode | null {
   return activeHoldMusicAnalyser;
 }
 
+const HOLD_MUSIC_MUTE_STORAGE_KEY = 'clawkie.holdMusic.muted.v1';
+
+let holdMusicMuted: boolean | null = null;
+const muteListeners = new Set<(muted: boolean) => void>();
+const activeMuteTargets = new Set<HoldMusicMuteTarget>();
+
+interface HoldMusicMuteTarget {
+  audio: HTMLAudioElement;
+  musicGain: GainNode;
+  noiseGain: GainNode;
+}
+
+function readMuteFromStorage(): boolean {
+  if (typeof localStorage === 'undefined') return false;
+  try {
+    return localStorage.getItem(HOLD_MUSIC_MUTE_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeMuteToStorage(muted: boolean): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    if (muted) localStorage.setItem(HOLD_MUSIC_MUTE_STORAGE_KEY, '1');
+    else localStorage.removeItem(HOLD_MUSIC_MUTE_STORAGE_KEY);
+  } catch {
+    // storage disabled — preference reverts to default on reload
+  }
+}
+
+export function getHoldMusicMuted(): boolean {
+  if (holdMusicMuted === null) holdMusicMuted = readMuteFromStorage();
+  return holdMusicMuted;
+}
+
+export function setHoldMusicMuted(muted: boolean): void {
+  const next = !!muted;
+  if (holdMusicMuted === null) holdMusicMuted = readMuteFromStorage();
+  if (holdMusicMuted === next) return;
+  holdMusicMuted = next;
+  writeMuteToStorage(next);
+  for (const target of activeMuteTargets) applyHoldMusicMute(target, next);
+  for (const listener of muteListeners) {
+    try { listener(next); } catch { /* listener errors must not break audio */ }
+  }
+}
+
+export function subscribeHoldMusicMuted(listener: (muted: boolean) => void): () => void {
+  muteListeners.add(listener);
+  return () => { muteListeners.delete(listener); };
+}
+
+function applyHoldMusicMute(target: HoldMusicMuteTarget, muted: boolean): void {
+  target.audio.muted = muted;
+  target.musicGain.gain.value = muted ? 0 : MUSIC_GAIN;
+  target.noiseGain.gain.value = muted ? 0 : NOISE_GAIN;
+}
+
 interface HoldMusicSession {
   audio: HTMLAudioElement;
+  muteTarget: HoldMusicMuteTarget;
   source: MediaElementAudioSourceNode;
   musicHighpass: BiquadFilterNode;
   musicBitcrusher: AudioNode;
@@ -139,6 +199,8 @@ export class HoldMusicController {
       noiseMidPeak.gain.value = MUSIC_MIDRANGE_GAIN_DB;
 
       noiseGain.gain.value = NOISE_GAIN;
+      const muteTarget = { audio, musicGain, noiseGain };
+      applyHoldMusicMute(muteTarget, getHoldMusicMuted());
 
       source.connect(musicHighpass);
       musicHighpass.connect(musicBitcrusher);
@@ -181,6 +243,7 @@ export class HoldMusicController {
 
       session = {
         audio,
+        muteTarget,
         source,
         musicHighpass,
         musicBitcrusher,
@@ -206,6 +269,7 @@ export class HoldMusicController {
         },
       };
       this.session = session;
+      activeMuteTargets.add(muteTarget);
       activeHoldMusicAnalyser = musicAnalyser;
 
       if (hasKnownDuration(audio)) {
@@ -228,6 +292,7 @@ export class HoldMusicController {
     if (session.musicAnalyser && activeHoldMusicAnalyser === session.musicAnalyser) {
       activeHoldMusicAnalyser = null;
     }
+    activeMuteTargets.delete(session.muteTarget);
 
     try {
       session.audio.removeEventListener('loadedmetadata', session.onMetadata);
