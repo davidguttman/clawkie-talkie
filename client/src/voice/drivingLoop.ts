@@ -24,6 +24,7 @@ import {
   BandNormalizer,
   mergeBandIntensities,
   pcm16ToBandIntensities,
+  smoothBandIntensities,
 } from './audioBands';
 import { getActiveMicAnalyser } from './audioSource';
 import {
@@ -55,6 +56,7 @@ const WAVE_BARS = 28;
 const UNIQUE_WAVE_BANDS = WAVE_BARS / 2;
 const IDLE_INTENSITIES = Array(WAVE_BARS).fill(0.12);
 const QUIET_INTENSITIES = Array(WAVE_BARS).fill(0.08);
+const LIGHT_SMOOTHING = { attack: 0.85, release: 0.6 } as const;
 
 export interface AnalyserScratch {
   frequency: Uint8Array<ArrayBuffer>;
@@ -261,8 +263,9 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     const analyserScratch = new WeakMap<AnalyserNode, AnalyserScratch>();
     const tick = () => {
       const target = readTargetBands(ctx.state, micBandsRef.current, ttsRef.current, analyserScratch);
-      renderedBandsRef.current = target;
-      setIntensities(target);
+      const smoothed = smoothBandIntensities(renderedBandsRef.current, target, LIGHT_SMOOTHING);
+      renderedBandsRef.current = smoothed;
+      setIntensities(smoothed);
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -487,8 +490,11 @@ function readAnalyserBands(
   );
 }
 
+// Mirrors low-to-high `uniqueBands` so the highest frequencies render on the
+// outside edges and the lowest frequencies render at the center.
+// e.g. [low, mid, high] => [high, mid, low, low, mid, high].
 export function mirrorCenterOutBands(uniqueBands: readonly number[]): number[] {
-  return [...uniqueBands, ...uniqueBands.slice().reverse()];
+  return [...uniqueBands.slice().reverse(), ...uniqueBands];
 }
 
 export function displayedCaptionText(ctx: DrivingContext, liveText: string): string {

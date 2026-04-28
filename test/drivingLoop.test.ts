@@ -58,10 +58,10 @@ beforeEach(() => {
 });
 
 describe('driving loop visualization band selection', () => {
-  it('mirrors unique low-to-high bands around the center', async () => {
+  it('mirrors unique low-to-high bands so highs land outside and lows land at the center', async () => {
     const { mirrorCenterOutBands } = await import('../client/src/voice/drivingLoop');
 
-    expect(mirrorCenterOutBands([0.1, 0.25, 0.8])).toEqual([0.1, 0.25, 0.8, 0.8, 0.25, 0.1]);
+    expect(mirrorCenterOutBands([0.1, 0.25, 0.8])).toEqual([0.8, 0.25, 0.1, 0.1, 0.25, 0.8]);
   });
 
   it('samples the live mic analyser on every recording tick', async () => {
@@ -104,7 +104,8 @@ describe('driving loop thinking visualizer source selection', () => {
     expect(bands).toHaveLength(28);
     expect(bands.slice(0, 14)).toEqual(bands.slice(14).reverse());
     expect(bands[13]).toBe(bands[14]);
-    expect(bands[13]).toBeGreaterThan(bands[0]);
+    // High-bin signal: highs render on the outside edges, so center sits lower.
+    expect(bands[13]).toBeLessThan(bands[0]);
   });
 
   it('does not include the hold music analyser when state is ai', async () => {
@@ -162,11 +163,14 @@ describe('driving loop hold music state gates', () => {
 });
 
 describe('driving loop visualizer frame rendering', () => {
-  it('renders sequential recording frames directly without interpolation', () => {
+  it('applies a light time-smoothing pass before rendering frames', () => {
     const source = readFileSync(resolve(root, 'client/src/voice/drivingLoop.ts'), 'utf8');
 
-    expect(source).not.toContain('smoothBandIntensities');
-    expect(source).toContain('renderedBandsRef.current = target;');
-    expect(source).toContain('setIntensities(target);');
+    expect(source).toContain('smoothBandIntensities');
+    expect(source).toContain('LIGHT_SMOOTHING');
+    expect(source).toContain('attack: 0.85');
+    expect(source).toContain('release: 0.6');
+    expect(source).not.toContain('renderedBandsRef.current = target;');
+    expect(source).not.toContain('setIntensities(target);');
   });
 });
