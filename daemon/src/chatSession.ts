@@ -204,11 +204,38 @@ async function runOpenClawTurn(opts: {
       `openclaw ${args.map(a => JSON.stringify(a)).join(' ')}`,
       { env, signal: opts.signal },
     );
-    return stdout.trim();
+    const reply = extractOpenClawReplyText(stdout);
+    if (!reply && hasOpenClawMediaDirective(stdout)) {
+      throw new ChatError('openclaw_media_reply_unavailable', 'openclaw_media_reply_unavailable');
+    }
+    return reply;
   } catch (err: unknown) {
+    if (err instanceof ChatError) throw err;
     if (opts.signal?.aborted) throw new ChatError('aborted', 'aborted');
     throw toOpenClawChatError(err, 'openclaw_failed');
   }
+}
+
+export function extractOpenClawReplyText(stdout: string): string {
+  return stdout
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .filter((line) => !isOpenClawMediaDirectiveLine(line))
+    .join('\n')
+    .trim();
+}
+
+function hasOpenClawMediaDirective(stdout: string): boolean {
+  return stdout
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .some(isOpenClawMediaDirectiveLine);
+}
+
+function isOpenClawMediaDirectiveLine(line: string): boolean {
+  return line.trim().startsWith('MEDIA:');
 }
 
 function isSessionOnlyWebchatTurn(sessionId: string, delivery?: DeliveryTarget): boolean {

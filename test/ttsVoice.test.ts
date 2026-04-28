@@ -1,7 +1,7 @@
-// Pins that the daemon TTS session forwards the configured voice id
-// onto the OpenClaw infer TTS command, and that VoiceSession captures
+// Pins that the daemon TTS session forwards only OpenClaw-supported
+// voice hints onto the infer TTS command, and that VoiceSession captures
 // voice settings from rendezvous + settings.update so the next TTS turn
-// uses them.
+// can use them when supported.
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -18,11 +18,11 @@ vi.mock('../daemon/src/signal.js', () => ({
 }));
 
 describe('OpenClaw infer TTS voice forwarding', () => {
-  it('passes the requested voice id to the infer command', async () => {
+  it('passes a supported OpenClaw voice id to the infer command', async () => {
     const { buildInferTtsCommand } = await import('../daemon/src/openclawInfer');
 
     expect(
-      buildInferTtsCommand({ text: 'hello there', outputPath: '/tmp/reply.mp3', voice: 'rex' }),
+      buildInferTtsCommand({ text: 'hello there', outputPath: '/tmp/reply.mp3', voice: 'nova' }),
     ).toEqual({
       command: 'openclaw',
       args: [
@@ -36,7 +36,7 @@ describe('OpenClaw infer TTS voice forwarding', () => {
         '--json',
         '--local',
         '--voice',
-        'rex',
+        'nova',
       ],
     });
   });
@@ -45,6 +45,27 @@ describe('OpenClaw infer TTS voice forwarding', () => {
     const { buildInferTtsCommand } = await import('../daemon/src/openclawInfer');
 
     expect(buildInferTtsCommand({ text: 'hello there', outputPath: '/tmp/reply.mp3' })).toEqual({
+      command: 'openclaw',
+      args: [
+        'infer',
+        'tts',
+        'convert',
+        '--text',
+        'hello there',
+        '--output',
+        '/tmp/reply.mp3',
+        '--json',
+        '--local',
+      ],
+    });
+  });
+
+  it('uses provider defaults instead of forwarding legacy xAI voice ids', async () => {
+    const { buildInferTtsCommand } = await import('../daemon/src/openclawInfer');
+
+    expect(
+      buildInferTtsCommand({ text: 'hello there', outputPath: '/tmp/reply.mp3', voice: 'eve' }),
+    ).toEqual({
       command: 'openclaw',
       args: [
         'infer',

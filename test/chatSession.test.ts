@@ -13,6 +13,7 @@ vi.mock('node:child_process', () => ({ exec: execMock }));
 import {
   buildAgentTurnMessage,
   ChatError,
+  extractOpenClawReplyText,
   classifyOpenClawError,
   deriveDiscordMessageTarget,
   quoteTranscript,
@@ -172,6 +173,36 @@ describe('runChat OpenClaw CLI integration', () => {
       .filter((cmd) => cmd.includes('openclaw "message" "send"'));
     // No transcript (no Discord target) and no explicit reply send.
     expect(sendCommands).toHaveLength(0);
+  });
+
+  it('strips OpenClaw MEDIA directives from mixed agent stdout before TTS', async () => {
+    execMock.mockResolvedValue({
+      stdout: 'spoken reply\nMEDIA:/tmp/openclaw/tts-test/voice.opus\n',
+      stderr: '',
+    });
+
+    const result = await runChat('hi', {
+      apiKey: 'test-key',
+      sessionId: 'session-1',
+      deliver: true,
+    });
+
+    expect(result.text).toBe('spoken reply');
+  });
+
+  it('surfaces media-only OpenClaw replies instead of sending MEDIA paths to TTS', async () => {
+    execMock.mockResolvedValue({
+      stdout: 'MEDIA:/tmp/openclaw/tts-test/voice.opus\n',
+      stderr: '',
+    });
+
+    await expect(
+      runChat('hi', {
+        apiKey: 'test-key',
+        sessionId: 'session-1',
+        deliver: true,
+      }),
+    ).rejects.toMatchObject({ code: 'openclaw_media_reply_unavailable' });
   });
 
   it('resolves OpenClaw session keys to stored session ids before agent runs', async () => {
@@ -401,6 +432,16 @@ describe('runChat with explicit delivery target', () => {
         delivery: { channel: 'discord', target: 'channel:thread-1' },
       }),
     ).rejects.toMatchObject({ code: 'openclaw_gateway_unavailable' });
+  });
+});
+
+describe('extractOpenClawReplyText', () => {
+  it('removes MEDIA lines and preserves spoken text', () => {
+    expect(extractOpenClawReplyText('hello\nMEDIA:/tmp/openclaw/voice.opus\nworld')).toBe('hello\nworld');
+  });
+
+  it('returns an empty string for media-only stdout', () => {
+    expect(extractOpenClawReplyText('  MEDIA:/tmp/openclaw/voice.opus  \n')).toBe('');
   });
 });
 
