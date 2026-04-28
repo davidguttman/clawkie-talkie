@@ -3,7 +3,7 @@
 // Splits "where does PCM come from" from "how does it get sent to the
 // daemon". `sttDaemon.ts` drives a single AudioSource through the same
 // real browser flow (RtcContext → startDaemonSTT → DataChannel → daemon
-// → xAI STT → UI liveText). Production default is the mic. A
+// → OpenClaw infer STT → UI transcript). Production default is the mic. A
 // deterministic source backed by a fetchable PCM/WAV fixture can replace
 // it **without code edits** by appending `?audio-fixture=<url>` to the
 // join URL. Selection happens in `selectAudioSource` and is the only
@@ -15,7 +15,7 @@ export interface AudioSource {
   // (so leading audio isn't lost during session setup). Fixture: fetch
   // and decode but do NOT emit yet — emission is deferred to `resume()`
   // so deterministic audio is paced in real time from stt.ready, with
-  // no startup burst into the xAI upstream.
+  // no startup burst into the daemon STT session.
   start(onFrame: (pcm: ArrayBuffer) => void): Promise<void>;
   // Signals that the STT session is ready. Fixture sources start
   // emitting here; mic sources ignore (they're already emitting).
@@ -284,12 +284,10 @@ export function createFixtureAudioSource(url: string): AudioSource {
         if (stopped) return;
         if (offset >= data.byteLength) {
           // Fixture exhausted. Stop emitting — DO NOT fill the tail
-          // with silence and DO NOT loop. Supervisor verified against
-          // xAI directly that a silence tail after real speech causes
-          // xAI to emit empty `transcript.partial` events that clobber
-          // the live transcript and then finalize `transcript.done`
-          // with text="". The session stays open; the driver's
-          // stop() / stt.audio.done is what finalizes with real text.
+          // with silence and DO NOT loop. Silence tails after real
+          // fixture speech have caused upstream STT to finalize empty
+          // transcripts. The session stays open; the driver's stop() /
+          // stt.audio.done is what finalizes with real text.
           if (interval) {
             clearInterval(interval);
             interval = null;
@@ -301,7 +299,7 @@ export function createFixtureAudioSource(url: string): AudioSource {
         offset = end;
       };
       // setInterval's first tick is ~100 ms out; kick the first frame
-      // immediately so xAI starts receiving audio right after stt.ready.
+      // immediately so the daemon starts receiving audio right after stt.ready.
       emitOne();
       interval = setInterval(emitOne, FIXTURE_FRAME_MS);
     },
