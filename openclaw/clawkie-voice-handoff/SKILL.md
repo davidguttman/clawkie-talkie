@@ -72,6 +72,14 @@ agent:main:slack:channel:C123:thread:1710000000.000100
 agent:codex:acp:binding:discord:default:feedface
 ```
 
+For internal webchat sessions, the base key is allowed when that is the only trusted session value visible:
+
+```txt
+agent:main:webchat
+```
+
+The Clawkie daemon first tries an exact OpenClaw session-key match. If no exact match exists for `agent:main:webchat`, it resolves to the single active concrete webchat key with prefix `agent:main:webchat:`. If zero or multiple concrete webchat sessions are active, the daemon fails instead of guessing. Do not use this fallback for Discord or other external channels.
+
 If no exact current session key/id is visible, do not invent one. For ordinary main group/channel sessions only, deriving from OpenClaw’s session-key convention is acceptable when all parts are certain:
 
 ```txt

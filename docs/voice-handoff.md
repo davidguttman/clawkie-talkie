@@ -62,7 +62,12 @@ Required handoff args (accepted from hash fragment, then query string):
 
 - `host` — daemon rendezvous/control room id
 - `session` — OpenClaw session key/id, passed later to
-  `openclaw agent --session-id`
+  `openclaw agent --session-id`. For webchat-only handoffs, `agent:main:webchat`
+  is accepted as a base key: the daemon resolves it to the single active
+  concrete session with key prefix `agent:main:webchat:` after checking for an
+  exact match. Zero matches fail as `openclaw_session_not_found`; multiple
+  matches fail as `openclaw_session_ambiguous`. This fallback is intentionally
+  not used for Discord or other external channels.
 - `channel` — source channel/surface. For external delivery this is passed later to
   `openclaw message send --channel`.
 - `target` — optional OpenClaw delivery target. For external delivery, this is
