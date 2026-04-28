@@ -11,7 +11,12 @@
 
 export interface DeliveryTarget {
   channel: string;
-  target: string;
+  target?: string;
+}
+
+export interface RendezvousJoinInput {
+  sessionId: string;
+  delivery?: DeliveryTarget;
 }
 
 export interface VoiceSettings {
@@ -22,7 +27,7 @@ export type PhoneToDaemon =
   | {
       t: 'rendezvous.join';
       sessionId: string;
-      delivery: DeliveryTarget;
+      delivery?: DeliveryTarget;
       settings?: VoiceSettings;
     }
   | { t: 'settings.update'; settings: VoiceSettings }
@@ -48,14 +53,10 @@ export type DaemonToPhone =
   | { t: 'tts.error'; message: string };
 
 export const phoneToDaemon = {
-  rendezvousJoin: (input: {
-    sessionId: string;
-    delivery: DeliveryTarget;
-    settings?: VoiceSettings;
-  }): PhoneToDaemon => ({
+  rendezvousJoin: (input: RendezvousJoinInput & { settings?: VoiceSettings }): PhoneToDaemon => ({
     t: 'rendezvous.join',
     sessionId: input.sessionId,
-    delivery: input.delivery,
+    ...(input.delivery ? { delivery: input.delivery } : {}),
     ...(input.settings ? { settings: input.settings } : {}),
   }),
   settingsUpdate: (settings: VoiceSettings): PhoneToDaemon => ({

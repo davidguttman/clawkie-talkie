@@ -1,7 +1,7 @@
 // VoiceSession state + runtime.
 //
 // Pure state core (`createVoiceSessionState`) is the part Vitest covers
-// — it captures the room/session/delivery binding for one active voice
+// — it captures the room/session/optional-delivery binding for one active voice
 // session and tracks the in-flight-turn / closed flags.
 //
 // The runtime class (`VoiceSession`) owns the live WebRTC peer, STT,
@@ -13,9 +13,9 @@
 
 import wrtc from '@roamhq/wrtc';
 import SimplePeer from 'simple-peer';
-import { runChat, ChatError } from './chatSession.js';
+import { runChat, ChatError, type DeliveryTarget as ChatDeliveryTarget } from './chatSession.js';
 import { XaiTtsSession, TTS_SAMPLE_RATE } from './ttsSession.js';
-import { daemonToPhone, type DeliveryTarget, type PhoneToDaemon } from './protocol.js';
+import { daemonToPhone, type PhoneToDaemon } from './protocol.js';
 import { XaiSttSession } from './sttSession.js';
 import { SignalClient, type SignalData } from './signal.js';
 import { classifySignal, decideForwardToLivePeer, decideIncomingSignal } from './signalKind.js';
@@ -31,7 +31,7 @@ import {
 export interface VoiceSessionConfig {
   roomId: string;
   sessionId: string;
-  delivery: DeliveryTarget;
+  delivery?: ChatDeliveryTarget;
 }
 
 export interface VoiceSessionState {
@@ -41,7 +41,7 @@ export interface VoiceSessionState {
   close(): void;
   readonly turnInFlight: boolean;
   readonly closed: boolean;
-  chatTarget(): { sessionId: string; delivery: DeliveryTarget };
+  chatTarget(): { sessionId: string; delivery?: ChatDeliveryTarget };
 }
 
 export function createVoiceSessionState(config: VoiceSessionConfig): VoiceSessionState {
@@ -107,7 +107,7 @@ export interface VoiceSessionRuntimeOptions {
   hostPeerId: string;
   roomId: string;
   sessionId: string;
-  delivery: DeliveryTarget;
+  delivery?: ChatDeliveryTarget;
   ttsVoice?: string;
   onClose: (roomId: string) => void;
 }

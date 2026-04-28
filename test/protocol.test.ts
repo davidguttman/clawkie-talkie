@@ -11,6 +11,7 @@ import {
 import {
   phoneToDaemon as phoneDaemon,
   daemonToPhone as daemonDaemon,
+  validateRendezvousDelivery,
 } from '../daemon/src/protocol';
 
 describe('phone → daemon factories', () => {
@@ -19,6 +20,16 @@ describe('phone → daemon factories', () => {
     expect(phoneClient.sttAudioDone()).toEqual({ t: 'stt.audio.done' });
     expect(phoneClient.sttCancel()).toEqual({ t: 'stt.cancel' });
     expect(phoneClient.replyCancel()).toEqual({ t: 'reply.cancel' });
+  });
+
+  it('emits a session-only rendezvous join without delivery', () => {
+    expect(phoneClient.rendezvousJoin({ sessionId: 'session-1' })).toEqual({
+      t: 'rendezvous.join',
+      sessionId: 'session-1',
+    });
+    expect(phoneClient.rendezvousJoin({ sessionId: 'session-1' })).toEqual(
+      phoneDaemon.rendezvousJoin({ sessionId: 'session-1' }),
+    );
   });
 
   it('emits a generic rendezvous join with delivery', () => {
@@ -75,6 +86,35 @@ describe('phone → daemon factories', () => {
         delivery: { channel: 'discord', target: 'channel:t' },
       }),
     );
+  });
+});
+
+
+describe('rendezvous delivery validation', () => {
+  it('accepts absent delivery as session-only', () => {
+    expect(validateRendezvousDelivery(undefined)).toEqual({ ok: true });
+  });
+
+  it('accepts webchat without an external target', () => {
+    expect(validateRendezvousDelivery({ channel: 'webchat' })).toEqual({ ok: true });
+  });
+
+  it('accepts complete external delivery and trims it', () => {
+    expect(validateRendezvousDelivery({ channel: ' discord ', target: ' channel:t ' })).toEqual({
+      ok: true,
+      delivery: { channel: 'discord', target: 'channel:t' },
+    });
+  });
+
+  it('rejects partial external delivery', () => {
+    expect(validateRendezvousDelivery({ channel: 'discord' })).toEqual({
+      ok: false,
+      message: 'invalid_delivery',
+    });
+    expect(validateRendezvousDelivery({ target: 'channel:t' })).toEqual({
+      ok: false,
+      message: 'invalid_delivery',
+    });
   });
 });
 

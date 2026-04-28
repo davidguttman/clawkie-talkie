@@ -11,7 +11,12 @@
 
 export interface DeliveryTarget {
   channel: string;
-  target: string;
+  target?: string;
+}
+
+export interface RendezvousJoinInput {
+  sessionId: string;
+  delivery?: DeliveryTarget;
 }
 
 export interface VoiceSettings {
@@ -22,7 +27,7 @@ export type PhoneToDaemon =
   | {
       t: 'rendezvous.join';
       sessionId: string;
-      delivery: DeliveryTarget;
+      delivery?: DeliveryTarget;
       settings?: VoiceSettings;
     }
   | { t: 'settings.update'; settings: VoiceSettings }
@@ -48,14 +53,10 @@ export type DaemonToPhone =
   | { t: 'tts.error'; message: string };
 
 export const phoneToDaemon = {
-  rendezvousJoin: (input: {
-    sessionId: string;
-    delivery: DeliveryTarget;
-    settings?: VoiceSettings;
-  }): PhoneToDaemon => ({
+  rendezvousJoin: (input: RendezvousJoinInput & { settings?: VoiceSettings }): PhoneToDaemon => ({
     t: 'rendezvous.join',
     sessionId: input.sessionId,
-    delivery: input.delivery,
+    ...(input.delivery ? { delivery: input.delivery } : {}),
     ...(input.settings ? { settings: input.settings } : {}),
   }),
   settingsUpdate: (settings: VoiceSettings): PhoneToDaemon => ({
@@ -67,6 +68,26 @@ export const phoneToDaemon = {
   sttCancel: (): PhoneToDaemon => ({ t: 'stt.cancel' }),
   replyCancel: (): PhoneToDaemon => ({ t: 'reply.cancel' }),
 };
+
+export interface MirroredDeliveryTarget {
+  channel: string;
+  target: string;
+}
+
+export type RendezvousDeliveryValidation =
+  | { ok: true; delivery?: MirroredDeliveryTarget }
+  | { ok: false; message: 'invalid_delivery' };
+
+export function validateRendezvousDelivery(
+  delivery: Partial<DeliveryTarget> | null | undefined,
+): RendezvousDeliveryValidation {
+  if (!delivery) return { ok: true };
+  const channel = delivery.channel?.trim() ?? '';
+  const target = delivery.target?.trim() ?? '';
+  if (channel === 'webchat') return { ok: true };
+  if (channel && target) return { ok: true, delivery: { channel, target } };
+  return { ok: false, message: 'invalid_delivery' };
+}
 
 export const daemonToPhone = {
   rendezvousAccept: (roomId: string): DaemonToPhone => ({ t: 'rendezvous.accept', roomId }),
