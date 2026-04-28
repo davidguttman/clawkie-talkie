@@ -10,6 +10,9 @@
 
 import SimplePeer from 'simple-peer';
 import { SignalClient, type SignalData, type SignalEvent } from './signal';
+import { classifySignal, decideIncomingSignal } from './signalKind';
+
+const MAX_BUFFERED_CANDIDATES_PER_PEER = 32;
 
 export type RtcStatus = 'idle' | 'connecting' | 'open' | 'error' | 'closed';
 
@@ -55,6 +58,7 @@ export class RtcClient {
   private status: RtcStatus = 'idle';
   private closed = false;
   private readonly iceServers: RTCIceServer[];
+  private readonly pendingCandidates = new Map<string, SignalPayload[]>();
 
   constructor(private readonly opts: RtcClientOptions) {
     this.peerId = randomPeerId();
@@ -136,16 +140,47 @@ export class RtcClient {
 
   private handleSignal(event: SignalEvent): void {
     if (this.closed) return;
-    if (this.peer && !this.peer.destroyed) {
+    const payload = event.data as SignalPayload;
+    const livePeer = this.peer && !this.peer.destroyed
+      ? this.remotePeerId === event.from
+      : false;
+    const kind = classifySignal(payload);
+    const action = decideIncomingSignal({ hasLivePeer: livePeer, kind });
+
+    if (action === 'forward') {
       try {
-        this.peer.signal(event.data as SignalPayload);
+        this.peer!.signal(payload);
       } catch (err) {
         console.error('[rtc] peer.signal failed', err);
       }
       return;
     }
-    this.remotePeerId = event.from;
-    this.setupPeer(false, event.data as SignalPayload);
+
+    if (action === 'create-non-initiator') {
+      this.remotePeerId = event.from;
+      const buffered = this.pendingCandidates.get(event.from) ?? [];
+      this.pendingCandidates.delete(event.from);
+      this.setupPeer(false, payload);
+      for (const cand of buffered) {
+        try {
+          this.peer?.signal(cand);
+        } catch (err) {
+          console.error('[rtc] replay candidate failed', err);
+        }
+      }
+      return;
+    }
+
+    if (action === 'buffer-candidate') {
+      const list = this.pendingCandidates.get(event.from) ?? [];
+      if (list.length >= MAX_BUFFERED_CANDIDATES_PER_PEER) return;
+      list.push(payload);
+      this.pendingCandidates.set(event.from, list);
+      return;
+    }
+
+    // 'ignore' — stale answer / renegotiate / unknown without a peer
+    console.warn(`[rtc] ignoring ${kind} signal from ${event.from} with no live peer`);
   }
 
   private setupPeer(initiator: boolean, initialSignal?: SignalPayload): void {

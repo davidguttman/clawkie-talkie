@@ -21,6 +21,9 @@ import {
   type PhoneToDaemon,
 } from './protocol.js';
 import { SignalClient, type SignalData } from './signal.js';
+import { classifySignal, decideIncomingSignal } from './signalKind.js';
+
+const MAX_BUFFERED_CANDIDATES_PER_PEER = 32;
 import { makeVoiceRoomId } from './voiceRoom.js';
 import { VoiceSession } from './voiceSession.js';
 
@@ -68,6 +71,7 @@ export class DaemonPeer {
 
   private rendezvousPeers = new Map<string, RendezvousPeer>();
   private voiceSessions = new Map<string, VoiceSession>();
+  private pendingCandidates = new Map<string, SignalPayload[]>();
 
   constructor(private readonly opts: DaemonPeerOptions) {
     this.iceServers = opts.iceServers ?? DEFAULT_ICE_SERVERS;
@@ -100,16 +104,45 @@ export class DaemonPeer {
     });
 
     this.signalClient.on('signal', (event) => {
+      const payload = event.data as SignalPayload;
       const existing = this.rendezvousPeers.get(event.from);
-      if (existing && !existing.peer.destroyed) {
+      const livePeer = !!existing && !existing.peer.destroyed;
+      const kind = classifySignal(payload);
+      const action = decideIncomingSignal({ hasLivePeer: livePeer, kind });
+
+      if (action === 'forward') {
         try {
-          existing.peer.signal(event.data as SignalPayload);
+          existing!.peer.signal(payload);
         } catch (err) {
           console.error(`[peer] rendezvous peer.signal failed: ${err instanceof Error ? err.message : err}`);
         }
         return;
       }
-      this.acceptRendezvous(event.from, false, event.data as SignalPayload);
+
+      if (action === 'create-non-initiator') {
+        const buffered = this.pendingCandidates.get(event.from) ?? [];
+        this.pendingCandidates.delete(event.from);
+        this.acceptRendezvous(event.from, false, payload);
+        const rp = this.rendezvousPeers.get(event.from);
+        if (rp) {
+          for (const cand of buffered) {
+            try { rp.peer.signal(cand); } catch (err) {
+              console.error(`[peer] rendezvous replay candidate failed: ${err instanceof Error ? err.message : err}`);
+            }
+          }
+        }
+        return;
+      }
+
+      if (action === 'buffer-candidate') {
+        const list = this.pendingCandidates.get(event.from) ?? [];
+        if (list.length >= MAX_BUFFERED_CANDIDATES_PER_PEER) return;
+        list.push(payload);
+        this.pendingCandidates.set(event.from, list);
+        return;
+      }
+
+      console.error(`[peer] ignoring ${kind} signal from ${event.from} with no live rendezvous peer`);
     });
 
     this.signalClient.subscribe();
@@ -195,6 +228,7 @@ export class DaemonPeer {
   }
 
   private dropRendezvous(remoteId: string): void {
+    this.pendingCandidates.delete(remoteId);
     const rp = this.rendezvousPeers.get(remoteId);
     if (!rp) return;
     clearTimeout(rp.timeout);
