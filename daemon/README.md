@@ -94,7 +94,7 @@ Daemon → phone (rendezvous lane on host room `H`):
 Phone → daemon (voice lane on `H:<safeSession>`):
 
 - `{"t":"stt.start"}` — routing is bound at rendezvous time, not per turn
-- binary PCM16LE mono @ 16 kHz — forwarded directly to xAI
+- binary PCM16LE mono @ 16 kHz — streamed to daemon-side OpenClaw infer STT
 - `{"t":"stt.audio.done"}`
 - `{"t":"stt.cancel"}`
 - `{"t":"reply.cancel"}`

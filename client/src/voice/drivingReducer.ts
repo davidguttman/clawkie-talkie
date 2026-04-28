@@ -3,7 +3,7 @@
 //
 // States:
 //   idle       → waiting for the user to tap start
-//   recording  → mic is open; daemon is running xAI STT
+//   recording  → mic is open; daemon is recording audio for OpenClaw infer STT
 //   thinking   → mic closed; daemon running xAI chat on the transcript
 //   ai         → daemon running xAI TTS; phone is playing audio
 //

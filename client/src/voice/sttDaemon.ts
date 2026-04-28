@@ -1,9 +1,9 @@
 // Daemon-backed STT.
 //
 // PCM16LE mono 16 kHz frames captured on the phone are sent as binary
-// frames on the `ct-control` DataChannel. The daemon terminates xAI's
-// streaming STT WebSocket server-side (Authorization header auth) and
-// relays transcript events back as JSON control frames:
+// frames on the `ct-control` DataChannel. The daemon records a turn,
+// transcribes it through OpenClaw infer, and relays transcript events
+// back as JSON control frames:
 //
 //   daemon → phone:
 //     { t: "stt.ready" }
@@ -18,7 +18,7 @@
 //     { t: "stt.audio.done" }
 //     { t: "stt.cancel" }
 //
-// No xAI key ever lives in the browser on this path.
+// No provider key ever lives in the browser on this path.
 //
 // Audio capture is behind the `AudioSource` boundary from
 // `./audioSource`. Production default is mic; `?audio-fixture=<url>`
@@ -91,8 +91,8 @@ export interface STTStartOptions {
 }
 
 // Rolling cap on pre-ready frames — bounded memory, enough to preserve
-// the first ~1 s of mic audio captured while the daemon's xAI WS is
-// still handshaking. Fixture source doesn't emit pre-ready so this is
+// the first ~1 s of mic audio captured while the daemon STT session is
+// getting ready. Fixture source doesn't emit pre-ready so this is
 // effectively unused there.
 export const PRE_READY_CAP_FRAMES = Math.ceil(
   1000 / ((MIC_BUFFER_SIZE / SAMPLE_RATE) * 1000),
