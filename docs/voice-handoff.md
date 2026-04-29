@@ -93,8 +93,8 @@ disable that provider instead of falling back to global provider mutation.
 - `/` — marketing landing page placeholder.
 - `/voice/` — canonical public user-facing voice handoff path. Static hosts
   serve this from `/voice/index.html`.
-- `/voice.html` — compatibility redirect to `/voice/`, preserving both `?…`
-  and `#…`.
+- `/voice` — clean public handoff URL used in generated links; static hosts
+  resolve it to `/voice/`.
 
 Required handoff args (accepted from hash fragment, then query string):
 
@@ -169,8 +169,8 @@ sequenceDiagram
   `protocol`, `chatSession`, `appRouting`, `appEntry`,
   `multiSessionRendezvous`.
 - `npm run typecheck` — client and daemon TypeScript.
-- `npm run build` — Vite multi-page build emits `/`, canonical
-  `/voice/index.html`, and the `/voice.html` compatibility redirect.
+- `npm run build` — Vite multi-page build emits `/` and canonical
+  `/voice/index.html`.
 - `openclaw infer tts providers --json` — catalog includes at least one
   configured provider.
 - `openclaw infer audio providers --json` — bare-array audio provider catalog

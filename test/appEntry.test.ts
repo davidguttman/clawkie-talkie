@@ -19,11 +19,4 @@ describe('app HTML entry points', () => {
     expect(html).toContain('/src/main.tsx');
     expect(html).toContain('id="root"');
   });
-
-  it('preserves search and hash from /voice.html when redirecting to /voice/', () => {
-    const path = resolve(root, 'client/voice.html');
-    expect(existsSync(path)).toBe(true);
-    const html = readFileSync(path, 'utf8');
-    expect(html).toContain("'/voice/' + location.search + location.hash");
-  });
 });
