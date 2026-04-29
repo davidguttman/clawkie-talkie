@@ -213,6 +213,83 @@ CT_THREAD_ID=
 # CT_CLIENT_ORIGIN=
 ```
 
+## Configure OpenClaw infer support
+
+Clawkie Talkie uses the installed `openclaw` CLI for speech-to-text and text-to-speech:
+
+- STT: `openclaw infer audio transcribe --file <wav> --json`
+- TTS: `openclaw infer tts convert --text <text> --output <file> --json --local`
+
+Before daemon verification, make sure the user's durable OpenClaw config (`openclaw.json`) has working providers for both infer surfaces. Do not rely only on shell environment variables unless they are also available to the persistent daemon service.
+
+Inspect the current config and provider inventory:
+
+```bash
+openclaw config get tools.media.audio --json || true
+openclaw config get messages.tts --json || true
+openclaw infer audio providers --json
+openclaw infer tts providers --json --local
+```
+
+Requirements:
+
+- `openclaw infer audio providers --json` must show at least one transcription provider with `configured: true`, or `tools.media.audio.models` must point at a working CLI fallback.
+- `openclaw infer tts providers --json --local` must show at least one usable speech provider.
+- `openclaw infer tts voices --provider <provider> --json` should list voices or return a provider-specific success response.
+- `openclaw infer tts convert ... --local --json` must create an output file.
+
+If no audio/TTS providers are configured, prefer xAI for this install because the daemon already requires `XAI_API_KEY`. Preserve any existing working provider config; only add the missing pieces. A minimal xAI config is:
+
+```json5
+{
+  tools: {
+    media: {
+      audio: {
+        enabled: true,
+        models: [
+          { type: "provider", provider: "xai", model: "grok-stt" },
+        ],
+      },
+    },
+  },
+  messages: {
+    tts: {
+      provider: "xai",
+      providers: {
+        xai: {
+          voiceId: "eve",
+        },
+      },
+    },
+  },
+}
+```
+
+Use the OpenClaw config tooling rather than hand-editing when possible. For example:
+
+```bash
+openclaw config set tools.media.audio '{"enabled":true,"models":[{"type":"provider","provider":"xai","model":"grok-stt"}]}' --strict-json --merge
+openclaw config set messages.tts '{"provider":"xai","providers":{"xai":{"voiceId":"eve"}}}' --strict-json --merge
+```
+
+If the user already has OpenAI, Deepgram, ElevenLabs, Microsoft, or another supported provider configured and the smoke tests pass, keep that provider instead of forcing xAI. If a provider uses SecretRefs, verify they resolve for the daemon's user account before reporting success.
+
+Run infer smoke tests:
+
+```bash
+rm -f /tmp/clawkie-openclaw-infer-smoke.mp3
+openclaw infer tts voices --provider xai --json || openclaw infer tts voices --json
+openclaw infer tts convert \
+  --text "clawkie infer smoke test" \
+  --output /tmp/clawkie-openclaw-infer-smoke.mp3 \
+  --json \
+  --local
+test -s /tmp/clawkie-openclaw-infer-smoke.mp3
+openclaw infer audio transcribe --file /tmp/clawkie-openclaw-infer-smoke.mp3 --json
+```
+
+If the TTS smoke passes but audio transcription fails, fix `tools.media.audio` before continuing. If audio transcription passes but TTS fails, fix `messages.tts` before continuing.
+
 ## Manual daemon verification
 
 Run once from the repo root:
@@ -313,6 +390,8 @@ Report only non-secret facts:
 - Whether dependencies installed
 - Whether `.env` exists and contains required keys, without printing key values
 - Whether `DAEMON_PEER_ID` is stable/configured, without printing it unless the user explicitly asks
+- OpenClaw infer config present for `audio transcribe` and `tts convert`
+- `openclaw infer audio providers`, `tts providers`, `tts voices`, and smoke-test results
 - Persistence method installed: launchd or systemd user service
 - Service status/log evidence
 - Skill destination path
