@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { HIFI } from './tokens';
 import { HiFiPhone } from './components/Phone';
 import { DrivingScreen } from './screens/Driving';
@@ -23,7 +23,7 @@ import {
 } from './voice/tts';
 import { parseHandoffUrl, type HandoffRoute } from './voice/handoffUrl';
 
-type ScreenId = 'driving' | 'history' | 'transcript' | 'settings' | 'error';
+type ScreenId = 'driving' | 'history' | 'transcript' | 'error';
 
 export function parseInitialSearch(search: string): {
   screen: ScreenId;
@@ -67,6 +67,7 @@ export function App() {
   const initial = useMemo(parseInitial, []);
   const [screen, setScreen] = useState<ScreenId>(initial.screen);
   const [openSession, setOpenSession] = useState<string | undefined>(initial.sessionId);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettingsState] = useState<Settings>(() => loadSettings());
   const [isNarrow, setIsNarrow] = useState(
     () => typeof window !== 'undefined' && window.innerWidth < 900,
@@ -118,7 +119,7 @@ export function App() {
               : undefined
           }
           onHistory={() => go('history')}
-          onSettings={() => go('settings')}
+          onSettings={() => setSettingsOpen(true)}
           compact={compact}
           settings={settings}
           sessionId={initial.sessionId}
@@ -153,14 +154,6 @@ export function App() {
           />
         )
       )}
-      {screen === 'settings' && (
-        <SettingsScreen
-          onBack={() => go('driving')}
-          settings={settings}
-          setSettings={setSettingsState}
-          compact={compact}
-        />
-      )}
       {screen === 'error' && (
         <ErrorScreen
           kind={initial.errorKind}
@@ -170,6 +163,32 @@ export function App() {
         />
       )}
     </>
+  );
+
+  const baseContentIsolationProps: { 'aria-hidden'?: true; inert?: '' } = settingsOpen
+    ? { 'aria-hidden': true, inert: '' }
+    : {};
+  const appContent = (
+    <div
+      style={{
+        position: 'relative',
+        height: '100%',
+        minHeight: 0,
+        overflow: 'hidden',
+      }}
+    >
+      <div {...baseContentIsolationProps} style={{ height: '100%', minHeight: 0 }}>
+        {screenContent}
+      </div>
+      {settingsOpen && (
+        <SettingsOverlay
+          setSettingsOpen={setSettingsOpen}
+          settings={settings}
+          setSettings={setSettingsState}
+          compact={compact}
+        />
+      )}
+    </div>
   );
 
   return (
@@ -186,9 +205,83 @@ export function App() {
       voiceSettings={{ voice: settings.voice }}
     >
       <RtcDisconnectGate isNarrow={isNarrow}>
-        <ResponsiveRuntime isNarrow={isNarrow}>{screenContent}</ResponsiveRuntime>
+        <ResponsiveRuntime isNarrow={isNarrow}>{appContent}</ResponsiveRuntime>
       </RtcDisconnectGate>
     </RtcProvider>
+  );
+}
+
+function SettingsOverlay({
+  setSettingsOpen,
+  settings,
+  setSettings,
+  compact,
+}: {
+  setSettingsOpen: (open: boolean) => void;
+  settings: Settings;
+  setSettings: (next: Settings) => void;
+  compact: boolean;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    dialogRef.current?.focus();
+  }, []);
+
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        inset: 0,
+        zIndex: 100,
+        minHeight: 0,
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        aria-hidden="true"
+        onClick={() => undefined}
+        onPointerDown={() => undefined}
+        onTouchStart={() => undefined}
+        style={{
+          position: 'absolute',
+          inset: 0,
+          zIndex: 0,
+          background: 'rgba(0, 0, 0, 0.42)',
+          pointerEvents: 'auto',
+          touchAction: 'none',
+        }}
+      />
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Settings"
+        tabIndex={-1}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.stopPropagation();
+            setSettingsOpen(false);
+          }
+        }}
+        style={{
+          position: 'relative',
+          zIndex: 1,
+          height: '100%',
+          minHeight: 0,
+          outline: 'none',
+          background: HIFI.bg,
+          pointerEvents: 'auto',
+        }}
+      >
+        <SettingsScreen
+          onBack={() => setSettingsOpen(false)}
+          settings={settings}
+          setSettings={setSettings}
+          compact={compact}
+        />
+      </div>
+    </div>
   );
 }
 
