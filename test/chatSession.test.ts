@@ -13,20 +13,89 @@ vi.mock('node:child_process', () => ({ exec: execMock }));
 import {
   buildAgentTurnMessage,
   ChatError,
-  extractOpenClawReplyText,
   classifyOpenClawError,
   deriveDiscordMessageTarget,
   quoteTranscript,
   runChat,
 } from '../daemon/src/chatSession';
 
+function jsonAgentStdout(text: string, mediaUrls: string[] = []): string {
+  return JSON.stringify({
+    runId: 'run-1',
+    status: 'ok',
+    result: {
+      payloads: [{ text, mediaUrls }],
+    },
+  }) + '\n';
+}
+
+function mockExecRoutingAgentTo(stdoutForAgent: string) {
+  execMock.mockImplementation((cmd) => {
+    const command = String(cmd);
+    if (command.includes('openclaw "agent"')) {
+      return Promise.resolve({ stdout: stdoutForAgent, stderr: '' });
+    }
+    return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+  });
+}
+
 describe('runChat OpenClaw CLI integration', () => {
   beforeEach(() => {
     execMock.mockReset();
   });
 
+  it('passes --json to openclaw agent and parses reply text from JSON payloads, ignoring stdout diagnostic noise', async () => {
+    // Simulates the bug report: openclaw printed ANSI/auth-profile diagnostic
+    // logs to stdout followed by the actual reply. With --json those logs go
+    // to stderr and stdout is a pure JSON response object — and the daemon
+    // must parse the JSON payload rather than returning raw stdout.
+    const ansiNoise =
+      '[2m[agents/auth-profiles][0m kept local oauth over external cli bootstrap-only provider\n';
+    execMock.mockImplementation((cmd) => {
+      const command = String(cmd);
+      if (command.includes('openclaw "agent"')) {
+        return Promise.resolve({
+          stdout: jsonAgentStdout('Testing one two three received. Clean and clear.'),
+          stderr: ansiNoise,
+        });
+      }
+      return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+    });
+
+    const result = await runChat('hi', {
+      sessionId: 'agent:main:main',
+      deliver: true,
+    });
+
+    const agentCommand = findAgentCommand();
+    expect(agentCommand).toContain('"--json"');
+    expect(result.text).toBe('Testing one two three received. Clean and clear.');
+    expect(result.text).not.toContain('auth-profiles');
+    expect(result.text).not.toContain('[');
+  });
+
+  it('throws a structured error when openclaw agent stdout is not valid JSON, instead of leaking diagnostics', async () => {
+    execMock.mockImplementation((cmd) => {
+      const command = String(cmd);
+      if (command.includes('openclaw "agent"')) {
+        return Promise.resolve({
+          stdout: '[agents/auth-profiles] noise\nnot valid json at all\n',
+          stderr: '',
+        });
+      }
+      return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+    });
+
+    await expect(
+      runChat('hi', {
+        sessionId: 'agent:main:main',
+        deliver: true,
+      }),
+    ).rejects.toMatchObject({ code: 'openclaw_reply_unparseable' });
+  });
+
   it('posts the final transcript as a Discord quote before running the agent', async () => {
-    execMock.mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    mockExecRoutingAgentTo(jsonAgentStdout('ok'));
 
     await runChat('Hello\nworld', {
       sessionId: 'session-1',
@@ -57,7 +126,7 @@ describe('runChat OpenClaw CLI integration', () => {
         ]),
         stderr: '',
       })
-      .mockResolvedValueOnce({ stdout: 'reply\n', stderr: '' });
+      .mockResolvedValueOnce({ stdout: jsonAgentStdout('reply'), stderr: '' });
 
     await runChat('from session route', {
       sessionId: 'agent:main:discord:channel-1:thread-2',
@@ -73,7 +142,7 @@ describe('runChat OpenClaw CLI integration', () => {
   });
 
   it('targets the Discord reply thread when threadId is provided', async () => {
-    execMock.mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    mockExecRoutingAgentTo(jsonAgentStdout('ok'));
 
     await expect(
       runChat('hello', {
@@ -88,7 +157,7 @@ describe('runChat OpenClaw CLI integration', () => {
   });
 
   it('runs agent turns through OpenClaw channel-last delivery without an explicit reply target', async () => {
-    execMock.mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    mockExecRoutingAgentTo(jsonAgentStdout('ok'));
 
     await runChat('hello', {
       sessionId: 'session-1',
@@ -123,7 +192,7 @@ describe('runChat OpenClaw CLI integration', () => {
       }
       if (command.includes('openclaw "agent"')) {
         agentStartedWhileTranscriptPending = transcriptPending;
-        return Promise.resolve({ stdout: 'hello back\n', stderr: '' });
+        return Promise.resolve({ stdout: jsonAgentStdout('hello back'), stderr: '' });
       }
       return Promise.resolve({ stdout: 'ok\n', stderr: '' });
     });
@@ -155,7 +224,7 @@ describe('runChat OpenClaw CLI integration', () => {
           );
         }
         if (command.includes('openclaw "agent"')) {
-          return Promise.resolve({ stdout: 'hello back\n', stderr: '' });
+          return Promise.resolve({ stdout: jsonAgentStdout('hello back'), stderr: '' });
         }
         return Promise.resolve({ stdout: 'ok\n', stderr: '' });
       });
@@ -179,7 +248,7 @@ describe('runChat OpenClaw CLI integration', () => {
   });
 
   it('wraps the agent input with raw STT transcript guidance', async () => {
-    execMock.mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    mockExecRoutingAgentTo(jsonAgentStdout('ok'));
 
     await runChat('turn left at the next light', {
       sessionId: 'session-1',
@@ -200,7 +269,7 @@ describe('runChat OpenClaw CLI integration', () => {
   it('does not post the agent reply text via openclaw message send (the agent does it)', async () => {
     execMock
       .mockResolvedValueOnce({ stdout: 'transcript posted\n', stderr: '' })
-      .mockResolvedValueOnce({ stdout: 'hello back\n', stderr: '' })
+      .mockResolvedValueOnce({ stdout: jsonAgentStdout('hello back'), stderr: '' })
       .mockResolvedValueOnce({ stdout: 'ok\n', stderr: '' });
 
     const result = await runChat('hi', {
@@ -229,7 +298,7 @@ describe('runChat OpenClaw CLI integration', () => {
   });
 
   it('runs the turn even when no Discord target can be derived (no reply re-send)', async () => {
-    execMock.mockResolvedValue({ stdout: 'plain reply\n', stderr: '' });
+    mockExecRoutingAgentTo(jsonAgentStdout('plain reply'));
 
     const result = await runChat('hi', {
       sessionId: 'session-1',
@@ -245,11 +314,8 @@ describe('runChat OpenClaw CLI integration', () => {
     expect(sendCommands).toHaveLength(0);
   });
 
-  it('strips OpenClaw MEDIA directives from mixed agent stdout before TTS', async () => {
-    execMock.mockResolvedValue({
-      stdout: 'spoken reply\nMEDIA:/tmp/openclaw/tts-test/voice.opus\n',
-      stderr: '',
-    });
+  it('returns spoken reply text from mixed JSON payloads (text + media) without surfacing media URLs', async () => {
+    mockExecRoutingAgentTo(jsonAgentStdout('spoken reply', ['/tmp/openclaw/tts-test/voice.opus']));
 
     const result = await runChat('hi', {
       sessionId: 'session-1',
@@ -260,10 +326,7 @@ describe('runChat OpenClaw CLI integration', () => {
   });
 
   it('surfaces media-only OpenClaw replies instead of sending MEDIA paths to TTS', async () => {
-    execMock.mockResolvedValue({
-      stdout: 'MEDIA:/tmp/openclaw/tts-test/voice.opus\n',
-      stderr: '',
-    });
+    mockExecRoutingAgentTo(jsonAgentStdout('', ['/tmp/openclaw/tts-test/voice.opus']));
 
     await expect(
       runChat('hi', {
@@ -282,7 +345,7 @@ describe('runChat OpenClaw CLI integration', () => {
         ]),
         stderr: '',
       })
-      .mockResolvedValueOnce({ stdout: 'reply\n', stderr: '' });
+      .mockResolvedValueOnce({ stdout: jsonAgentStdout('reply'), stderr: '' });
 
     await runChat('hello', {
       sessionId: 'agent:main:discord:channel:thread-1',
@@ -298,7 +361,7 @@ describe('runChat OpenClaw CLI integration', () => {
   });
 
   it('runs session-only webchat through OpenClaw channel last delivery', async () => {
-    execMock.mockResolvedValueOnce({ stdout: 'reply\n', stderr: '' });
+    execMock.mockResolvedValueOnce({ stdout: jsonAgentStdout('reply'), stderr: '' });
 
     await runChat('hello', {
       sessionId: 'agent:main:main',
@@ -316,7 +379,7 @@ describe('runChat OpenClaw CLI integration', () => {
   });
 
   it('normalizes legacy webchat base links to the channel-last webchat session', async () => {
-    execMock.mockResolvedValueOnce({ stdout: 'reply\n', stderr: '' });
+    execMock.mockResolvedValueOnce({ stdout: jsonAgentStdout('reply'), stderr: '' });
 
     await runChat('hello', {
       sessionId: 'agent:main:webchat',
@@ -340,7 +403,7 @@ describe('runChat OpenClaw CLI integration', () => {
         ]),
         stderr: '',
       })
-      .mockResolvedValueOnce({ stdout: 'reply\n', stderr: '' });
+      .mockResolvedValueOnce({ stdout: jsonAgentStdout('reply'), stderr: '' });
 
     await runChat('hello', {
       sessionId: 'agent:main:webchat',
@@ -408,7 +471,7 @@ describe('runChat with explicit delivery target', () => {
   });
 
   it('routes the transcript through the explicit delivery channel/target', async () => {
-    execMock.mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    mockExecRoutingAgentTo(jsonAgentStdout('ok'));
 
     await runChat('hello', {
       sessionId: 'session-1',
@@ -425,7 +488,7 @@ describe('runChat with explicit delivery target', () => {
   it('does not mirror the assistant reply through message send because agent delivery handles it', async () => {
     execMock
       .mockResolvedValueOnce({ stdout: 'transcript posted\n', stderr: '' })
-      .mockResolvedValueOnce({ stdout: 'hello back\n', stderr: '' });
+      .mockResolvedValueOnce({ stdout: jsonAgentStdout('hello back'), stderr: '' });
 
     const result = await runChat('hi', {
       sessionId: 'session-1',
@@ -489,16 +552,6 @@ describe('runChat with explicit delivery target', () => {
         delivery: { channel: 'discord', target: 'channel:thread-1' },
       }),
     ).rejects.toMatchObject({ code: 'openclaw_gateway_unavailable' });
-  });
-});
-
-describe('extractOpenClawReplyText', () => {
-  it('removes MEDIA lines and preserves spoken text', () => {
-    expect(extractOpenClawReplyText('hello\nMEDIA:/tmp/openclaw/voice.opus\nworld')).toBe('hello\nworld');
-  });
-
-  it('returns an empty string for media-only stdout', () => {
-    expect(extractOpenClawReplyText('  MEDIA:/tmp/openclaw/voice.opus  \n')).toBe('');
   });
 });
 

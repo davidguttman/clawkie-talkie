@@ -178,6 +178,7 @@ async function runOpenClawTurn(opts: {
     '--session-id', sessionId,
     '--channel', 'last',
     '--deliver',
+    '--json',
     '-m', message,
   ];
 
@@ -186,11 +187,15 @@ async function runOpenClawTurn(opts: {
       `openclaw ${args.map(a => JSON.stringify(a)).join(' ')}`,
       { signal: opts.signal },
     );
-    const reply = extractOpenClawReplyText(stdout);
-    if (!reply && hasOpenClawMediaDirective(stdout)) {
+    const parsed = parseOpenClawAgentJson(stdout);
+    const { text, hasMedia } = extractReplyFromAgentJson(parsed);
+    if (!text && hasMedia) {
       throw new ChatError('openclaw_media_reply_unavailable', 'openclaw_media_reply_unavailable');
     }
-    return reply;
+    if (!text) {
+      throw new ChatError('openclaw_reply_empty', 'openclaw_reply_empty');
+    }
+    return text;
   } catch (err: unknown) {
     if (err instanceof ChatError) throw err;
     if (opts.signal?.aborted) throw new ChatError('aborted', 'aborted');
@@ -198,26 +203,50 @@ async function runOpenClawTurn(opts: {
   }
 }
 
-export function extractOpenClawReplyText(stdout: string): string {
-  return stdout
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n')
-    .split('\n')
-    .filter((line) => !isOpenClawMediaDirectiveLine(line))
-    .join('\n')
-    .trim();
+interface OpenClawAgentJsonPayload {
+  text?: string;
+  mediaUrl?: string | null;
+  mediaUrls?: string[];
 }
 
-function hasOpenClawMediaDirective(stdout: string): boolean {
-  return stdout
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n')
-    .split('\n')
-    .some(isOpenClawMediaDirectiveLine);
+interface OpenClawAgentJsonResponse {
+  result?: { payloads?: OpenClawAgentJsonPayload[] };
 }
 
-function isOpenClawMediaDirectiveLine(line: string): boolean {
-  return line.trim().startsWith('MEDIA:');
+function parseOpenClawAgentJson(stdout: string): OpenClawAgentJsonResponse {
+  const trimmed = stdout.trim();
+  if (!trimmed) {
+    throw new ChatError('openclaw_reply_unparseable', 'openclaw_reply_unparseable');
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== 'object') {
+      throw new ChatError('openclaw_reply_unparseable', 'openclaw_reply_unparseable');
+    }
+    return parsed as OpenClawAgentJsonResponse;
+  } catch (err) {
+    if (err instanceof ChatError) throw err;
+    throw new ChatError('openclaw_reply_unparseable', 'openclaw_reply_unparseable');
+  }
+}
+
+function extractReplyFromAgentJson(response: OpenClawAgentJsonResponse): {
+  text: string;
+  hasMedia: boolean;
+} {
+  const payloads = Array.isArray(response.result?.payloads) ? response.result!.payloads! : [];
+  const textParts: string[] = [];
+  let hasMedia = false;
+  for (const payload of payloads) {
+    if (payload && typeof payload.text === 'string' && payload.text.trim()) {
+      textParts.push(payload.text.trim());
+    }
+    if (payload) {
+      if (Array.isArray(payload.mediaUrls) && payload.mediaUrls.length > 0) hasMedia = true;
+      if (typeof payload.mediaUrl === 'string' && payload.mediaUrl.trim()) hasMedia = true;
+    }
+  }
+  return { text: textParts.join('\n').trim(), hasMedia };
 }
 
 function isSessionOnlyWebchatTurn(sessionId: string, delivery?: DeliveryTarget): boolean {
