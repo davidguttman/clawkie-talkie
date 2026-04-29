@@ -226,6 +226,13 @@ Requirements:
 - `openclaw infer tts voices --provider <provider> --json` should list voices or return a provider-specific success response.
 - `openclaw infer tts convert ... --local --json` must create an output file.
 
+If the user's OpenClaw install does not have infer audio/TTS configured or auto-detectable, Clawkie Talkie is not installed successfully yet. The daemon may still print a Join URL and accept a phone connection, but the first voice turn will fail at runtime:
+
+- missing/broken audio transcription → `openclaw infer audio transcribe` fails, the phone receives `stt.error`, and the UI shows `INFER ERROR · OPENCLAW INFER STT FAILED`
+- missing/broken TTS → `openclaw infer tts convert` fails after the agent reply, the phone receives `tts.error`, and the UI shows `TTS ERROR · OPENCLAW INFER TTS FAILED`
+
+Do not report success in that state. Configure or repair OpenClaw infer first, then rerun the smoke tests below.
+
 If no audio/TTS providers are configured, pick whichever supported provider the user already has credentials for in OpenClaw (OpenAI, Deepgram, ElevenLabs, Microsoft, etc.). Preserve any existing working provider config; only add the missing pieces. Use the provider-specific OpenClaw docs for exact `tools.media.audio` and `messages.tts` fields.
 
 Use the OpenClaw config tooling rather than hand-editing when possible. For example, replace these placeholders with the provider/model the user already has configured credentials for:
