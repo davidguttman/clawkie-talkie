@@ -16,6 +16,39 @@ feature thread ── "switch to voice" ──▶ phone link ──▶ talk next
       └──────────── same OpenClaw session keeps moving ◀───────┘
 ```
 
+## Install
+
+The normal install path is agent-run. Tell your agent:
+
+```text
+Install Clawkie Talkie.
+
+Follow AGENT-INSTALL.md from:
+https://github.com/davidguttman/clawkie-talkie
+
+Inspect the downloaded files first. Stop if anything looks suspicious.
+
+When done, report whether:
+
+- the daemon is running;
+- OpenClaw STT/TTS smoke tests passed;
+- the voice handoff skill is installed.
+```
+
+The install does three important things:
+
+1. Runs the daemon as a persistent user service.
+2. Generates one stable `DAEMON_PEER_ID` and keeps it in the daemon `.env`.
+3. Installs the OpenClaw `clawkie-voice-handoff` skill with the same host ID.
+
+Manual daemon setup is documented here:
+
+- [Install the Clawkie Talkie daemon](./docs/install-daemon.md)
+
+Agent install/upgrade/repair flow is documented here:
+
+- [Agent install instructions](./AGENT-INSTALL.md)
+
 ## Why this exists
 
 OpenClaw is often running somewhere you are not: at your desk, in a Discord thread, in a browser workflow, in the middle of a task. Sometimes the next useful contribution is not a carefully typed prompt; it is a quick piece of direction:
@@ -113,28 +146,6 @@ voice room = daemon host + OpenClaw session
 That means the same daemon can support multiple OpenClaw sessions without mixing them together. A Discord thread, a webchat session, and another channel can all produce different voice rooms through the same local daemon.
 
 The agent does not call a daemon API to mint a link. It builds the URL directly from already-known OpenClaw context: daemon host ID, session ID, channel, and target.
-
-## Install
-
-The normal install path is agent-run. Tell your agent:
-
-```text
-Install Clawkie Talkie by following https://github.com/davidguttman/clawkie-talkie/blob/master/AGENT-INSTALL.md. Inspect the downloaded files first. Stop if anything looks suspicious. When done, report whether the daemon is running, whether OpenClaw STT/TTS smoke tests passed, and whether the voice handoff skill is installed.
-```
-
-The install does three important things:
-
-1. Runs the daemon as a persistent user service.
-2. Generates one stable `DAEMON_PEER_ID` and keeps it in the daemon `.env`.
-3. Installs the OpenClaw `clawkie-voice-handoff` skill with the same host ID.
-
-Manual daemon setup is documented here:
-
-- [Install the Clawkie Talkie daemon](./docs/install-daemon.md)
-
-Agent install/upgrade/repair flow is documented here:
-
-- [Agent install instructions](./AGENT-INSTALL.md)
 
 ## What must already work
 
