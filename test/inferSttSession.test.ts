@@ -22,6 +22,10 @@ function makePcmSamples(sampleCount: number, marker = 0): Uint8Array {
   return bytes;
 }
 
+function makeFilledPcmSamples(sampleCount: number, marker: number): Uint8Array {
+  return new Uint8Array(sampleCount * 2).fill(marker);
+}
+
 describe('OpenClawInferSttSession', () => {
   it('fires onReady promptly when constructed', () => {
     const cb = callbacks();
@@ -434,70 +438,141 @@ describe('OpenClawInferSttSession', () => {
     await vi.waitFor(() => expect(cb.onPartial).toHaveBeenCalledWith('near live', true));
   });
 
-  it('serializes chunk transcription so infer processes are queued', async () => {
+  it('emits fixed-cadence chunks during continuous speech without waiting for VAD phrase end', async () => {
     const cb = callbacks();
-    const phraseChunker = {
-      push: vi.fn((pcm: Buffer) => [{ pcm: Buffer.from([pcm[0]]) }]),
-      flush: vi.fn(() => []),
-    };
-    let resolveFirst: ((text: string) => void) | undefined;
-    const started: number[] = [];
+    const chunkPaths: string[] = [];
 
     const session = new OpenClawInferSttSession(
       {
+        sampleRate: 1000,
+        enablePhraseChunks: true,
         createTempDir: async () => '/tmp/openclaw-stt-test',
         writeFile: async () => undefined,
         cleanupTempDir: async () => undefined,
-        phraseChunker,
-        detectSpeech: () => true,
         transcribeChunk: async ({ wavPath }) => {
-          started.push(Number(wavPath.match(/chunk-(\d+)\.wav/)?.[1]));
-          if (started.length === 1) {
-            return new Promise<string>((resolve) => {
-              resolveFirst = resolve;
-            });
-          }
-          return 'second';
+          chunkPaths.push(wavPath);
+          return `chunk ${chunkPaths.length}`;
         },
         transcribe: async () => 'final',
       },
       cb,
     );
 
-    session.sendAudio(makePcmSamples(320, 1));
-    session.sendAudio(makePcmSamples(320, 2));
+    session.sendAudio(makeFilledPcmSamples(15_000, 1));
 
-    await vi.waitFor(() => expect(started).toEqual([1]));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(started).toEqual([1]);
+    await vi.waitFor(() => expect(chunkPaths).toEqual([
+      '/tmp/openclaw-stt-test/chunk-1.wav',
+      '/tmp/openclaw-stt-test/chunk-2.wav',
+      '/tmp/openclaw-stt-test/chunk-3.wav',
+    ]));
+    await vi.waitFor(() => expect(cb.onPartial).toHaveBeenCalledTimes(3));
+  });
 
-    resolveFirst?.('first');
+  it('includes prior overlap context in fixed-cadence chunk windows', async () => {
+    const cb = callbacks();
+    const chunkPcms: Buffer[] = [];
+
+    const session = new OpenClawInferSttSession(
+      {
+        sampleRate: 1000,
+        enablePhraseChunks: true,
+        partialChunkCadenceMs: 5000,
+        partialChunkOverlapMs: 500,
+        createTempDir: async () => '/tmp/openclaw-stt-test',
+        pcmToWav: (pcm) => {
+          chunkPcms.push(Buffer.from(pcm));
+          return Buffer.from(pcm);
+        },
+        writeFile: async () => undefined,
+        cleanupTempDir: async () => undefined,
+        transcribeChunk: async () => 'chunk',
+        transcribe: async () => 'final',
+      },
+      cb,
+    );
+
+    session.sendAudio(makeFilledPcmSamples(5_000, 1));
+    await vi.waitFor(() => expect(chunkPcms).toHaveLength(1));
+
+    session.sendAudio(makeFilledPcmSamples(5_000, 2));
+    await vi.waitFor(() => expect(chunkPcms).toHaveLength(2));
+
+    expect(chunkPcms[0]).toHaveLength(5_000 * 2);
+    expect(chunkPcms[0]?.[0]).toBe(1);
+    expect(chunkPcms[0]?.at(-1)).toBe(1);
+    expect(chunkPcms[1]).toHaveLength(5_500 * 2);
+    expect(chunkPcms[1]?.[0]).toBe(1);
+    expect(chunkPcms[1]?.at(-1)).toBe(2);
+  });
+
+  it('bounds fixed-cadence chunk transcription concurrency without serializing all chunks', async () => {
+    const cb = callbacks();
+    const started: number[] = [];
+    let active = 0;
+    let maxActive = 0;
+    const resolvers = new Map<number, (text: string) => void>();
+
+    const session = new OpenClawInferSttSession(
+      {
+        sampleRate: 1000,
+        enablePhraseChunks: true,
+        maxConcurrentChunkTranscripts: 2,
+        createTempDir: async () => '/tmp/openclaw-stt-test',
+        writeFile: async () => undefined,
+        cleanupTempDir: async () => undefined,
+        transcribeChunk: async ({ wavPath }) => {
+          const id = Number(wavPath.match(/chunk-(\d+)\.wav/)?.[1]);
+          started.push(id);
+          active += 1;
+          maxActive = Math.max(maxActive, active);
+          return new Promise<string>((resolve) => {
+            resolvers.set(id, (text) => {
+              active -= 1;
+              resolve(text);
+            });
+          });
+        },
+        transcribe: async () => 'final',
+      },
+      cb,
+    );
+
+    session.sendAudio(makeFilledPcmSamples(15_000, 1));
+
     await vi.waitFor(() => expect(started).toEqual([1, 2]));
-    await vi.waitFor(() => expect(cb.onPartial).toHaveBeenCalledWith('second', true));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(started).toEqual([1, 2]);
+    expect(maxActive).toBe(2);
+
+    resolvers.get(2)?.('second');
+    await vi.waitFor(() => expect(started).toEqual([1, 2, 3]));
+    expect(active).toBe(2);
+    expect(maxActive).toBe(2);
+
+    resolvers.get(1)?.('first');
+    resolvers.get(3)?.('third');
+    await vi.waitFor(() => expect(cb.onPartial).toHaveBeenCalledWith('third', true));
   });
 
   it('keeps the final full-turn infer authoritative for onDone', async () => {
     const cb = callbacks();
-    const phraseChunker = {
-      push: vi.fn(() => []),
-      flush: vi.fn(() => [{ pcm: Buffer.from([7, 7]) }]),
-    };
     const transcribeChunk = vi.fn(async () => 'chunk guess');
 
     const session = new OpenClawInferSttSession(
       {
+        sampleRate: 1000,
+        enablePhraseChunks: true,
         createTempDir: async () => '/tmp/openclaw-stt-test',
         writeFile: async () => undefined,
         cleanupTempDir: async () => undefined,
-        phraseChunker,
-        detectSpeech: () => true,
         transcribeChunk,
         transcribe: async () => 'authoritative final',
       },
       cb,
     );
 
-    session.sendAudio(makePcmSamples(320, 1));
+    session.sendAudio(makeFilledPcmSamples(5_000, 1));
+    await vi.waitFor(() => expect(cb.onPartial).toHaveBeenCalledWith('chunk guess', true));
     await session.signalAudioDone();
 
     expect(transcribeChunk).toHaveBeenCalledTimes(1);
@@ -505,38 +580,77 @@ describe('OpenClawInferSttSession', () => {
     expect(cb.onDone).not.toHaveBeenCalledWith('chunk guess');
   });
 
-  it('does not let an unresolved chunk transcription block final infer completion', async () => {
+
+
+  it('ignores partial results after close', async () => {
     const cb = callbacks();
     let resolveChunk: ((text: string) => void) | undefined;
-    const phraseChunker = {
-      push: vi.fn(() => []),
-      flush: vi.fn(() => [{ pcm: Buffer.from([5, 5]) }]),
-    };
+    let chunkSignal: AbortSignal | undefined;
+    const transcribeChunk = vi.fn(({ signal }) => {
+      chunkSignal = signal;
+      return new Promise<string>((resolve) => {
+        resolveChunk = resolve;
+      });
+    });
+
+    const session = new OpenClawInferSttSession(
+      {
+        sampleRate: 1000,
+        enablePhraseChunks: true,
+        createTempDir: async () => '/tmp/openclaw-stt-test',
+        writeFile: async () => undefined,
+        cleanupTempDir: async () => undefined,
+        transcribeChunk,
+        transcribe: async () => 'final',
+      },
+      cb,
+    );
+
+    session.sendAudio(makeFilledPcmSamples(5_000, 1));
+    await vi.waitFor(() => expect(transcribeChunk).toHaveBeenCalledTimes(1));
+
+    session.close();
+    expect(chunkSignal?.aborted).toBe(true);
+
+    resolveChunk?.('stale chunk');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(cb.onPartial).not.toHaveBeenCalled();
+    expect(cb.onDone).not.toHaveBeenCalled();
+    expect(cb.onClosed).not.toHaveBeenCalled();
+  });
+
+  it('ignores partial results after final starts and does not let them block final infer', async () => {
+    const cb = callbacks();
+    let resolveChunk: ((text: string) => void) | undefined;
+    let chunkSignal: AbortSignal | undefined;
     const transcribeChunk = vi.fn(
-      () =>
-        new Promise<string>((resolve) => {
+      ({ signal }) => {
+        chunkSignal = signal;
+        return new Promise<string>((resolve) => {
           resolveChunk = resolve;
-        }),
+        });
+      },
     );
     const transcribe = vi.fn(async () => 'authoritative final');
 
     const session = new OpenClawInferSttSession(
       {
+        sampleRate: 1000,
+        enablePhraseChunks: true,
         createTempDir: async () => '/tmp/openclaw-stt-test',
         writeFile: async () => undefined,
         cleanupTempDir: async () => undefined,
-        phraseChunker,
-        detectSpeech: () => true,
         transcribeChunk,
         transcribe,
       },
       cb,
     );
 
-    session.sendAudio(makePcmSamples(320, 1));
-    const done = session.signalAudioDone();
-
+    session.sendAudio(makeFilledPcmSamples(5_000, 1));
     await vi.waitFor(() => expect(transcribeChunk).toHaveBeenCalledTimes(1));
+
+    const done = session.signalAudioDone();
     await expect(
       Promise.race([
         done.then(() => 'done'),
@@ -544,6 +658,7 @@ describe('OpenClawInferSttSession', () => {
       ]),
     ).resolves.toBe('done');
 
+    expect(chunkSignal?.aborted).toBe(true);
     expect(transcribe).toHaveBeenCalledTimes(1);
     expect(cb.onDone).toHaveBeenCalledWith('authoritative final');
 
