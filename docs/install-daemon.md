@@ -2,7 +2,7 @@
 
 This guide is for installing the Clawkie Talkie daemon on a user's own Mac or Linux machine so it can keep running after login/reboot.
 
-The daemon is the private local side of Clawkie Talkie. It holds the xAI key, connects to OpenClaw, joins the Clawkie signaling room, and talks to the browser over WebRTC. The browser never receives your xAI key.
+The daemon is the private local side of Clawkie Talkie. It connects to OpenClaw, joins the Clawkie signaling room, and talks to the browser over WebRTC. Provider credentials stay in OpenClaw's own configuration; the browser never receives provider API keys.
 
 ## Supported platforms
 
@@ -19,8 +19,8 @@ Windows native packages exist for the WebRTC dependency, but this repo does not 
 - Node.js and npm. Use a current Node release; Node 22 LTS or newer is recommended.
 - `curl` and `unzip` for downloading the source ZIP.
 - OpenClaw installed, configured, and available on `PATH` as `openclaw` for the same user that runs the daemon.
-- An xAI API key for TTS and OpenClaw turns. If OpenClaw is already configured with an xAI key, use that existing local configuration as the first source instead of asking the user for the key again.
-- Outbound network access to the signaling service, xAI, and any OpenClaw services you use.
+- Working OpenClaw provider configuration for agent replies, audio transcription, and TTS.
+- Outbound network access to the signaling service and any OpenClaw providers you use.
 
 The daemon uses `@roamhq/wrtc` for native WebRTC. Its package includes prebuilt native packages for common macOS/Linux architectures. If your platform cannot use a prebuild, `npm install` may need native build tools:
 
@@ -64,9 +64,6 @@ chmod 600 .env
 Edit `.env`:
 
 ```env
-# Required. Keep this secret. Use the existing local OpenClaw xAI key when one is configured.
-XAI_API_KEY=xai-...
-
 # Required for a persistent install. Generate once and keep it stable.
 DAEMON_PEER_ID=REPLACE_WITH_A_RANDOM_UUID
 
@@ -79,14 +76,7 @@ CT_STT_LANGUAGE=en
 CT_THREAD_ID=
 ```
 
-For agent installs, resolve `XAI_API_KEY` in this order before asking the user for anything:
-
-1. Preserve an existing `.env` value on updates.
-2. Check the active OpenClaw config/auth profile for an existing xAI API key. Use `openclaw config file`/`openclaw config get ...` or equivalent runtime config tooling; if the value is a SecretRef, resolve it through the configured local secret provider.
-3. Check only user-designated local secret sources, if the user already named one.
-4. If no usable key is available, ask for a safe secret handoff path. Do not ask the user to paste the key into a public/shared chat.
-
-Do not treat a missing `XAI_API_KEY` shell environment variable as proof that no key exists; OpenClaw may already have it in local config/auth settings. Do not print the key while copying it into `.env`.
+The daemon does not require any provider API key in `.env`. All LLM/STT/TTS auth is read by `openclaw` itself from its own configuration/auth profiles when the daemon shells out to the CLI — see "Configure OpenClaw infer support" in `AGENT-INSTALL.md` for verifying that OpenClaw has a working audio/TTS provider configured.
 
 Generate the stable daemon ID with Node:
 
@@ -100,7 +90,7 @@ Copy the printed `DAEMON_PEER_ID=...` line into `.env`.
 
 `DAEMON_PEER_ID` is the daemon's rendezvous room ID. If it is missing, the daemon generates a fresh ID every time it starts. That is fine for development, but bad for an installed daemon because old voice links stop pointing at the running daemon after every restart.
 
-Treat the ID as private-ish: it is not your xAI key, but it does identify the room your daemon listens on. Do not commit it, post it in public issues, or put it in screenshots. It is safe for Clawkie voice handoff links to include it. A stable ID also gives future browser pairing/resume features something durable to remember.
+Treat the ID as private-ish: not a password, but it does identify the room your daemon listens on. Do not commit it, post it in public issues, or put it in screenshots. It is safe for Clawkie voice handoff links to include it. A stable ID also gives future browser pairing/resume features something durable to remember.
 
 ## Run it manually once
 
@@ -305,10 +295,6 @@ systemctl --user restart clawkie-talkie.service
 ```
 
 ## Troubleshooting
-
-### `XAI_API_KEY env var is required`
-
-The daemon did not find your xAI key. Make sure `.env` is in the repo root, contains `XAI_API_KEY=...`, and that the daemon is started from the repo root. If OpenClaw already has an xAI key configured, copy that existing local key into the daemon `.env` without printing it; OpenClaw config does not automatically become the daemon process environment.
 
 ### The host ID changes after reboot
 

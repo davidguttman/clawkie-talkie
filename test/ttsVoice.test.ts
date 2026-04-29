@@ -86,7 +86,6 @@ describe('voice session voice settings', () => {
   it('applies voice settings from settings.update', async () => {
     const { VoiceSession } = await import('../daemon/src/voiceSession');
     const session = new VoiceSession({
-      apiKey: 'test-key',
       signalServer: 'https://signal.example',
       iceServers: [],
       hostPeerId: 'host-1',

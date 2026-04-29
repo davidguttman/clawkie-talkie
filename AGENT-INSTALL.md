@@ -5,22 +5,21 @@ These instructions are for an agent installing, reinstalling, or upgrading Clawk
 Your goals:
 
 1. Install or upgrade the Clawkie Talkie daemon from this repo.
-2. Configure it with user-provided credentials and a stable daemon host ID.
+2. Configure it with a stable daemon host ID.
 3. Make it persistent after login/reboot.
 4. Install the OpenClaw `clawkie-voice-handoff` skill so the user can say "switch to voice" and receive a working handoff link.
 5. Verify the daemon and skill configuration before reporting success.
 
-Do not install credentials into the browser. The daemon holds credentials locally; the browser receives only voice handoff URLs.
+Do not install credentials into the browser. The browser receives only voice handoff URLs. All LLM/STT/TTS provider auth lives in OpenClaw's own configuration; the daemon does not read or hold provider API keys.
 
 ## Safety rules
 
-- Do not commit `.env`, API keys, generated host IDs, LaunchAgent plists with private paths, or systemd unit files with private paths.
-- Do not paste or print the xAI API key in chat/log summaries.
-- Before asking the user for an xAI key, check the local OpenClaw configuration and auth profiles for an existing configured xAI key. A missing `XAI_API_KEY` shell environment variable is **not** enough reason to ask the user to paste a key.
+- Do not commit `.env`, generated host IDs, LaunchAgent plists with private paths, or systemd unit files with private paths.
+- Do not paste or print provider API keys (OpenClaw config) in chat/log summaries.
 - Treat `DAEMON_PEER_ID` as private-ish: not a password, but do not publish it or post it in public channels.
 - Use the public Clawkie Talkie client origin and the persistent daemon path; do not use local development shortcuts for an end-user install.
 - Do not start/stop unrelated services.
-- If OpenClaw is not installed/configured, stop and report the missing prerequisite. If no usable xAI key exists after checking local OpenClaw config/auth profiles and any user-designated secret source, ask for a safe secret handoff path; do not ask the user to paste the key into a public/shared chat.
+- If OpenClaw is not installed/configured, stop and report the missing prerequisite.
 
 ## Source
 
@@ -76,7 +75,7 @@ The preserved daemon `DAEMON_PEER_ID` and installed skill `CLAWKIE_DAEMON_HOST_I
    - OpenClaw skill under `openclaw/clawkie-voice-handoff/SKILL.md`
    - docs under `docs/`
 3. Suspicious items to stop on:
-   - unexpected credential collection beyond `.env` / user-provided API key
+   - unexpected credential collection in `.env` (it should only carry `DAEMON_PEER_ID` and optional non-secret toggles)
    - unexpected remote shell execution
    - install-time scripts that mutate global state without user consent
    - code that exfiltrates `.env`, OpenClaw config, browser cookies, or arbitrary files
@@ -98,7 +97,7 @@ Use this flow when `CLAWKIE_SOURCE_DIR` already exists, the daemon has run befor
    test -n "$DAEMON_PEER_ID" || { echo "missing DAEMON_PEER_ID in .env; stop before changing files" >&2; exit 1; }
    ```
 
-   Do not print the xAI key. Do not generate a new daemon peer ID unless the user explicitly asks to create a new identity.
+   Do not generate a new daemon peer ID unless the user explicitly asks to create a new identity.
 
 3. Stop only the Clawkie Talkie user service while replacing files:
 
@@ -184,21 +183,13 @@ Generate it once:
 node -e "console.log(require('node:crypto').randomUUID())"
 ```
 
-Set these values in `.env`:
+Set this value in `.env`:
 
 ```env
-XAI_API_KEY=<xai-key-from-local-openclaw-config-or-user-approved-secret-source>
 DAEMON_PEER_ID=<installer-generated-uuid>
 ```
 
-Credential source order for `XAI_API_KEY`:
-
-1. Preserve an existing repo-root `.env` value if this is an upgrade/reinstall and it is already present.
-2. Check the local OpenClaw config/auth profile for an existing xAI API key. Use `openclaw config file`/`openclaw config get ...` or the runtime's config tooling to find the active config; if the value is a SecretRef, resolve it through the configured local secret provider. Copy the key locally into `.env` without printing it.
-3. Check only user-designated local secret sources, if the user already named one.
-4. Only then ask the user for a safe way to provide the key. Do **not** tell them to paste it into chat.
-
-When reporting a blocker, be specific: say whether the key was absent from OpenClaw config, present but unresolved, or unavailable because the secret provider was locked/unconfigured. Do not summarize that as merely "no key in the shell environment."
+The daemon does not require any provider API key in `.env`. All LLM/STT/TTS auth is read by `openclaw` itself from its own configuration and auth profiles when the daemon shells out to the CLI.
 
 Do not regenerate the UUID on later updates, reinstalls, dependency repairs, or service repairs — keep it stable so existing handoff links and the installed skill remain valid.
 
@@ -238,47 +229,23 @@ Requirements:
 - `openclaw infer tts voices --provider <provider> --json` should list voices or return a provider-specific success response.
 - `openclaw infer tts convert ... --local --json` must create an output file.
 
-If no audio/TTS providers are configured, prefer xAI for this install because the daemon already requires `XAI_API_KEY`. Preserve any existing working provider config; only add the missing pieces. A minimal xAI config is:
+If no audio/TTS providers are configured, pick whichever supported provider the user already has credentials for in OpenClaw (OpenAI, Deepgram, ElevenLabs, Microsoft, etc.). Preserve any existing working provider config; only add the missing pieces. Use the provider-specific OpenClaw docs for exact `tools.media.audio` and `messages.tts` fields.
 
-```json5
-{
-  tools: {
-    media: {
-      audio: {
-        enabled: true,
-        models: [
-          { type: "provider", provider: "xai", model: "grok-stt" },
-        ],
-      },
-    },
-  },
-  messages: {
-    tts: {
-      provider: "xai",
-      providers: {
-        xai: {
-          voiceId: "eve",
-        },
-      },
-    },
-  },
-}
-```
-
-Use the OpenClaw config tooling rather than hand-editing when possible. For example:
+Use the OpenClaw config tooling rather than hand-editing when possible. For example, replace these placeholders with the provider/model the user already has configured credentials for:
 
 ```bash
-openclaw config set tools.media.audio '{"enabled":true,"models":[{"type":"provider","provider":"xai","model":"grok-stt"}]}' --strict-json --merge
-openclaw config set messages.tts '{"provider":"xai","providers":{"xai":{"voiceId":"eve"}}}' --strict-json --merge
+openclaw config set tools.media.audio '{"enabled":true,"models":[{"type":"provider","provider":"<stt-provider>","model":"<stt-model>"}]}' --strict-json --merge
+openclaw config set messages.tts '{"provider":"<tts-provider>","providers":{"<tts-provider>":{}}}' --strict-json --merge
 ```
 
-If the user already has OpenAI, Deepgram, ElevenLabs, Microsoft, or another supported provider configured and the smoke tests pass, keep that provider instead of forcing xAI. If a provider uses SecretRefs, verify they resolve for the daemon's user account before reporting success.
+If the user already has OpenAI, Deepgram, ElevenLabs, Microsoft, or another supported provider configured and the smoke tests pass, keep it. If a provider uses SecretRefs, verify they resolve for the daemon's user account before reporting success.
 
 Run infer smoke tests:
 
 ```bash
+TTS_PROVIDER=<configured-tts-provider>
 rm -f /tmp/clawkie-openclaw-infer-smoke.mp3
-openclaw infer tts voices --provider xai --json || openclaw infer tts voices --json
+openclaw infer tts voices --provider "$TTS_PROVIDER" --json || openclaw infer tts voices --json
 openclaw infer tts convert \
   --text "clawkie infer smoke test" \
   --output /tmp/clawkie-openclaw-infer-smoke.mp3 \
@@ -388,7 +355,7 @@ Report only non-secret facts:
 - Install mode: fresh install, upgrade, or reinstall/repair
 - Daemon source path
 - Whether dependencies installed
-- Whether `.env` exists and contains required keys, without printing key values
+- Whether `.env` exists and contains `DAEMON_PEER_ID`
 - Whether `DAEMON_PEER_ID` is stable/configured, without printing it unless the user explicitly asks
 - OpenClaw infer config present for `audio transcribe` and `tts convert`
 - `openclaw infer audio providers`, `tts providers`, `tts voices`, and smoke-test results
@@ -399,4 +366,4 @@ Report only non-secret facts:
 - Verification commands run
 - Any blockers
 
-Do not report the xAI API key. Avoid posting the daemon host ID into public/shared chat unless necessary.
+Avoid posting the daemon host ID into public/shared chat unless necessary.

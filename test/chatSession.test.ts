@@ -29,7 +29,6 @@ describe('runChat OpenClaw CLI integration', () => {
     execMock.mockResolvedValue({ stdout: 'ok\n', stderr: '' });
 
     await runChat('Hello\nworld', {
-      apiKey: 'test-key',
       sessionId: 'session-1',
       threadId: 'thread-1',
       deliver: true,
@@ -61,7 +60,6 @@ describe('runChat OpenClaw CLI integration', () => {
       .mockResolvedValueOnce({ stdout: 'reply\n', stderr: '' });
 
     await runChat('from session route', {
-      apiKey: 'test-key',
       sessionId: 'agent:main:discord:channel-1:thread-2',
       deliver: true,
     });
@@ -79,12 +77,11 @@ describe('runChat OpenClaw CLI integration', () => {
 
     await expect(
       runChat('hello', {
-        apiKey: 'test-key',
         sessionId: 'session-1',
         threadId: 'thread-1',
         deliver: true,
       }),
-    ).resolves.toEqual({ text: 'ok', source: 'xai_via_openclaw' });
+    ).resolves.toEqual({ text: 'ok', source: 'openclaw' });
 
     const agentCommand = findAgentCommand();
     expect(agentCommand).toContain('"--session-id" "session-1"');
@@ -94,7 +91,6 @@ describe('runChat OpenClaw CLI integration', () => {
     execMock.mockResolvedValue({ stdout: 'ok\n', stderr: '' });
 
     await runChat('hello', {
-      apiKey: 'test-key',
       sessionId: 'session-1',
       threadId: 'thread-1',
       deliver: true,
@@ -133,7 +129,6 @@ describe('runChat OpenClaw CLI integration', () => {
     });
 
     const resultPromise = runChat('hi', {
-      apiKey: 'test-key',
       sessionId: 'session-1',
       threadId: 'thread-1',
       deliver: true,
@@ -141,7 +136,7 @@ describe('runChat OpenClaw CLI integration', () => {
 
     await vi.waitFor(() => expect(findAgentCommand()).toContain('"--channel" "last"'));
     expect(agentStartedWhileTranscriptPending).toBe(true);
-    await expect(resultPromise).resolves.toEqual({ text: 'hello back', source: 'xai_via_openclaw' });
+    await expect(resultPromise).resolves.toEqual({ text: 'hello back', source: 'openclaw' });
 
     resolveTranscript?.({ stdout: 'transcript posted\n', stderr: '' });
   });
@@ -167,12 +162,11 @@ describe('runChat OpenClaw CLI integration', () => {
 
       await expect(
         runChat('hi', {
-          apiKey: 'test-key',
           sessionId: 'session-1',
           threadId: 'thread-1',
           deliver: true,
         }),
-      ).resolves.toEqual({ text: 'hello back', source: 'xai_via_openclaw' });
+      ).resolves.toEqual({ text: 'hello back', source: 'openclaw' });
 
       await vi.waitFor(() => expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('transcript_post_failed')));
       const logLine = String(errorSpy.mock.calls.find(([line]) => String(line).includes('transcript_post_failed'))?.[0]);
@@ -188,7 +182,6 @@ describe('runChat OpenClaw CLI integration', () => {
     execMock.mockResolvedValue({ stdout: 'ok\n', stderr: '' });
 
     await runChat('turn left at the next light', {
-      apiKey: 'test-key',
       sessionId: 'session-1',
       threadId: 'thread-1',
       deliver: true,
@@ -211,7 +204,6 @@ describe('runChat OpenClaw CLI integration', () => {
       .mockResolvedValueOnce({ stdout: 'ok\n', stderr: '' });
 
     const result = await runChat('hi', {
-      apiKey: 'test-key',
       sessionId: 'session-1',
       threadId: 'thread-1',
       deliver: true,
@@ -240,7 +232,6 @@ describe('runChat OpenClaw CLI integration', () => {
     execMock.mockResolvedValue({ stdout: 'plain reply\n', stderr: '' });
 
     const result = await runChat('hi', {
-      apiKey: 'test-key',
       sessionId: 'session-1',
       deliver: true,
     });
@@ -261,7 +252,6 @@ describe('runChat OpenClaw CLI integration', () => {
     });
 
     const result = await runChat('hi', {
-      apiKey: 'test-key',
       sessionId: 'session-1',
       deliver: true,
     });
@@ -277,7 +267,6 @@ describe('runChat OpenClaw CLI integration', () => {
 
     await expect(
       runChat('hi', {
-        apiKey: 'test-key',
         sessionId: 'session-1',
         deliver: true,
       }),
@@ -296,7 +285,6 @@ describe('runChat OpenClaw CLI integration', () => {
       .mockResolvedValueOnce({ stdout: 'reply\n', stderr: '' });
 
     await runChat('hello', {
-      apiKey: 'test-key',
       sessionId: 'agent:main:discord:channel:thread-1',
       deliver: true,
     });
@@ -313,7 +301,6 @@ describe('runChat OpenClaw CLI integration', () => {
     execMock.mockResolvedValueOnce({ stdout: 'reply\n', stderr: '' });
 
     await runChat('hello', {
-      apiKey: 'test-key',
       sessionId: 'agent:main:main',
       deliver: true,
     });
@@ -332,7 +319,6 @@ describe('runChat OpenClaw CLI integration', () => {
     execMock.mockResolvedValueOnce({ stdout: 'reply\n', stderr: '' });
 
     await runChat('hello', {
-      apiKey: 'test-key',
       sessionId: 'agent:main:webchat',
       deliver: true,
     });
@@ -357,7 +343,6 @@ describe('runChat OpenClaw CLI integration', () => {
       .mockResolvedValueOnce({ stdout: 'reply\n', stderr: '' });
 
     await runChat('hello', {
-      apiKey: 'test-key',
       sessionId: 'agent:main:webchat',
       delivery: { channel: 'discord', target: 'channel:thread-1' },
     });
@@ -380,7 +365,6 @@ describe('runChat OpenClaw CLI integration', () => {
 
     await expect(
       runChat('hello', {
-        apiKey: 'test-key',
         sessionId: 'agent:main:discord',
         deliver: true,
       }),
@@ -397,7 +381,6 @@ describe('runChat OpenClaw CLI integration', () => {
 
     await expect(
       runChat('hello', {
-        apiKey: 'test-key',
         sessionId: 'session-1',
         deliver: true,
       }),
@@ -411,7 +394,6 @@ describe('runChat OpenClaw CLI integration', () => {
 
     await expect(
       runChat('hello', {
-        apiKey: 'test-key',
         sessionId: 'session-1',
         signal: abort.signal,
         deliver: true,
@@ -429,7 +411,6 @@ describe('runChat with explicit delivery target', () => {
     execMock.mockResolvedValue({ stdout: 'ok\n', stderr: '' });
 
     await runChat('hello', {
-      apiKey: 'test-key',
       sessionId: 'session-1',
       delivery: { channel: 'slack', target: 'channel:C123' },
     });
@@ -447,7 +428,6 @@ describe('runChat with explicit delivery target', () => {
       .mockResolvedValueOnce({ stdout: 'hello back\n', stderr: '' });
 
     const result = await runChat('hi', {
-      apiKey: 'test-key',
       sessionId: 'session-1',
       delivery: { channel: 'discord', target: 'channel:thread-1' },
     });
@@ -481,7 +461,6 @@ describe('runChat with explicit delivery target', () => {
 
     await expect(
       runChat('hi', {
-        apiKey: 'test-key',
         sessionId: 'session-1',
         delivery: { channel: 'discord', target: 'channel:thread-1' },
       }),
@@ -506,7 +485,6 @@ describe('runChat with explicit delivery target', () => {
 
     await expect(
       runChat('hi', {
-        apiKey: 'test-key',
         sessionId: 'session-1',
         delivery: { channel: 'discord', target: 'channel:thread-1' },
       }),

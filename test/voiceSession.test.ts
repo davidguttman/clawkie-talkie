@@ -102,7 +102,6 @@ function makeVoiceSession(overrides: { createSpeechDetector?: SpeechDetectorFact
   };
   const createSpeechDetector = overrides.createSpeechDetector ?? vi.fn(async () => fakeVad);
   const session = new VoiceSession({
-    apiKey: 'test-key',
     sttLanguage: 'en',
     signalServer: 'https://signal.example',
     iceServers: [],
@@ -317,7 +316,6 @@ describe('voice session OpenClaw infer STT runtime', () => {
     expect(chatMocks.runChat).toHaveBeenCalledWith(
       'hello',
       expect.objectContaining({
-        apiKey: 'test-key',
         sessionId: 'session-1',
         delivery: { channel: 'discord', target: 'channel:thread-1' },
         deliver: true,

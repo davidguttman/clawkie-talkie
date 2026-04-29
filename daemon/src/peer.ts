@@ -36,7 +36,6 @@ const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
 const RENDEZVOUS_TIMEOUT_MS = 12_000;
 
 export interface DaemonPeerOptions {
-  apiKey: string;
   sttLanguage?: string;
   peerId: string;
   // Legacy CLI fallback when the daemon is started with
@@ -307,7 +306,6 @@ export class DaemonPeer {
     const existingSession = this.voiceSessions.get(roomId);
     if (!existingSession) {
       const session = new VoiceSession({
-        apiKey: this.opts.apiKey,
         sttLanguage: this.opts.sttLanguage,
         signalServer: this.signalServer,
         iceServers: this.iceServers,

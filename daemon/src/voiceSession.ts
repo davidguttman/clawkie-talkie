@@ -136,7 +136,6 @@ function sanitizeReplyFailureLogText(text: string): string {
 }
 
 export interface VoiceSessionRuntimeOptions {
-  apiKey: string;
   sttLanguage?: string;
   signalServer: string;
   iceServers: RTCIceServer[];
@@ -733,7 +732,6 @@ export class VoiceSession {
     try {
       const target = this.state.chatTarget();
       const result = await runChat(trimmed, {
-        apiKey: this.opts.apiKey,
         signal: this.chatAbort.signal,
         sessionId: target.sessionId,
         delivery: target.delivery,

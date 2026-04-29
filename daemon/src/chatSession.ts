@@ -45,7 +45,6 @@ const WEBCHAT_LAST_SESSION_KEY = 'agent:main:main';
 
 // Helper: send a debug/activity notification to the Discord thread
 async function sendDebugNotification(
-  apiKey: string,
   threadId: string | undefined,
   message: string,
 ): Promise<void> {
@@ -57,22 +56,19 @@ async function sendDebugNotification(
       '--target', `channel:${threadId}`,
       '--message', `> _clawkie ${message}`,
     ];
-    const env = openClawEnv(apiKey);
-    await execAsync(`openclaw ${args.map(a => JSON.stringify(a)).join(' ')}`, { env });
+    await execAsync(`openclaw ${args.map(a => JSON.stringify(a)).join(' ')}`);
   } catch {
     // debug notifications are best-effort — don't fail the turn
   }
 }
 
 async function sendTranscriptMessage(
-  apiKey: string,
   opts: { threadId?: string; sessionId: string; delivery?: DeliveryTarget },
   transcript: string,
   signal?: AbortSignal,
 ): Promise<void> {
   if (opts.delivery) {
     await sendGenericMessage(
-      apiKey,
       opts.delivery,
       quoteTranscript(transcript),
       signal,
@@ -85,11 +81,10 @@ async function sendTranscriptMessage(
     console.error('[openclaw] transcript_post_skipped: missing_discord_target');
     return;
   }
-  await sendDiscordMessage(apiKey, target, quoteTranscript(transcript), signal, 'openclaw_transcript_post_failed');
+  await sendDiscordMessage(target, quoteTranscript(transcript), signal, 'openclaw_transcript_post_failed');
 }
 
 async function sendGenericMessage(
-  apiKey: string,
   delivery: DeliveryTarget,
   message: string,
   signal: AbortSignal | undefined,
@@ -102,10 +97,7 @@ async function sendGenericMessage(
     '--message', message,
   ];
   try {
-    await execAsync(`openclaw ${args.map(a => JSON.stringify(a)).join(' ')}`, {
-      env: openClawEnv(apiKey),
-      signal,
-    });
+    await execAsync(`openclaw ${args.map(a => JSON.stringify(a)).join(' ')}`, { signal });
   } catch (err) {
     if (signal?.aborted) throw new ChatError('aborted', 'aborted');
     throw toOpenClawChatError(err, failureLabel);
@@ -113,7 +105,6 @@ async function sendGenericMessage(
 }
 
 async function sendDiscordMessage(
-  apiKey: string,
   target: string,
   message: string,
   signal: AbortSignal | undefined,
@@ -126,10 +117,7 @@ async function sendDiscordMessage(
     '--message', message,
   ];
   try {
-    await execAsync(`openclaw ${args.map(a => JSON.stringify(a)).join(' ')}`, {
-      env: openClawEnv(apiKey),
-      signal,
-    });
+    await execAsync(`openclaw ${args.map(a => JSON.stringify(a)).join(' ')}`, { signal });
   } catch (err) {
     if (signal?.aborted) throw new ChatError('aborted', 'aborted');
     throw toOpenClawChatError(err, failureLabel);
@@ -174,7 +162,6 @@ export function deriveDiscordMessageTarget(opts: {
 // delivery path for the assistant reply. Transcript posting is a separate
 // fire-and-observe side effect, not a prerequisite for reply generation.
 async function runOpenClawTurn(opts: {
-  apiKey: string;
   sessionId: string;
   threadId?: string;
   userText: string;
@@ -194,12 +181,10 @@ async function runOpenClawTurn(opts: {
     '-m', message,
   ];
 
-  const env = openClawEnv(opts.apiKey);
-
   try {
     const { stdout } = await execAsync(
       `openclaw ${args.map(a => JSON.stringify(a)).join(' ')}`,
-      { env, signal: opts.signal },
+      { signal: opts.signal },
     );
     const reply = extractOpenClawReplyText(stdout);
     if (!reply && hasOpenClawMediaDirective(stdout)) {
@@ -254,7 +239,6 @@ export function buildAgentTurnMessage(userText: string): string {
 }
 
 async function resolveOpenClawSessionId(opts: {
-  apiKey: string;
   sessionId: string;
   signal?: AbortSignal;
 }): Promise<string> {
@@ -265,7 +249,7 @@ async function resolveOpenClawSessionId(opts: {
   try {
     const { stdout } = await execAsync(
       'openclaw "sessions" "--json" "--all-agents" "--active" "10080"',
-      { env: openClawEnv(opts.apiKey), signal: opts.signal },
+      { signal: opts.signal },
     );
     const sessions = parseOpenClawSessions(stdout);
     const exactMatch = sessions.find((entry) => entry.key === requested);
@@ -290,10 +274,6 @@ async function resolveOpenClawSessionId(opts: {
     if (opts.signal?.aborted) throw new ChatError('aborted', 'aborted');
     throw toOpenClawChatError(err, 'openclaw_session_lookup_failed');
   }
-}
-
-function openClawEnv(apiKey: string): NodeJS.ProcessEnv {
-  return { ...process.env, XAI_API_KEY: apiKey };
 }
 
 function parseOpenClawSessions(stdout: string): Array<{ key: string; sessionId: string }> {
@@ -384,13 +364,11 @@ export interface ChatOptionsWithSession extends ChatOptions {
 }
 
 export async function runChat(userText: string, opts: ChatOptionsWithSession): Promise<ChatResult> {
-  if (!opts.apiKey) throw new ChatError('missing_xai_api_key', 'missing_xai_api_key');
   const trimmed = userText.trim();
   if (!trimmed) throw new ChatError('empty_transcript', 'empty_transcript');
 
   observeTranscriptPost(
     sendTranscriptMessage(
-      opts.apiKey,
       { threadId: opts.threadId, sessionId: opts.sessionId, delivery: opts.delivery },
       trimmed,
       opts.signal,
@@ -399,7 +377,6 @@ export async function runChat(userText: string, opts: ChatOptionsWithSession): P
 
   try {
     const reply = await runOpenClawTurn({
-      apiKey: opts.apiKey,
       sessionId: opts.sessionId,
       threadId: opts.threadId,
       userText: trimmed,
@@ -407,13 +384,12 @@ export async function runChat(userText: string, opts: ChatOptionsWithSession): P
       signal: opts.signal,
     });
 
-    await sendDebugNotification(opts.apiKey, opts.threadId, 'reply delivered');
+    await sendDebugNotification(opts.threadId, 'reply delivered');
 
-    return { text: reply, source: 'xai_via_openclaw' };
+    return { text: reply, source: 'openclaw' };
   } catch (err) {
     // Debug: notify on error
     await sendDebugNotification(
-      opts.apiKey,
       opts.threadId,
       `error: ${err instanceof Error ? err.message : 'unknown'}`,
     );

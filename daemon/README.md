@@ -35,7 +35,10 @@ That starts:
 - the daemon
 - the Vite client on `http://localhost:5173`
 
-The daemon reads `XAI_API_KEY` (and other config) from the process environment.
+The daemon reads optional config (`DAEMON_PEER_ID`, `CT_STT_LANGUAGE`,
+`CT_THREAD_ID`, `CT_CLIENT_ORIGIN`) from the process environment. All
+LLM/STT/TTS provider auth is read by `openclaw` itself from its own
+configuration; the daemon does not hold provider API keys.
 The root `dev:daemon` / `daemon` scripts will additionally load a repo-root
 `.env` if one exists (`--env-file-if-exists=.env`).
 

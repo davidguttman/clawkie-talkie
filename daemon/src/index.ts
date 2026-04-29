@@ -4,17 +4,18 @@
 // daemon and the Vite client. Defaults assume localhost:5173.
 //
 // Manual override:
-//   XAI_API_KEY=... npm run daemon -- --session-id <sid> \
-//     --client-origin <url>
+//   npm run daemon -- --session-id <sid> --client-origin <url>
 //
 // The daemon subscribes to the hosted rambly-style signaling broker
 // under a UUID token generated each session (or overridden via
 // DAEMON_PEER_ID env). The phone discovers the daemon via
 // `?host=<uuid>` and joins the same room. simple-peer + @roamhq/wrtc
 // drive the WebRTC DataChannel; the daemon owns the full turn:
-// OpenClaw infer transcription on inbound mic PCM, xAI chat on the final
-// transcript, and OpenClaw infer TTS on the reply, with resulting PCM16 audio streamed
-// back to the phone. The browser never holds an xAI key.
+// OpenClaw infer transcription on inbound mic PCM, the configured
+// OpenClaw agent on the final transcript, and OpenClaw infer TTS on
+// the reply, with resulting PCM16 audio streamed back to the phone.
+// All LLM/STT/TTS auth lives in OpenClaw's own configuration; the
+// daemon does not hold provider API keys.
 
 import { parseArgs } from 'node:util';
 import { DaemonPeer } from './peer.js';
@@ -25,7 +26,6 @@ async function main(): Promise<void> {
   const cli = parseCli();
 
   const peer = new DaemonPeer({
-    apiKey: cli.xaiApiKey,
     sttLanguage: cli.sttLanguage,
     peerId: cli.peerId,
     sessionId: cli.sessionId,
@@ -65,18 +65,11 @@ function parseCli(): CliOptions {
     },
   });
 
-  const xaiApiKey = process.env.XAI_API_KEY?.trim();
-  if (!xaiApiKey) {
-    console.error('XAI_API_KEY env var is required');
-    process.exit(2);
-  }
-
   return {
     sessionId: values['session-id'] || 'dev-local',
     threadId: values['thread-id'] || process.env.CT_THREAD_ID,
     clientOrigin: resolveClientOrigin(values['client-origin']),
     sttLanguage: values['stt-language'] || process.env.CT_STT_LANGUAGE,
-    xaiApiKey,
     peerId: resolveDaemonPeerId(),
   };
 }
@@ -85,7 +78,6 @@ interface CliOptions {
   sessionId: string;
   threadId?: string;
   clientOrigin: string;
-  xaiApiKey: string;
   sttLanguage?: string;
   peerId: string;
 }
