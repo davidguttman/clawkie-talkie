@@ -37,7 +37,13 @@
         --sans: 'IBM Plex Sans', -apple-system, system-ui, sans-serif;
       }
       * { box-sizing: border-box; }
-      html, body { margin: 0; padding: 0; background: var(--bg); }
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+        max-width: 100%;
+        overflow-x: hidden;
+      }
       body {
         font-family: var(--sans);
         color: var(--ink);
@@ -51,8 +57,10 @@
       .page {
         position: relative;
         max-width: 1180px;
+        width: 100%;
         margin: 0 auto;
         padding: 28px 28px 80px;
+        overflow-x: clip;
       }
       .page::before {
         content: '';
@@ -62,7 +70,7 @@
         transform: translateX(-50%);
         width: 920px;
         height: 920px;
-        max-width: 110vw;
+        max-width: 100dvw;
         background: radial-gradient(circle, var(--accent-glow) 0%, transparent 60%);
         opacity: 0.18;
         filter: blur(40px);
@@ -265,6 +273,20 @@
           0 0 0 1.5px #1e1e22,
           0 40px 80px rgba(0, 0, 0, 0.6),
           0 0 0 0.5px rgba(255, 255, 255, 0.04) inset;
+        --demo-state: var(--ink3);
+        --demo-state-glow: transparent;
+      }
+      .device[data-demo-phase="recording"] {
+        --demo-state: var(--accent);
+        --demo-state-glow: var(--accent-glow);
+      }
+      .device[data-demo-phase="thinking"] {
+        --demo-state: var(--think);
+        --demo-state-glow: rgba(232, 194, 90, 0.45);
+      }
+      .device[data-demo-phase="ai"] {
+        --demo-state: var(--ai);
+        --demo-state-glow: rgba(127, 184, 208, 0.45);
       }
       .device-screen {
         position: relative;
@@ -297,12 +319,21 @@
         color: var(--ink2);
         margin-bottom: 14px;
       }
+      .device-header .pill {
+        color: var(--demo-state);
+        border-color: color-mix(in srgb, var(--demo-state) 35%, transparent);
+        background: color-mix(in srgb, var(--demo-state) 8%, transparent);
+      }
+      .device-header .pill .dot {
+        background: var(--demo-state);
+        box-shadow: 0 0 8px var(--demo-state);
+      }
       .device-caption-label {
         font-family: var(--mono);
         font-size: 10px;
         font-weight: 700;
         letter-spacing: 1.6px;
-        color: var(--accent);
+        color: var(--demo-state);
         display: flex;
         align-items: center;
         gap: 6px;
@@ -312,9 +343,14 @@
         width: 6px;
         height: 6px;
         border-radius: 50%;
-        background: var(--accent);
-        box-shadow: 0 0 6px var(--accent);
+        background: var(--demo-state);
+        box-shadow: 0 0 6px var(--demo-state);
         animation: pulseDot 1.4s ease-in-out infinite;
+      }
+      .device[data-demo-phase="idle"] .device-caption-label .dot {
+        animation: none;
+        opacity: 0.55;
+        box-shadow: none;
       }
       .device-caption {
         font-size: 14px;
@@ -323,15 +359,21 @@
         padding-bottom: 16px;
         border-bottom: 1px solid var(--stroke);
         flex: 1;
+        min-height: 0;
+        overflow: hidden;
       }
       .device-caret {
         display: inline-block;
         width: 7px;
         height: 14px;
-        background: var(--accent);
+        background: var(--demo-state);
         margin-left: 2px;
         vertical-align: text-bottom;
         animation: caret 0.9s step-end infinite;
+      }
+      .device[data-demo-phase="idle"] .device-caret,
+      .device[data-demo-live="false"] .device-caret {
+        display: none;
       }
       @keyframes caret {
         0%, 50% { opacity: 1; }
@@ -346,10 +388,19 @@
       }
       .device-wave span {
         flex: 1;
-        background: var(--accent);
+        background: var(--demo-state);
         border-radius: 2px;
-        box-shadow: 0 0 8px var(--accent-glow);
+        box-shadow: 0 0 8px var(--demo-state-glow);
         animation: waveBar 1.1s ease-in-out infinite;
+      }
+      .device[data-demo-phase="idle"] .device-wave span {
+        height: 18%;
+        background: var(--ink4);
+        box-shadow: none;
+        animation: none;
+      }
+      .device[data-demo-phase="thinking"] .device-wave span {
+        animation-duration: 1.8s;
       }
       .device-wave span:nth-child(2) { animation-delay: 0.08s; }
       .device-wave span:nth-child(3) { animation-delay: 0.16s; }
@@ -378,16 +429,40 @@
         width: 152px;
         height: 152px;
         border-radius: 50%;
-        background: radial-gradient(circle at 30% 28%, var(--accent) 0%, color-mix(in srgb, var(--accent) 55%, #000) 100%);
+        border: 0;
+        padding: 0;
+        cursor: pointer;
+        appearance: none;
+        -webkit-appearance: none;
+        background: radial-gradient(circle at 30% 28%, var(--demo-state) 0%, color-mix(in srgb, var(--demo-state) 55%, #000) 100%);
         box-shadow:
-          0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent),
-          0 0 44px var(--accent-glow),
+          0 0 0 1px color-mix(in srgb, var(--demo-state) 40%, transparent),
+          0 0 44px var(--demo-state-glow),
           inset 0 1px 0 rgba(255, 255, 255, 0.15);
         display: grid;
         place-items: center;
         color: #001016;
         font-family: var(--mono);
         font-weight: 700;
+        transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+      }
+      .device[data-demo-phase="idle"] .device-ptt {
+        background: radial-gradient(circle at 30% 28%, #1a1a1d 0%, #0a0a0b 100%);
+        box-shadow:
+          0 0 0 1px var(--stroke-strong),
+          inset 0 1px 0 rgba(255, 255, 255, 0.06),
+          0 18px 40px rgba(0, 0, 0, 0.6);
+        color: var(--ink);
+      }
+      .device-ptt:hover {
+        transform: scale(1.02);
+      }
+      .device-ptt:active {
+        transform: scale(0.96);
+      }
+      .device-ptt:focus-visible {
+        outline: 3px solid color-mix(in srgb, var(--demo-state) 70%, #fff);
+        outline-offset: 5px;
       }
       .device-ptt::before,
       .device-ptt::after {
@@ -398,16 +473,20 @@
       }
       .device-ptt::before {
         inset: -28px;
-        background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
+        background: radial-gradient(circle, var(--demo-state-glow) 0%, transparent 70%);
         filter: blur(6px);
         animation: auraBreathe 1.6s ease-in-out infinite;
         opacity: 0.55;
       }
       .device-ptt::after {
         inset: -56px;
-        border: 1.5px solid var(--accent);
+        border: 1.5px solid var(--demo-state);
         opacity: 0.3;
         animation: auraPulse 1.8s ease-out infinite;
+      }
+      .device[data-demo-phase="idle"] .device-ptt::before,
+      .device[data-demo-phase="idle"] .device-ptt::after {
+        display: none;
       }
       .device-ptt-glyph { font-size: 38px; line-height: 1; }
       .device-ptt-label { font-size: 10px; letter-spacing: 1.8px; margin-top: 8px; }
@@ -602,6 +681,26 @@
         .label-desktop { display: none; }
         .label-mobile { display: inline; }
       }
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.001ms !important;
+          animation-iteration-count: 1 !important;
+          scroll-behavior: auto !important;
+          transition-duration: 0.001ms !important;
+        }
+        .page::before,
+        .device-ptt::before,
+        .device-ptt::after,
+        .device-caret {
+          display: none !important;
+        }
+        .device-wave span {
+          animation: none !important;
+          height: 28%;
+        }
+      }
     </style>
   </head>
   <body>
@@ -655,18 +754,18 @@
           </div>
         </div>
 
-        <div class="device" aria-hidden="true">
+        <div class="device" data-demo-device data-demo-phase="idle" data-demo-live="false" aria-label="Clawkie-Talkie scripted voice demo">
           <div class="device-screen">
             <div class="device-island"></div>
             <div class="device-header">
               <span>CLWK · DEMO</span>
-              <span class="pill"><span class="dot"></span>REC</span>
+              <span class="pill"><span class="dot"></span><span data-demo-pill>READY</span></span>
             </div>
             <div class="device-caption-label">
-              <span class="dot"></span>YOU · LIVE
+              <span class="dot"></span><span data-demo-label>READY</span>
             </div>
-            <div class="device-caption">
-              walk me through the deploy plan for the auth service<span class="device-caret"></span>
+            <div class="device-caption" aria-live="polite">
+              <span data-demo-caption>Tap to continue the conversation.</span><span class="device-caret"></span>
             </div>
             <div class="device-wave">
               <span></span><span></span><span></span><span></span>
@@ -674,12 +773,12 @@
               <span></span><span></span><span></span><span></span>
             </div>
             <div class="device-ptt-wrap">
-              <div class="device-ptt">
+              <button type="button" class="device-ptt" data-demo-advance aria-label="Advance Clawkie-Talkie demo">
                 <div style="text-align:center;">
-                  <div class="device-ptt-glyph">●</div>
-                  <div class="device-ptt-label">TAP TO TALK</div>
+                  <div class="device-ptt-glyph" data-demo-glyph>●</div>
+                  <div class="device-ptt-label" data-demo-control-label>TAP TO TALK</div>
                 </div>
-              </div>
+              </button>
             </div>
             <div class="device-footer">
               <div class="device-footer-btn">↺ REPLAY</div>
@@ -845,6 +944,165 @@
         </span>
       </footer>
     </div>
+
+    <script>
+      (function () {
+        var device = document.querySelector('[data-demo-device]');
+        var control = document.querySelector('[data-demo-advance]');
+        if (!device || !control) return;
+
+        var demoSteps = [
+          {
+            id: 'idle-ready',
+            phase: 'idle',
+            pill: 'READY',
+            label: 'READY',
+            text: 'Tap to continue the conversation.',
+            glyph: '●',
+            controlLabel: 'TAP TO TALK',
+            live: false,
+            durationMs: 2200
+          },
+          {
+            id: 'recording-auth-plan',
+            phase: 'recording',
+            pill: 'REC',
+            label: 'YOU · LIVE',
+            text: 'walk me through the deploy plan for the auth service',
+            glyph: '■',
+            controlLabel: 'TAP TO STOP',
+            live: true,
+            durationMs: 3600
+          },
+          {
+            id: 'thinking-transcribing',
+            phase: 'thinking',
+            pill: 'THINKING',
+            label: 'TRANSCRIBING · OPENCLAW',
+            text: 'finalizing your turn and preparing the reply...',
+            glyph: '◐',
+            controlLabel: 'THINKING',
+            live: true,
+            durationMs: 2200
+          },
+          {
+            id: 'ai-readback',
+            phase: 'ai',
+            pill: 'READING REPLY',
+            label: 'AI · READING ALOUD',
+            text: 'Start with the database migration, deploy the auth service behind the feature flag, then watch login errors before opening traffic.',
+            glyph: '◉',
+            controlLabel: 'TAP TO SILENCE',
+            live: true,
+            durationMs: 4400
+          },
+          {
+            id: 'idle-next-turn',
+            phase: 'idle',
+            pill: 'READY',
+            label: 'AI · LAST',
+            text: 'Start with the database migration, deploy behind the flag, then watch login errors.',
+            glyph: '●',
+            controlLabel: 'TAP TO TALK',
+            live: false,
+            durationMs: 2600
+          },
+          {
+            id: 'recording-follow-up',
+            phase: 'recording',
+            pill: 'REC',
+            label: 'YOU · LIVE',
+            text: 'what should I check first if rollback starts looking likely',
+            glyph: '■',
+            controlLabel: 'TAP TO STOP',
+            live: true,
+            durationMs: 3200
+          },
+          {
+            id: 'thinking-follow-up',
+            phase: 'thinking',
+            pill: 'THINKING',
+            label: 'THINKING',
+            text: 'checking the rollback path...',
+            glyph: '◐',
+            controlLabel: 'THINKING',
+            live: true,
+            durationMs: 1800
+          },
+          {
+            id: 'ai-follow-up',
+            phase: 'ai',
+            pill: 'READING REPLY',
+            label: 'AI · READING ALOUD',
+            text: 'Check migration reversibility first. If that is clean, compare error rate, latency, and auth callback failures against the pre-deploy baseline.',
+            glyph: '◉',
+            controlLabel: 'TAP TO SILENCE',
+            live: true,
+            durationMs: 4200
+          }
+        ];
+
+        var nodes = {
+          pill: device.querySelector('[data-demo-pill]'),
+          label: device.querySelector('[data-demo-label]'),
+          caption: device.querySelector('[data-demo-caption]'),
+          glyph: device.querySelector('[data-demo-glyph]'),
+          controlLabel: device.querySelector('[data-demo-control-label]')
+        };
+        var index = 0;
+        var timer = 0;
+        var motionQuery = window.matchMedia
+          ? window.matchMedia('(prefers-reduced-motion: reduce)')
+          : { matches: false, addEventListener: null, addListener: null };
+
+        function render(step) {
+          device.dataset.demoPhase = step.phase;
+          device.dataset.demoLive = step.live ? 'true' : 'false';
+          nodes.pill.textContent = step.pill;
+          nodes.label.textContent = step.label;
+          nodes.caption.textContent = step.text;
+          nodes.glyph.textContent = step.glyph;
+          nodes.controlLabel.textContent = step.controlLabel;
+          control.setAttribute('aria-label', step.controlLabel + ': advance Clawkie-Talkie demo');
+        }
+
+        function clearDemoTimer() {
+          if (!timer) return;
+          window.clearTimeout(timer);
+          timer = 0;
+        }
+
+        function scheduleAutoplay() {
+          clearDemoTimer();
+          if (motionQuery.matches) return;
+          timer = window.setTimeout(function () {
+            advance('auto');
+          }, demoSteps[index].durationMs);
+        }
+
+        function advance(reason) {
+          clearDemoTimer();
+          index = (index + 1) % demoSteps.length;
+          render(demoSteps[index]);
+          if (reason === 'auto' || reason === 'manual') {
+            scheduleAutoplay();
+          }
+        }
+
+        control.addEventListener('click', function () {
+          advance('manual');
+        });
+
+        if (motionQuery.addEventListener) {
+          motionQuery.addEventListener('change', scheduleAutoplay);
+        } else if (motionQuery.addListener) {
+          motionQuery.addListener(scheduleAutoplay);
+        }
+
+        render(demoSteps[index]);
+        scheduleAutoplay();
+      })();
+    </script>
 
     <script>
       (function () {
