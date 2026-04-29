@@ -88,6 +88,7 @@ vi.mock('../daemon/src/vad.js', () => ({
 }));
 
 import { ChatError } from '../daemon/src/chatSession.js';
+import type { TtsCatalog } from '../daemon/src/protocol.js';
 import {
   createVoiceSessionState,
   decidePhoneConnection,
@@ -95,7 +96,11 @@ import {
   type SpeechDetectorFactory,
 } from '../daemon/src/voiceSession';
 
-function makeVoiceSession(overrides: { createSpeechDetector?: SpeechDetectorFactory } = {}) {
+function makeVoiceSession(overrides: {
+  createSpeechDetector?: SpeechDetectorFactory;
+  ttsCatalogProvider?: () => Promise<TtsCatalog>;
+  onClose?: (roomId: string) => void;
+} = {}) {
   const fakeVad = {
     isSpeech: vi.fn(() => true),
     destroy: vi.fn(),
@@ -110,7 +115,8 @@ function makeVoiceSession(overrides: { createSpeechDetector?: SpeechDetectorFact
     sessionId: 'session-1',
     delivery: { channel: 'discord', target: 'channel:thread-1' },
     createSpeechDetector,
-    onClose: vi.fn(),
+    ...(overrides.ttsCatalogProvider ? { ttsCatalogProvider: overrides.ttsCatalogProvider } : {}),
+    onClose: overrides.onClose ?? vi.fn(),
   });
   const peer = {
     destroyed: false,
@@ -218,6 +224,62 @@ describe('voice session state', () => {
         incomingRemoteId: 'phone-b',
       }),
     ).toBe('replace_existing');
+  });
+});
+
+describe('voice session TTS catalog runtime', () => {
+  beforeEach(() => {
+    chatMocks.runChat.mockReset();
+  });
+
+  it('sends the TTS catalog when the phone requests it', async () => {
+    const catalog: TtsCatalog = {
+      activeProvider: 'openai',
+      generatedAt: '2026-04-28T00:00:00.000Z',
+      providers: [
+        {
+          id: 'openai',
+          name: 'OpenAI',
+          configured: true,
+          selected: true,
+          available: true,
+          models: ['gpt-4o-mini-tts'],
+          voices: [{ id: 'nova', name: 'Nova' }],
+        },
+      ],
+    };
+    const ttsCatalogProvider = vi.fn(async () => catalog);
+    const { session, peer } = makeVoiceSession({ ttsCatalogProvider });
+
+    sendControl(session, { t: 'tts.catalog.request' });
+
+    await vi.waitFor(() => {
+      expect(sentJson(peer)).toContainEqual({ t: 'tts.catalog', catalog });
+    });
+    expect(ttsCatalogProvider).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends an empty TTS catalog when the catalog load fails without closing the session', async () => {
+    const onClose = vi.fn();
+    const ttsCatalogProvider = vi.fn(async () => {
+      throw new Error('catalog failed');
+    });
+    const { session, peer } = makeVoiceSession({ ttsCatalogProvider, onClose });
+
+    sendControl(session, { t: 'tts.catalog.request' });
+
+    await vi.waitFor(() => {
+      expect(sentJson(peer)).toContainEqual({
+        t: 'tts.catalog',
+        catalog: {
+          activeProvider: undefined,
+          generatedAt: expect.any(String),
+          providers: [],
+        },
+      });
+    });
+    expect(onClose).not.toHaveBeenCalled();
+    expect((session as unknown as { state: { closed: boolean } }).state.closed).toBe(false);
   });
 });
 
@@ -364,11 +426,29 @@ describe('voice session OpenClaw infer STT runtime', () => {
 
 
 
+  it('accepts malformed settings.update payloads without throwing or storing non-string fields', () => {
+    const { session } = makeVoiceSession();
+
+    expect(() => {
+      sendControl(session, {
+        t: 'settings.update',
+        settings: { tts: { providerId: 123, model: ['bad'], voice: 456 }, voice: ' rex ' },
+      });
+    }).not.toThrow();
+
+    expect((session as unknown as { currentTtsSelection: unknown }).currentTtsSelection).toEqual({
+      voice: 'rex',
+    });
+  });
+
   it('uses OpenClaw infer TTS for the reply, emits tts.start/audio/tts.done, and resets the turn', async () => {
     chatMocks.runChat.mockResolvedValue({ text: 'spoken reply' });
     const { session, peer } = makeVoiceSession();
 
-    sendControl(session, { t: 'settings.update', settings: { voice: 'rex' } });
+    sendControl(session, {
+      t: 'settings.update',
+      settings: { tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' } },
+    });
     sendControl(session, { t: 'stt.start' });
     await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
     const fakeStt = sttMocks.inferCtor.mock.results[0].value;
@@ -377,7 +457,11 @@ describe('voice session OpenClaw infer STT runtime', () => {
     await vi.waitFor(() => expect(ttsMocks.inferTtsCtor).toHaveBeenCalledTimes(1));
     const fakeTts = ttsMocks.inferTtsCtor.mock.results[0].value;
 
-    expect(fakeTts.opts).toEqual({ text: 'spoken reply', voice: 'rex' });
+    expect(fakeTts.opts).toEqual({
+      text: 'spoken reply',
+      voice: 'nova',
+      model: 'openai/gpt-4o-mini-tts',
+    });
 
     fakeTts.cb.onOpen();
     fakeTts.cb.onAudio(new Uint8Array([1, 2, 3, 4]));
@@ -392,6 +476,65 @@ describe('voice session OpenClaw infer STT runtime', () => {
     ]);
     expect(sentBinary(peer)).toEqual([Buffer.from([1, 2, 3, 4])]);
     expect((session as unknown as { state: { turnInFlight: boolean } }).state.turnInFlight).toBe(false);
+  });
+
+  it('does not forward legacy voice-only settings to TTS without a canonical model', async () => {
+    chatMocks.runChat.mockResolvedValue({ text: 'spoken reply' });
+    const { session } = makeVoiceSession();
+
+    sendControl(session, { t: 'settings.update', settings: { voice: 'eve' } });
+    sendControl(session, { t: 'stt.start' });
+    await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+    const fakeStt = sttMocks.inferCtor.mock.results[0].value;
+
+    fakeStt.cb.onDone('hello');
+    await vi.waitFor(() => expect(ttsMocks.inferTtsCtor).toHaveBeenCalledTimes(1));
+    const fakeTts = ttsMocks.inferTtsCtor.mock.results[0].value;
+
+    expect(fakeTts.opts).toEqual({
+      text: 'spoken reply',
+    });
+  });
+
+  it('does not forward rex legacy voice-only settings to TTS without a canonical model', async () => {
+    chatMocks.runChat.mockResolvedValue({ text: 'spoken reply' });
+    const { session } = makeVoiceSession();
+
+    sendControl(session, { t: 'settings.update', settings: { voice: 'rex' } });
+    sendControl(session, { t: 'stt.start' });
+    await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+    const fakeStt = sttMocks.inferCtor.mock.results[0].value;
+
+    fakeStt.cb.onDone('hello');
+    await vi.waitFor(() => expect(ttsMocks.inferTtsCtor).toHaveBeenCalledTimes(1));
+    const fakeTts = ttsMocks.inferTtsCtor.mock.results[0].value;
+
+    expect(fakeTts.opts).toEqual({
+      text: 'spoken reply',
+    });
+  });
+
+  it('forwards canonical provider-specific TTS voice settings with the selected model', async () => {
+    chatMocks.runChat.mockResolvedValue({ text: 'spoken reply' });
+    const { session } = makeVoiceSession();
+
+    sendControl(session, {
+      t: 'settings.update',
+      settings: { tts: { providerId: 'xai', model: 'grok-voice', voice: 'eve' } },
+    });
+    sendControl(session, { t: 'stt.start' });
+    await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+    const fakeStt = sttMocks.inferCtor.mock.results[0].value;
+
+    fakeStt.cb.onDone('hello');
+    await vi.waitFor(() => expect(ttsMocks.inferTtsCtor).toHaveBeenCalledTimes(1));
+    const fakeTts = ttsMocks.inferTtsCtor.mock.results[0].value;
+
+    expect(fakeTts.opts).toEqual({
+      text: 'spoken reply',
+      voice: 'eve',
+      model: 'xai/grok-voice',
+    });
   });
 
   it('logs OpenClaw reply failures with context, code, and sanitized cause details', async () => {

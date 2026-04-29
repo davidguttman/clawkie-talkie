@@ -51,6 +51,25 @@ The only daemon state that survives between turns is `roomId -> VoiceSession`
 for actively connected voice rooms — necessary because WebRTC/STT/TTS need
 live objects.
 
+## TTS catalog and settings
+
+The daemon is the source of truth for TTS provider metadata. After the browser
+opens the per-session voice room, it requests the catalog and the daemon loads
+it with `openclaw infer tts providers --json`. The daemon sends the normalized
+provider/model/voice ids back over the WebRTC DataChannel.
+
+Phone settings store only ids such as `providerId`, `model`, and `voice`; they
+do not store provider credentials or provider-specific auth material. On each
+TTS request, the daemon applies the selected ids per request by passing the
+selected model as `--model <provider>/<model>` and the selected voice as
+`--voice <voice>` to `openclaw infer tts convert`. It must not call
+`openclaw infer tts set-provider`, because that would change global OpenClaw
+state outside the voice room.
+
+If OpenClaw reports a provider but does not expose a model id that can be passed
+to `--model`, the settings UI should hide or disable that provider instead of
+falling back to global provider mutation.
+
 ## URL contract
 
 - `/` — marketing landing page placeholder.
@@ -133,6 +152,12 @@ sequenceDiagram
 - `npm run typecheck` — client and daemon TypeScript.
 - `npm run build` — Vite multi-page build emits `/`, `/voice.html`, and
   `/voice/index.html`.
+- `openclaw infer tts providers --json` — catalog includes at least one
+  configured provider.
+- `openclaw infer tts convert --text "catalog smoke" --output
+  /tmp/clawkie-tts-smoke.mp3 --json --local --model openai/gpt-4o-mini-tts
+  --voice nova` — explicit per-request TTS smoke returns JSON with an output
+  path and does not require `openclaw infer tts set-provider`.
 - Live verification (only with explicit authorization): two simultaneous
   `/voice#…` links pointing at the same `host=H` but different `session`
   values must reach READY independently and not cross-talk.

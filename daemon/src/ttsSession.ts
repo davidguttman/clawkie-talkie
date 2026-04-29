@@ -1,9 +1,10 @@
 // OpenClaw infer TTS — terminated in the daemon.
 //
 // The daemon asks the first-party OpenClaw infer CLI to synthesize the
-// reply into a temporary MP3 using local transport/default configured
-// provider, decodes that MP3 to PCM16LE mono, then forwards the PCM over
-// the existing phone TTS path. The phone wire format stays PCM16LE mono
+// reply into a temporary MP3 using local transport and the per-request
+// model/voice selection when provided, decodes that MP3 to PCM16LE mono,
+// then forwards the PCM over the existing phone TTS path. The phone wire
+// format stays PCM16LE mono
 // @ 24 kHz for DataChannel delivery; VoiceSession resamples to 48 kHz
 // when feeding the daemon WebRTC audio track.
 
@@ -23,6 +24,7 @@ const PCM_CHUNK_BYTES = 4_800; // 100 ms of mono PCM16 at 24 kHz
 export interface TtsSessionOptions {
   text: string;
   voice?: string;
+  model?: string;
   sampleRate?: number;
   synthesize?: SynthesizeTtsFn;
   convertMp3ToPcm?: ConvertMp3ToPcmFn;
@@ -42,6 +44,7 @@ type SynthesizeTtsFn = (request: {
   text: string;
   outputPath: string;
   voice?: string;
+  model?: string;
   signal?: AbortSignal;
   exec?: OpenClawInferExec;
 }) => Promise<void>;
@@ -83,6 +86,7 @@ export class OpenClawInferTtsSession {
         text: this.opts.text,
         outputPath: mp3Path,
         voice: this.opts.voice,
+        model: this.opts.model,
         signal: this.abortController.signal,
         exec: this.opts.exec,
       });
@@ -112,6 +116,7 @@ export class OpenClawInferTtsSession {
     text: string;
     outputPath: string;
     voice?: string;
+    model?: string;
     signal?: AbortSignal;
     exec?: OpenClawInferExec;
   }): Promise<void> {

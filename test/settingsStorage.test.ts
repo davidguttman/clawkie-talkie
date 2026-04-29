@@ -24,30 +24,94 @@ beforeEach(() => {
 });
 
 describe('settings storage', () => {
-  it('returns defaults when nothing is stored', async () => {
+  it('returns defaults with no selected TTS provider, model, or voice when nothing is stored', async () => {
     const { loadSettings, DEFAULT_SETTINGS } = await import('../client/src/storage');
-    expect(loadSettings()).toEqual(DEFAULT_SETTINGS);
+    const settings = loadSettings();
+    expect(settings).toEqual(DEFAULT_SETTINGS);
+    expect(settings.tts.providerId).toBeUndefined();
+    expect(settings.tts.model).toBeUndefined();
+    expect(settings.tts.voice).toBeUndefined();
   });
 
-  it('migrates legacy free-form voice strings to the default voice id', async () => {
+  it('migrates a legacy voice into the dynamic TTS selection', async () => {
     localStorage.setItem(
       'clawkie.settings.v1',
-      JSON.stringify({ voice: 'Samantha (en-US)', speed: 1.05, format: 'md', timestamps: false }),
-    );
-    const { loadSettings } = await import('../client/src/storage');
-    expect(loadSettings().voice).toBe('eve');
-  });
-
-  it('keeps a recognized voice id intact', async () => {
-    localStorage.setItem(
-      'clawkie.settings.v1',
-      JSON.stringify({ voice: 'rex', speed: 1.05, format: 'txt', timestamps: true }),
+      JSON.stringify({ voice: 'rex', speed: 1.05, format: 'md', timestamps: false }),
     );
     const { loadSettings } = await import('../client/src/storage');
     const settings = loadSettings();
+    expect(settings.tts.voice).toBe('rex');
     expect(settings.voice).toBe('rex');
+  });
+
+  it('persists a new dynamic TTS provider, model, and voice intact', async () => {
+    localStorage.setItem(
+      'clawkie.settings.v1',
+      JSON.stringify({
+        tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' },
+        speed: 1.05,
+        format: 'txt',
+        timestamps: true,
+      }),
+    );
+    const { loadSettings } = await import('../client/src/storage');
+    const settings = loadSettings();
+    expect(settings.tts).toEqual({ providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' });
+    expect(settings.voice).toBe('nova');
     expect(settings.format).toBe('txt');
     expect(settings.timestamps).toBe(true);
+  });
+
+  it('trims dynamic TTS string fields and drops empty or non-string values', async () => {
+    localStorage.setItem(
+      'clawkie.settings.v1',
+      JSON.stringify({
+        tts: { providerId: ' openai ', model: '   ', voice: 123 },
+        voice: ' rex ',
+        speed: 1.05,
+      }),
+    );
+    const { loadSettings } = await import('../client/src/storage');
+    const settings = loadSettings();
+    expect(settings.tts).toEqual({ providerId: 'openai', voice: 'rex' });
+    expect(settings.voice).toBe('rex');
+  });
+
+  it('saveSettings writes the new dynamic TTS shape without stale voice-id validation', async () => {
+    const { saveSettings, DEFAULT_SETTINGS } = await import('../client/src/storage');
+    saveSettings({
+      ...DEFAULT_SETTINGS,
+      tts: { providerId: 'custom-provider', model: 'custom-model', voice: 'Samantha (en-US)' },
+      voice: 'Samantha (en-US)',
+      format: 'json',
+      timestamps: true,
+    });
+
+    const raw = localStorage.getItem('clawkie.settings.v1');
+    expect(raw).not.toBeNull();
+    const parsed = JSON.parse(raw as string);
+    expect(parsed.tts).toEqual({
+      providerId: 'custom-provider',
+      model: 'custom-model',
+      voice: 'Samantha (en-US)',
+    });
+    expect(parsed.voice).toBe('Samantha (en-US)');
+  });
+
+  it('saveSettings preserves an updated legacy voice mirror over a stale TTS voice', async () => {
+    const { saveSettings, loadSettings, DEFAULT_SETTINGS } = await import('../client/src/storage');
+    saveSettings({
+      ...DEFAULT_SETTINGS,
+      tts: { voice: 'rex' },
+      voice: 'leo',
+    });
+
+    const raw = localStorage.getItem('clawkie.settings.v1');
+    expect(raw).not.toBeNull();
+    const parsed = JSON.parse(raw as string);
+    expect(parsed.tts.voice).toBe('leo');
+    expect(parsed.voice).toBe('leo');
+    expect(loadSettings().tts.voice).toBe('leo');
   });
 
   it('exposes export settings without importing the rest of the Settings shape', async () => {

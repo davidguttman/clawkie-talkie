@@ -25,6 +25,7 @@ describe('OpenClawInferTtsSession', () => {
       {
         text: 'spoken reply',
         voice: 'rex',
+        model: 'openai/gpt-4o-mini-tts',
         synthesize,
         convertMp3ToPcm,
         createTempDir: async () => '/tmp/clawkie-tts-test',
@@ -40,6 +41,7 @@ describe('OpenClawInferTtsSession', () => {
         text: 'spoken reply',
         outputPath: '/tmp/clawkie-tts-test/reply.mp3',
         voice: 'rex',
+        model: 'openai/gpt-4o-mini-tts',
       }),
     );
     expect(convertMp3ToPcm).toHaveBeenCalledWith(

@@ -70,6 +70,22 @@ describe('phone → daemon factories', () => {
     );
   });
 
+  it('requests the daemon TTS catalog', () => {
+    expect(phoneClient.ttsCatalogRequest()).toEqual({ t: 'tts.catalog.request' });
+    expect(phoneDaemon.ttsCatalogRequest()).toEqual({ t: 'tts.catalog.request' });
+  });
+
+  it('includes canonical TTS selection in settings.update while preserving legacy voice', () => {
+    const selection = { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' };
+    expect(phoneClient.settingsUpdate({ voice: 'nova', tts: selection })).toEqual({
+      t: 'settings.update',
+      settings: { voice: 'nova', tts: selection },
+    });
+    expect(phoneClient.settingsUpdate({ voice: 'nova', tts: selection })).toEqual(
+      phoneDaemon.settingsUpdate({ voice: 'nova', tts: selection }),
+    );
+  });
+
   it('matches the daemon copy of the protocol', () => {
     expect(phoneClient.sttStart()).toEqual(phoneDaemon.sttStart());
     expect(phoneClient.sttAudioDone()).toEqual(phoneDaemon.sttAudioDone());
@@ -155,6 +171,26 @@ describe('daemon → phone factories', () => {
     expect(daemonClient.ttsStart(24000)).toEqual({ t: 'tts.start', sample_rate: 24000 });
     expect(daemonClient.ttsDone()).toEqual({ t: 'tts.done' });
     expect(daemonClient.ttsError('nope')).toEqual({ t: 'tts.error', message: 'nope' });
+  });
+
+  it('emits TTS catalog payloads', () => {
+    const catalog = {
+      activeProvider: 'openai',
+      generatedAt: '2026-04-29T00:00:00.000Z',
+      providers: [
+        {
+          id: 'openai',
+          name: 'OpenAI',
+          configured: true,
+          selected: true,
+          available: true,
+          models: ['gpt-4o-mini-tts'],
+          voices: [{ id: 'nova', name: 'nova' }],
+        },
+      ],
+    };
+    expect(daemonClient.ttsCatalog(catalog)).toEqual({ t: 'tts.catalog', catalog });
+    expect(daemonClient.ttsCatalog(catalog)).toEqual(daemonDaemon.ttsCatalog(catalog));
   });
 
   it('matches the daemon copy of the protocol', () => {

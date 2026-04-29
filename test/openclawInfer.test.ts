@@ -89,15 +89,18 @@ describe('buildInferTtsCommand', () => {
     expect(command.args).toContain('configured/tts-provider');
   });
 
-  it('omits unsupported legacy xAI voice ids', () => {
+  it('forwards provider-specific voice ids when a model is provided', () => {
     const command = buildInferTtsCommand({
       text: 'hello',
       outputPath: '/tmp/reply.mp3',
       voice: 'eve',
+      model: 'xai/tts',
     });
 
-    expect(command.args).not.toContain('--voice');
-    expect(command.args).not.toContain('eve');
+    expect(command.args).toContain('--voice');
+    expect(command.args).toContain('eve');
+    expect(command.args).toContain('--model');
+    expect(command.args).toContain('xai/tts');
   });
 });
 

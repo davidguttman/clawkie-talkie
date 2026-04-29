@@ -13,7 +13,7 @@ import {
 } from 'react';
 import { RtcClient, type ControlMessage, type RtcStatus } from './client';
 import { attachDaemonRemoteStream, detachDaemonRemoteStream } from '../voice/tts';
-import { phoneToDaemon, type DeliveryTarget, type VoiceSettings } from '../voice/protocol';
+import { phoneToDaemon, type DeliveryTarget, type TtsCatalog, type VoiceSettings } from '../voice/protocol';
 
 export interface RtcContextValue {
   status: RtcStatus;
@@ -26,6 +26,8 @@ export interface RtcContextValue {
   // immediately with the existing stream if one is already attached, so
   // late subscribers don't miss the daemon's first stream.
   addRemoteStreamListener: (fn: (stream: MediaStream) => void) => () => void;
+  ttsCatalog: TtsCatalog | null;
+  requestTtsCatalog: () => void;
   hasClient: boolean;
 }
 
@@ -39,8 +41,38 @@ const Ctx = createContext<RtcContextValue>({
   addControlListener: () => noop,
   addBinaryListener: () => noop,
   addRemoteStreamListener: () => noop,
+  ttsCatalog: null,
+  requestTtsCatalog: noop,
   hasClient: false,
 });
+
+export function normalizeVoiceSettingsForRtc(voiceSettings?: VoiceSettings | null): VoiceSettings | null {
+  if (!voiceSettings) return null;
+  const effectiveVoice = voiceSettings.tts?.voice ?? voiceSettings.voice;
+  if (!effectiveVoice) return voiceSettings;
+  const normalizedTts = voiceSettings.tts?.voice === effectiveVoice
+    ? voiceSettings.tts
+    : { ...voiceSettings.tts, voice: effectiveVoice };
+  if (voiceSettings.voice === effectiveVoice && normalizedTts === voiceSettings.tts) {
+    return voiceSettings;
+  }
+  return {
+    ...voiceSettings,
+    voice: effectiveVoice,
+    tts: normalizedTts,
+  };
+}
+
+function ttsSelectionKey(voiceSettings?: VoiceSettings | null): string | null {
+  const normalized = normalizeVoiceSettingsForRtc(voiceSettings);
+  if (!normalized) return null;
+  const providerId = normalized.tts?.providerId ?? '';
+  const model = normalized.tts?.model ?? '';
+  const voice = normalized.tts?.voice ?? normalized.voice ?? '';
+  const legacyVoice = normalized.voice ?? '';
+  if (!providerId && !model && !voice && !legacyVoice) return null;
+  return JSON.stringify({ providerId, model, voice, legacyVoice });
+}
 
 export interface RtcRendezvous {
   sessionId: string;
@@ -60,11 +92,17 @@ export function RtcProvider({
 }) {
   const [status, setStatus] = useState<RtcStatus>('idle');
   const [detail, setDetail] = useState<string | undefined>(undefined);
+  const [ttsCatalog, setTtsCatalog] = useState<TtsCatalog | null>(null);
   // The active room flips from the rendezvous host to the
   // deterministic per-session voice room after `rendezvous.accept`
   // arrives. Each flip re-creates the underlying RtcClient.
   const [activeRoomId, setActiveRoomId] = useState<string | undefined>(hostPeerId);
+  const normalizedVoiceSettings = useMemo(
+    () => normalizeVoiceSettingsForRtc(voiceSettings),
+    [voiceSettings],
+  );
   useEffect(() => {
+    setStatus('idle');
     setActiveRoomId(hostPeerId);
   }, [hostPeerId]);
 
@@ -89,6 +127,9 @@ export function RtcProvider({
           setDetail('session_replaced');
           setStatus('closed');
           setTimeout(() => client.close(), 0);
+        }
+        if (msg.t === 'tts.catalog' && msg.catalog && typeof msg.catalog === 'object') {
+          setTtsCatalog(msg.catalog as TtsCatalog);
         }
         for (const fn of controlListenersRef.current) fn(msg);
       },
@@ -128,10 +169,10 @@ export function RtcProvider({
       phoneToDaemon.rendezvousJoin({
         sessionId: rendezvous.sessionId,
         delivery: rendezvous.delivery,
-        ...(voiceSettings ? { settings: voiceSettings } : {}),
+        ...(normalizedVoiceSettings ? { settings: normalizedVoiceSettings } : {}),
       }),
     );
-  }, [rendezvous, hostPeerId, activeRoomId, status, voiceSettings]);
+  }, [rendezvous, hostPeerId, activeRoomId, status, normalizedVoiceSettings]);
 
   // Once the voice room is open, push subsequent voice-setting changes
   // so the next TTS turn picks them up without reconnecting.
@@ -140,22 +181,44 @@ export function RtcProvider({
     if (!rendezvous || !hostPeerId) return;
     if (activeRoomId === hostPeerId) return;
     if (status !== 'open') return;
-    if (!voiceSettings?.voice) return;
-    if (lastSentVoiceRef.current === voiceSettings.voice) return;
-    lastSentVoiceRef.current = voiceSettings.voice;
-    clientRef.current?.sendControl(phoneToDaemon.settingsUpdate(voiceSettings));
-  }, [voiceSettings, rendezvous, hostPeerId, activeRoomId, status]);
+    if (!normalizedVoiceSettings) return;
+    const key = ttsSelectionKey(normalizedVoiceSettings);
+    if (!key) return;
+    if (lastSentVoiceRef.current === key) return;
+    lastSentVoiceRef.current = key;
+    clientRef.current?.sendControl(phoneToDaemon.settingsUpdate(normalizedVoiceSettings));
+  }, [normalizedVoiceSettings, rendezvous, hostPeerId, activeRoomId, status]);
+
+  const requestTtsCatalog = useCallback(() => {
+    if (!activeRoomId || activeRoomId === hostPeerId) return;
+    if (status !== 'open') return;
+    clientRef.current?.sendControl(phoneToDaemon.ttsCatalogRequest());
+  }, [activeRoomId, hostPeerId, status]);
+
+  const catalogRequestedRoomRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!rendezvous || !hostPeerId) return;
+    if (!activeRoomId || activeRoomId === hostPeerId) return;
+    if (status !== 'open') return;
+    if (catalogRequestedRoomRef.current === activeRoomId) return;
+    catalogRequestedRoomRef.current = activeRoomId;
+    requestTtsCatalog();
+  }, [rendezvous, hostPeerId, activeRoomId, status, requestTtsCatalog]);
 
   useEffect(() => {
     // Reset the dedupe state when the voice room is torn down, so the
     // next room re-sends the current voice on first open.
-    if (activeRoomId === hostPeerId) lastSentVoiceRef.current = null;
+    if (activeRoomId === hostPeerId) {
+      lastSentVoiceRef.current = null;
+      catalogRequestedRoomRef.current = null;
+    }
   }, [activeRoomId, hostPeerId]);
 
   useEffect(() => {
     if (!rendezvous) return;
     const off = (msg: ControlMessage) => {
       if (msg.t === 'rendezvous.accept' && typeof msg.roomId === 'string') {
+        setStatus('idle');
         setActiveRoomId(msg.roomId);
         return;
       }
@@ -214,6 +277,8 @@ export function RtcProvider({
       addControlListener,
       addBinaryListener,
       addRemoteStreamListener,
+      ttsCatalog,
+      requestTtsCatalog,
       hasClient: !!hostPeerId,
     }),
     [
@@ -224,6 +289,8 @@ export function RtcProvider({
       addControlListener,
       addBinaryListener,
       addRemoteStreamListener,
+      ttsCatalog,
+      requestTtsCatalog,
       hostPeerId,
     ],
   );

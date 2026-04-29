@@ -15,12 +15,13 @@ import wrtc from '@roamhq/wrtc';
 import SimplePeer from 'simple-peer';
 import { runChat, ChatError, type DeliveryTarget as ChatDeliveryTarget } from './chatSession.js';
 import { OpenClawInferTtsSession, TTS_SAMPLE_RATE, type TtsSessionCallbacks, type TtsSessionOptions } from './ttsSession.js';
-import { daemonToPhone, type PhoneToDaemon } from './protocol.js';
+import { daemonToPhone, type PhoneToDaemon, type TtsCatalog, type TtsSelection, type VoiceSettings } from './protocol.js';
 import { OpenClawInferSttSession, type OpenClawInferSttSessionOptions } from './inferSttSession.js';
 import type { SttSessionCallbacks } from './sttTypes.js';
 import { createWasmVad, type SpeechDetector, type WasmVadOptions } from './vad.js';
 import { SignalClient, type SignalData } from './signal.js';
 import { classifySignal, decideForwardToLivePeer, decideIncomingSignal } from './signalKind.js';
+import { createEmptyTtsCatalog, defaultTtsCatalogCache } from './ttsCatalog.js';
 
 const MAX_BUFFERED_CANDIDATES_PER_PEER = 32;
 import {
@@ -143,10 +144,11 @@ export interface VoiceSessionRuntimeOptions {
   roomId: string;
   sessionId: string;
   delivery?: ChatDeliveryTarget;
-  ttsVoice?: string;
+  voiceSettings?: VoiceSettings;
   sttSessionFactory?: SttSessionFactory;
   createSpeechDetector?: SpeechDetectorFactory;
   ttsSessionFactory?: TtsSessionFactory;
+  ttsCatalogProvider?: () => Promise<TtsCatalog>;
   onClose: (roomId: string) => void;
 }
 
@@ -173,14 +175,14 @@ export class VoiceSession {
   private rawRemainder: Buffer = Buffer.alloc(0);
   private resampledRemainder: Buffer = Buffer.alloc(0);
   private closing = false;
-  private ttsVoice: string | undefined;
+  private ttsSelection: TtsSelection = {};
   private sttOpenToken = 0;
   private readonly replacedRemoteIds = new Set<string>();
   private readonly pendingCandidates = new Map<string, SignalPayload[]>();
 
   constructor(private readonly opts: VoiceSessionRuntimeOptions) {
     this.roomId = opts.roomId;
-    this.ttsVoice = opts.ttsVoice;
+    this.ttsSelection = normalizeTtsSelection(opts.voiceSettings);
     this.state = createVoiceSessionState({
       roomId: opts.roomId,
       sessionId: opts.sessionId,
@@ -264,17 +266,18 @@ export class VoiceSession {
     this.signalClient.subscribe();
   }
 
-  applyVoiceSettings(settings: { voice?: string } | null | undefined): void {
-    if (!settings) return;
-    const next = typeof settings.voice === 'string' ? settings.voice.trim() : '';
-    if (!next) return;
-    this.ttsVoice = next;
+  applyVoiceSettings(settings: VoiceSettings | null | undefined): void {
+    this.ttsSelection = normalizeTtsSelection(settings);
   }
 
-  // Test/manager hook so callers can inspect the voice currently applied
-  // to the next TTS turn.
+  // Test/manager hooks so callers can inspect the selection currently
+  // applied to the next TTS turn.
+  get currentTtsSelection(): TtsSelection {
+    return { ...this.ttsSelection };
+  }
+
   get currentTtsVoice(): string | undefined {
-    return this.ttsVoice;
+    return this.ttsSelection.voice;
   }
 
   close(): void {
@@ -614,6 +617,10 @@ export class VoiceSession {
   }
 
   private handleControl(msg: PhoneToDaemon): void {
+    if (msg.t === 'tts.catalog.request') {
+      void this.sendTtsCatalog();
+      return;
+    }
     if (msg.t === 'stt.start') {
       this.resetTurn('stt_restart');
       // Routing is room-bound — ignore any payload on stt.start.
@@ -636,6 +643,16 @@ export class VoiceSession {
     if (msg.t === 'settings.update') {
       this.applyVoiceSettings(msg.settings);
       return;
+    }
+  }
+
+  private async sendTtsCatalog(): Promise<void> {
+    try {
+      const loadCatalog = this.opts.ttsCatalogProvider ?? (() => defaultTtsCatalogCache.get());
+      const catalog = await loadCatalog();
+      this.send(daemonToPhone.ttsCatalog(catalog));
+    } catch {
+      this.send(daemonToPhone.ttsCatalog(createEmptyTtsCatalog()));
     }
   }
 
@@ -787,8 +804,14 @@ export class VoiceSession {
 
       const useTrack = !!this.audioSource;
       const createTts = this.opts.ttsSessionFactory ?? ((opts, cb) => new OpenClawInferTtsSession(opts, cb));
+      const selection = this.ttsSelection;
+      const model = ttsModelOverride(selection);
       this.tts = createTts(
-        { text, voice: this.ttsVoice },
+        {
+          text,
+          ...(model ? { model } : {}),
+          ...(model && selection.voice ? { voice: selection.voice } : {}),
+        },
         {
           onOpen: () => {
             this.send(daemonToPhone.ttsStart(useTrack ? WEBRTC_SAMPLE_RATE : TTS_SAMPLE_RATE));
@@ -884,6 +907,37 @@ export class VoiceSession {
       console.error(`[voice ${this.roomId}] binary send failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
+}
+
+
+function trimmedString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function objectRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function normalizeTtsSelection(settings: VoiceSettings | null | undefined): TtsSelection {
+  const settingsRecord = objectRecord(settings);
+  const tts = objectRecord(settingsRecord.tts);
+  const voice = trimmedString(tts.voice) ?? trimmedString(settingsRecord.voice);
+  const providerId = trimmedString(tts.providerId);
+  const model = trimmedString(tts.model);
+  return {
+    ...(providerId ? { providerId } : {}),
+    ...(model ? { model } : {}),
+    ...(voice ? { voice } : {}),
+  };
+}
+
+function ttsModelOverride(selection: TtsSelection): string | undefined {
+  return selection.providerId && selection.model
+    ? `${selection.providerId}/${selection.model}`
+    : undefined;
 }
 
 function toBytes(data: unknown): Uint8Array | null {

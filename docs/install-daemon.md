@@ -70,6 +70,17 @@ DAEMON_PEER_ID=REPLACE_WITH_A_RANDOM_UUID
 
 The daemon does not require any provider API key in `.env`. All LLM/STT/TTS auth is read by `openclaw` itself from its own configuration/auth profiles when the daemon shells out to the CLI — see "Configure OpenClaw infer support" in `AGENT-INSTALL.md` for verifying that OpenClaw has a working audio/TTS provider configured.
 
+The daemon discovers the configured TTS provider/model/voice catalog with
+`openclaw infer tts providers --json`. The browser/phone receives that catalog
+over WebRTC and stores only provider, model, and voice ids; credentials stay in
+OpenClaw and never go into browser storage. Provider choice is applied per TTS
+request with `openclaw infer tts convert --model <provider>/<model> --voice
+<voice>`. Clawkie Talkie should not run `openclaw infer tts set-provider` during
+setup or use, because that would mutate OpenClaw's global TTS preference. If a
+provider cannot be selected per request because OpenClaw exposes no model id for
+it, the client settings UI should hide or disable it rather than switching the
+global provider.
+
 Advanced overrides (rare — leave unset for normal installs):
 
 - `CT_STT_LANGUAGE` — optional language hint passed to `openclaw infer audio transcribe`. Default lets the transcription model auto-detect.
@@ -256,9 +267,22 @@ After starting the daemon manually or as a service:
    - `Peer ID: <DAEMON_PEER_ID>`
    - `Waiting for phone…`
 3. Confirm the printed peer ID matches the `DAEMON_PEER_ID` in `.env`.
-4. Confirm the OpenClaw `clawkie-voice-handoff` skill is installed and configured with the same host ID.
-5. From OpenClaw, request a Clawkie Talkie voice handoff link and open it in a browser.
-6. The browser should reach the voice UI instead of a bad-session error, and the daemon logs should show WebRTC/rendezvous activity.
+4. Confirm OpenClaw can list usable TTS providers without changing global state:
+   ```bash
+   openclaw infer tts providers --json
+   ```
+   The JSON should include at least one configured provider and, for any provider
+   the UI allows selecting, a model id that can be passed per request.
+5. Smoke-test TTS synthesis with an explicit provider/model/voice, replacing the
+   ids if your catalog uses different values:
+   ```bash
+   openclaw infer tts convert --text "catalog smoke" --output /tmp/clawkie-tts-smoke.mp3 --json --local --model openai/gpt-4o-mini-tts --voice nova
+   ```
+   A healthy response returns JSON with an output path. This smoke must not require
+   `openclaw infer tts set-provider`.
+6. Confirm the OpenClaw `clawkie-voice-handoff` skill is installed and configured with the same host ID.
+7. From OpenClaw, request a Clawkie Talkie voice handoff link and open it in a browser.
+8. The browser should reach the voice UI instead of a bad-session error, and the daemon logs should show WebRTC/rendezvous activity.
 
 There is no inbound HTTP port for the daemon to expose. It reaches the signaling service over outbound HTTPS and establishes WebRTC from there.
 

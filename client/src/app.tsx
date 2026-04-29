@@ -6,7 +6,7 @@ import { HistoryScreen } from './screens/History';
 import { TranscriptScreen } from './screens/Transcript';
 import { SettingsScreen } from './screens/Settings';
 import { ErrorScreen, type ErrorKind } from './screens/ErrorScreen';
-import { RtcProvider, useRtc } from './rtc/RtcContext';
+import { normalizeVoiceSettingsForRtc, RtcProvider, useRtc } from './rtc/RtcContext';
 import {
   latestAssistantText,
   loadSettings,
@@ -22,6 +22,7 @@ import {
   speakReplayText,
 } from './voice/tts';
 import { parseHandoffUrl, type HandoffRoute } from './voice/handoffUrl';
+import type { VoiceSettings } from './voice/protocol';
 
 type ScreenId = 'driving' | 'history' | 'transcript' | 'error';
 
@@ -63,6 +64,13 @@ function parseInitial() {
   return parseInitialLocation(window.location);
 }
 
+export function voiceSettingsForRtc(settings: Settings): VoiceSettings {
+  return normalizeVoiceSettingsForRtc({
+    tts: settings.tts,
+    voice: settings.voice,
+  }) ?? { tts: settings.tts, voice: settings.voice };
+}
+
 export function App() {
   const initial = useMemo(parseInitial, []);
   const [screen, setScreen] = useState<ScreenId>(initial.screen);
@@ -90,6 +98,8 @@ export function App() {
   const compact = isNarrow;
   const currentSessionId =
     screen === 'driving' ? initial.sessionId : openSession || initial.sessionId;
+
+  const rtcVoiceSettings = useMemo(() => voiceSettingsForRtc(settings), [settings]);
 
   const replayLastReply = useCallback(async () => {
     const session = currentSessionId ? loadTranscriptSession(currentSessionId) : null;
@@ -202,7 +212,7 @@ export function App() {
             }
           : null
       }
-      voiceSettings={{ voice: settings.voice }}
+      voiceSettings={rtcVoiceSettings}
     >
       <RtcDisconnectGate isNarrow={isNarrow}>
         <ResponsiveRuntime isNarrow={isNarrow}>{appContent}</ResponsiveRuntime>
@@ -223,6 +233,7 @@ function SettingsOverlay({
   compact: boolean;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const { ttsCatalog, requestTtsCatalog } = useRtc();
 
   useEffect(() => {
     dialogRef.current?.focus();
@@ -278,6 +289,8 @@ function SettingsOverlay({
           onBack={() => setSettingsOpen(false)}
           settings={settings}
           setSettings={setSettings}
+          ttsCatalog={ttsCatalog}
+          onRefreshTtsCatalog={requestTtsCatalog}
           compact={compact}
         />
       </div>

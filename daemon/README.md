@@ -41,6 +41,18 @@ its own configuration; the daemon does not hold provider API keys. The root
 `dev:daemon` / `daemon` scripts will additionally load a repo-root `.env` if
 one exists (`--env-file-if-exists=.env`).
 
+The daemon discovers the available TTS provider/model/voice catalog by running
+`openclaw infer tts providers --json` locally. It sends the normalized catalog
+to the phone over the WebRTC DataChannel; the phone stores only provider,
+model, and voice ids, never provider credentials. When synthesizing speech, the
+daemon applies the selected provider/model/voice per request by passing the
+selected model id to `openclaw infer tts convert --model <provider>/<model>`
+and the selected voice id to `--voice <voice>`. Clawkie Talkie must not call
+`openclaw infer tts set-provider` or mutate OpenClaw's global TTS preference.
+If a configured provider exposes no model id that can be selected per request,
+the client UI should leave it hidden or disabled instead of changing global
+OpenClaw state as a fallback.
+
 Rare advanced overrides (normally leave unset):
 
 - `CT_STT_LANGUAGE` — language hint forwarded to `openclaw infer audio
@@ -107,6 +119,10 @@ Daemon → phone (rendezvous lane on host room `H`):
 Phone → daemon (voice lane on `H:<safeSession>`):
 
 - `{"t":"stt.start"}` — routing is bound at rendezvous time, not per turn
+- `{"t":"tts.catalog.request"}` — ask the daemon for its current normalized
+  OpenClaw TTS provider/model/voice catalog
+- `{"t":"settings.update","settings":{"tts":{"providerId":"…","model":"…","voice":"…"}}}`
+  — update this voice room's per-request TTS selection by id
 - binary PCM16LE mono @ 16 kHz — streamed to daemon-side OpenClaw infer STT
 - `{"t":"stt.audio.done"}`
 - `{"t":"stt.cancel"}`
@@ -122,6 +138,8 @@ Daemon → phone (voice lane):
 - `{"t":"reply.start","text":"…"}`
 - `{"t":"reply.done","text":"…"}`
 - `{"t":"reply.error","message":"…"}`
+- `{"t":"tts.catalog","catalog":{"providers":[…]}}` — catalog discovered
+  from `openclaw infer tts providers --json`
 - `{"t":"tts.start","sample_rate":24000}`
 - binary PCM16LE mono TTS audio (or as a WebRTC track)
 - `{"t":"tts.done"}`

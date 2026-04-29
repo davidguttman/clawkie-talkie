@@ -4,10 +4,12 @@
 //
 // Routing (sessionId, delivery channel/target) is bound once at
 // rendezvous when the per-session voice room is created. `stt.start`
-// no longer carries routing per turn. Voice settings (TTS voice id)
-// flow over the voice room: an initial value is included in
+// no longer carries routing per turn. Voice settings (legacy voice id plus
+// canonical TTS provider/model/voice selection) flow over the voice room:
+// an initial value is included in
 // `rendezvous.join` so the first reply uses it, and `settings.update`
-// applies subsequent changes without reconnecting.
+// applies subsequent changes without reconnecting. The phone can request
+// the daemon's current TTS catalog over the same channel.
 
 export interface DeliveryTarget {
   channel: string;
@@ -19,8 +21,36 @@ export interface RendezvousJoinInput {
   delivery?: DeliveryTarget;
 }
 
+export interface TtsSelection {
+  providerId?: string;
+  model?: string;
+  voice?: string;
+}
+
 export interface VoiceSettings {
-  voice: string;
+  voice?: string;
+  tts?: TtsSelection;
+}
+
+export interface TtsCatalogVoice {
+  id: string;
+  name: string;
+}
+
+export interface TtsCatalogProvider {
+  id: string;
+  name: string;
+  configured: boolean;
+  selected: boolean;
+  available: boolean;
+  models: string[];
+  voices: TtsCatalogVoice[];
+}
+
+export interface TtsCatalog {
+  activeProvider?: string;
+  generatedAt: string;
+  providers: TtsCatalogProvider[];
 }
 
 export type PhoneToDaemon =
@@ -31,6 +61,7 @@ export type PhoneToDaemon =
       settings?: VoiceSettings;
     }
   | { t: 'settings.update'; settings: VoiceSettings }
+  | { t: 'tts.catalog.request' }
   | { t: 'stt.start' }
   | { t: 'stt.audio.done' }
   | { t: 'stt.cancel' }
@@ -49,6 +80,7 @@ export type DaemonToPhone =
   | { t: 'reply.done'; text: string }
   | { t: 'reply.error'; message: string }
   | { t: 'tts.start'; sample_rate: number }
+  | { t: 'tts.catalog'; catalog: TtsCatalog }
   | { t: 'tts.done' }
   | { t: 'tts.error'; message: string };
 
@@ -63,6 +95,7 @@ export const phoneToDaemon = {
     t: 'settings.update',
     settings,
   }),
+  ttsCatalogRequest: (): PhoneToDaemon => ({ t: 'tts.catalog.request' }),
   sttStart: (): PhoneToDaemon => ({ t: 'stt.start' }),
   sttAudioDone: (): PhoneToDaemon => ({ t: 'stt.audio.done' }),
   sttCancel: (): PhoneToDaemon => ({ t: 'stt.cancel' }),
@@ -112,6 +145,7 @@ export const daemonToPhone = {
     t: 'tts.start',
     sample_rate: sampleRate,
   }),
+  ttsCatalog: (catalog: TtsCatalog): DaemonToPhone => ({ t: 'tts.catalog', catalog }),
   ttsDone: (): DaemonToPhone => ({ t: 'tts.done' }),
   ttsError: (message: string): DaemonToPhone => ({ t: 'tts.error', message }),
 };

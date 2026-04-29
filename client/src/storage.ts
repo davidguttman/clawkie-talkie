@@ -4,10 +4,15 @@
 // the daemon (from the repo-root `.env`), NOT the phone — the browser never
 // sees a key. Fields here are strictly UI/voice/export preferences.
 
-// Voice ids accepted by the daemon TTS path as OpenClaw infer voice hints.
-// Provider support may vary; unsupported hints fall back inside OpenClaw.
+import type { TtsSelection as ProtocolTtsSelection } from './voice/protocol';
+
+export type TtsSelection = ProtocolTtsSelection;
+
+// Legacy static voice labels retained for migration/fallback display only.
+// Storage normalization must not validate against them: provider support is
+// discovered dynamically by the daemon.
 export const VOICE_IDS = ['eve', 'ara', 'rex', 'sal', 'leo'] as const;
-export type VoiceId = (typeof VOICE_IDS)[number];
+export type VoiceId = string;
 
 export const VOICE_LABELS: Record<VoiceId, string> = {
   eve: 'Eve',
@@ -17,10 +22,6 @@ export const VOICE_LABELS: Record<VoiceId, string> = {
   leo: 'Leo',
 };
 
-export function isVoiceId(value: unknown): value is VoiceId {
-  return typeof value === 'string' && (VOICE_IDS as readonly string[]).includes(value);
-}
-
 export type ExportFormat = 'md' | 'txt' | 'json';
 
 export interface ExportSettings {
@@ -29,7 +30,10 @@ export interface ExportSettings {
 }
 
 export interface Settings extends ExportSettings {
-  voice: VoiceId;
+  // Temporary legacy mirror for callers that still read/write `settings.voice`.
+  // New code should use `settings.tts.voice`.
+  voice: string;
+  tts: TtsSelection;
   speed: number;
 }
 
@@ -42,7 +46,8 @@ export const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
 };
 
 export const DEFAULT_SETTINGS: Settings = {
-  voice: 'eve',
+  voice: '',
+  tts: {},
   speed: 1.05,
   ...DEFAULT_EXPORT_SETTINGS,
 };
@@ -53,7 +58,7 @@ export function loadSettings(): Settings {
 
 export function saveSettings(settings: Settings): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify(normalizeSettings(settings)));
+    localStorage.setItem(KEY, JSON.stringify(normalizeSettingsForSave(settings)));
   } catch {
     // storage full or disabled — settings won't persist, but the app still works.
   }
@@ -77,8 +82,9 @@ function readRawSettings(): unknown {
 }
 
 function normalizeSettings(value: unknown): Settings {
-  const source = (value && typeof value === 'object') ? (value as Partial<Settings>) : {};
-  const voice = isVoiceId(source.voice) ? source.voice : DEFAULT_SETTINGS.voice;
+  const source = (value && typeof value === 'object') ? (value as Record<string, unknown>) : {};
+  const tts = normalizeTtsSelection(source.tts, source.voice);
+  const voice = tts.voice ?? DEFAULT_SETTINGS.voice;
   const speed = typeof source.speed === 'number' && Number.isFinite(source.speed)
     ? clamp(source.speed, 0.5, 2)
     : DEFAULT_SETTINGS.speed;
@@ -88,7 +94,38 @@ function normalizeSettings(value: unknown): Settings {
   const timestamps = typeof source.timestamps === 'boolean'
     ? source.timestamps
     : DEFAULT_SETTINGS.timestamps;
-  return { voice, speed, format, timestamps };
+  return { voice, tts, speed, format, timestamps };
+}
+
+function normalizeSettingsForSave(settings: Settings): Settings {
+  const legacyVoice = normalizeOptionalString(settings.voice);
+  if (!legacyVoice) return normalizeSettings(settings);
+  return normalizeSettings({
+    ...settings,
+    voice: legacyVoice,
+    tts: {
+      ...settings.tts,
+      voice: legacyVoice,
+    },
+  });
+}
+
+function normalizeTtsSelection(value: unknown, legacyVoice: unknown): TtsSelection {
+  const source = (value && typeof value === 'object') ? (value as Record<string, unknown>) : {};
+  const providerId = normalizeOptionalString(source.providerId);
+  const model = normalizeOptionalString(source.model);
+  const voice = normalizeOptionalString(source.voice) ?? normalizeOptionalString(legacyVoice);
+  return {
+    ...(providerId ? { providerId } : {}),
+    ...(model ? { model } : {}),
+    ...(voice ? { voice } : {}),
+  };
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed || undefined;
 }
 
 function clamp(value: number, min: number, max: number): number {
