@@ -223,6 +223,58 @@ Clawkie Talkie uses the installed `openclaw` CLI for speech-to-text and text-to-
 
 Before daemon verification, make sure the user's durable OpenClaw config (`openclaw.json`) has working providers for both infer surfaces. Do not rely only on shell environment variables unless they are also available to the persistent daemon service.
 
+### If infer is not already working
+
+Do **not** improvise around missing infer support by installing random local speech packages, building `whisper-cpp`, editing protected OpenClaw config files directly, or relying on a no-key TTS provider by itself. Clawkie Talkie needs **both**:
+
+- a working audio transcription provider; and
+- a working text-to-speech provider.
+
+If `openclaw infer audio providers --json` or `openclaw infer tts providers --json --local` shows no usable provider, the normal repair path is to help the user configure a hosted provider through OpenClaw first.
+
+Recommended choices:
+
+1. **OpenAI** — best default for most users because it supports both STT and TTS in OpenClaw.
+2. **xAI** — good alternative if the user has or prefers an xAI API key; it also supports both STT and TTS in OpenClaw.
+
+Ask the user which provider they want, then have them enter the API key through OpenClaw's onboarding/auth flow. Do not ask them to paste API keys into chat, do not print keys in logs, and do not commit or write provider credentials into this repo.
+
+#### OpenAI infer setup
+
+Use this when the user chooses OpenAI or already has an OpenAI API key available locally:
+
+```bash
+openclaw onboard --auth-choice openai-api-key
+
+openclaw config set messages.tts.provider openai
+openclaw config set messages.tts.providers.openai \
+  '{"model":"gpt-4o-mini-tts","voice":"coral"}' \
+  --strict-json --merge
+openclaw config set tools.media.audio.models \
+  '[{"type":"provider","provider":"openai","model":"gpt-4o-transcribe"}]' \
+  --strict-json
+```
+
+#### xAI infer setup
+
+Use this when the user chooses xAI or already has an xAI API key available locally:
+
+```bash
+openclaw onboard --auth-choice xai-api-key
+
+openclaw config set messages.tts.provider xai
+openclaw config set messages.tts.providers.xai \
+  '{"voiceId":"eve"}' \
+  --strict-json --merge
+openclaw config set tools.media.audio.models \
+  '[{"type":"provider","provider":"xai","model":"grok-stt"}]' \
+  --strict-json
+```
+
+After either setup path, rerun the provider inventory and smoke tests below. Do not continue to daemon/service/skill verification until both STT and TTS pass.
+
+Microsoft or other no-key TTS providers may be used only if audio transcription is also working and the smoke tests pass. A working TTS provider alone is not a Clawkie Talkie install.
+
 Inspect the current config and provider inventory:
 
 ```bash

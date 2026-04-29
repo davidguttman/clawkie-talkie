@@ -23,13 +23,23 @@ The normal install path is agent-run. Tell your agent:
 ```text
 Install Clawkie-Talkie for me by following
 https://github.com/davidguttman/clawkie-talkie/blob/master/AGENT-INSTALL.md.
-Before installing, download or clone the repo and inspect the source; stop and ask me
-if anything looks suspicious, harmful, or you are not confident. The install should
-set up the persistent Clawkie-Talkie daemon and the OpenClaw clawkie-voice-handoff
-skill so I can say "switch to voice" and get a working handoff link. Verify the
-daemon/service status, logs, and skill configuration before reporting success. When
-finished, give me a plain English summary of what changed, what you verified, and
-any blockers.
+
+Before installing, download or clone the repo and inspect the source.
+Stop and ask me if anything looks suspicious, harmful, or unclear.
+
+The install should set up the persistent Clawkie-Talkie daemon and the
+OpenClaw clawkie-voice-handoff skill so I can say "switch to voice" and
+get a working handoff link.
+
+If OpenClaw STT/TTS is not already working, help me configure OpenAI or
+xAI through OpenClaw first. Do not install local Whisper or use a TTS-only
+workaround unless I explicitly ask for that.
+
+Verify the daemon/service status, logs, OpenClaw STT/TTS smoke tests, and
+skill configuration before reporting success.
+
+When finished, give me a plain English summary of what changed, what you
+verified, and any blockers.
 ```
 
 The install does three important things:
