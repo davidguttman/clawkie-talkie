@@ -61,22 +61,20 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-Edit `.env`:
+Edit `.env`. A normal install only needs `DAEMON_PEER_ID`:
 
 ```env
 # Required for a persistent install. Generate once and keep it stable.
 DAEMON_PEER_ID=REPLACE_WITH_A_RANDOM_UUID
-
-# Optional. The daemon defaults to https://clawkietalkie.app — only set this
-# to override the default client deployment.
-# CT_CLIENT_ORIGIN=
-
-# Optional examples.
-CT_STT_LANGUAGE=en
-CT_THREAD_ID=
 ```
 
 The daemon does not require any provider API key in `.env`. All LLM/STT/TTS auth is read by `openclaw` itself from its own configuration/auth profiles when the daemon shells out to the CLI — see "Configure OpenClaw infer support" in `AGENT-INSTALL.md` for verifying that OpenClaw has a working audio/TTS provider configured.
+
+Advanced overrides (rare — leave unset for normal installs):
+
+- `CT_STT_LANGUAGE` — optional language hint passed to `openclaw infer audio transcribe`. Default lets the transcription model auto-detect.
+- `CT_THREAD_ID` — fallback Discord thread ID for transcript/debug posts when the daemon is invoked without a session that derives one. Unrelated to OpenClaw infer/provider configuration.
+- `CT_CLIENT_ORIGIN` — override the client origin printed in the Join URL. Installed daemons default to `https://clawkietalkie.app`. Unrelated to OpenClaw infer/provider configuration.
 
 Generate the stable daemon ID with Node:
 

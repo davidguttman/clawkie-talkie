@@ -35,12 +35,22 @@ That starts:
 - the daemon
 - the Vite client on `http://localhost:5173`
 
-The daemon reads optional config (`DAEMON_PEER_ID`, `CT_STT_LANGUAGE`,
-`CT_THREAD_ID`, `CT_CLIENT_ORIGIN`) from the process environment. All
-LLM/STT/TTS provider auth is read by `openclaw` itself from its own
-configuration; the daemon does not hold provider API keys.
-The root `dev:daemon` / `daemon` scripts will additionally load a repo-root
-`.env` if one exists (`--env-file-if-exists=.env`).
+For a persistent install, `.env` only needs `DAEMON_PEER_ID` — the stable
+host UUID. All LLM/STT/TTS provider auth is read by `openclaw` itself from
+its own configuration; the daemon does not hold provider API keys. The root
+`dev:daemon` / `daemon` scripts will additionally load a repo-root `.env` if
+one exists (`--env-file-if-exists=.env`).
+
+Rare advanced overrides (normally leave unset):
+
+- `CT_STT_LANGUAGE` — language hint forwarded to `openclaw infer audio
+  transcribe`; default lets the model auto-detect.
+- `CT_THREAD_ID` — fallback Discord thread ID for transcript/debug posts when
+  the daemon is invoked without a session that derives one. Not part of
+  OpenClaw infer/provider config.
+- `CT_CLIENT_ORIGIN` — override the client origin printed in the Join URL.
+  Installed daemons default to `https://clawkietalkie.app`. Not part of
+  OpenClaw infer/provider config.
 
 ## Run the daemon directly
 
