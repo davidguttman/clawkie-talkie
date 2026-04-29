@@ -39,7 +39,6 @@ export interface Settings extends ExportSettings {
   voice: string;
   tts: TtsSelection;
   stt: SttSelection;
-  speed: number;
 }
 
 const KEY = 'clawkie.settings.v1';
@@ -54,7 +53,6 @@ export const DEFAULT_SETTINGS: Settings = {
   voice: '',
   tts: {},
   stt: {},
-  speed: 1.05,
   ...DEFAULT_EXPORT_SETTINGS,
 };
 
@@ -92,16 +90,13 @@ function normalizeSettings(value: unknown): Settings {
   const tts = normalizeTtsSelection(source.tts, source.voice);
   const stt = normalizeSttSelection(source.stt);
   const voice = tts.voice ?? DEFAULT_SETTINGS.voice;
-  const speed = typeof source.speed === 'number' && Number.isFinite(source.speed)
-    ? clamp(source.speed, 0.5, 2)
-    : DEFAULT_SETTINGS.speed;
   const format: ExportFormat = source.format === 'txt' || source.format === 'json'
     ? source.format
     : 'md';
   const timestamps = typeof source.timestamps === 'boolean'
     ? source.timestamps
     : DEFAULT_SETTINGS.timestamps;
-  return { voice, tts, stt, speed, format, timestamps };
+  return { voice, tts, stt, format, timestamps };
 }
 
 function normalizeSettingsForSave(settings: Settings): Settings {
@@ -143,10 +138,6 @@ function normalizeOptionalString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed || undefined;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
 }
 
 export type TranscriptRole = 'user' | 'assistant';

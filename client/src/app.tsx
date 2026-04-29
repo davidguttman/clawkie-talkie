@@ -131,7 +131,6 @@ export function App() {
           onHistory={() => go('history')}
           onSettings={() => setSettingsOpen(true)}
           compact={compact}
-          settings={settings}
           sessionId={initial.sessionId}
           hostPeerId={initial.hostPeerId}
           threadId={initial.threadId}

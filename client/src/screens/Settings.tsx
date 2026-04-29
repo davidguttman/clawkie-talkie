@@ -180,15 +180,6 @@ export function SettingsScreen({
             disabled={!currentProvider?.selectable || voiceOptions.every((voice) => voice.disabled)}
           />
           <StatusRow text={statusText} onRefresh={onRefreshTtsCatalog} />
-          <SliderRow
-            label="Speaking speed"
-            value={settings.speed}
-            setValue={(v) => update('speed', v)}
-            min={0.75}
-            max={1.5}
-            step={0.05}
-            format={(v) => `${v.toFixed(2)}×`}
-          />
         </SettingsSection>
 
         <SettingsSection title="EXPORT">
@@ -532,58 +523,6 @@ function ToggleRow({
           }}
         />
       </button>
-    </div>
-  );
-}
-
-function SliderRow({
-  label,
-  value,
-  setValue,
-  min,
-  max,
-  step,
-  format,
-}: {
-  label: string;
-  value: number;
-  setValue: (v: number) => void;
-  min: number;
-  max: number;
-  step: number;
-  format?: (v: number) => string;
-}) {
-  return (
-    <div style={{ padding: '13px 14px', borderBottom: `1px solid ${HIFI.stroke}` }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-        <div style={{ fontSize: 13, color: HIFI.ink, fontFamily: HIFI.fonts.sans }}>{label}</div>
-        <div
-          style={{
-            fontSize: 12,
-            color: '#ff9e3b',
-            fontFamily: HIFI.fonts.mono,
-            fontWeight: 600,
-          }}
-        >
-          {format ? format(value) : value}
-        </div>
-      </div>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(e) => setValue(parseFloat(e.target.value))}
-        style={{
-          width: '100%',
-          maxWidth: '100%',
-          boxSizing: 'border-box',
-          accentColor: '#ff9e3b',
-          display: 'block',
-          margin: 0,
-        }}
-      />
     </div>
   );
 }

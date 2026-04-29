@@ -189,7 +189,7 @@ function playBufferedPcmAudio(audio: Extract<BufferedReplyAudio, { kind: 'pcm' }
 
       for (const chunk of audio.chunks) {
         if (chunk.byteLength < 2) continue;
-        const source = createPcmBufferSource(audioCtx, chunk, audio.sampleRate, audio.rate);
+        const source = createPcmBufferSource(audioCtx, chunk, audio.sampleRate);
         if (!source) continue;
         source.connect(gain);
         const startAt = Math.max(audioCtx.currentTime, nextStartTime);
@@ -217,7 +217,6 @@ export interface TTSPlayerOptions {
   addControlListener: (fn: (msg: { t: string; [k: string]: unknown }) => void) => () => void;
   addBinaryListener: (fn: (bytes: ArrayBuffer) => void) => () => void;
   sendControl: (msg: { t: string; [k: string]: unknown }) => void;
-  rate?: number;
 }
 
 // Mobile browsers only allow playback after the user has unlocked audio from a
@@ -405,7 +404,6 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
     started: false,
     drainTimer: null as ReturnType<typeof setTimeout> | null,
     remoteRecorder: null as RemoteReplyRecorder | null,
-    rate: opts.rate && Number.isFinite(opts.rate) ? Math.max(0.5, Math.min(2, opts.rate)) : 1,
     replayChunks: [] as ArrayBuffer[],
     replayBytes: 0,
   };
@@ -461,7 +459,7 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
       lastBufferedReplyAudio = {
         kind: 'pcm',
         sampleRate: state.sampleRate,
-        rate: state.rate,
+        rate: 1,
         chunks: state.replayChunks.map((chunk) => chunk.slice(0)),
         byteLength: state.replayBytes,
         createdAt: Date.now(),
@@ -636,7 +634,6 @@ function schedulePcmChunk(
     sources: AudioBufferSourceNode[];
     nextStartTime: number;
     sampleRate: number;
-    rate: number;
   },
   bytes: ArrayBuffer,
 ): void {
@@ -644,7 +641,7 @@ function schedulePcmChunk(
   if (bytes.byteLength < 2) return;
   void resumeAudioContext(state.audioCtx);
 
-  const source = createPcmBufferSource(state.audioCtx, bytes, state.sampleRate, state.rate);
+  const source = createPcmBufferSource(state.audioCtx, bytes, state.sampleRate);
   if (!source) return;
   source.connect(state.gain);
 
@@ -663,7 +660,6 @@ function createPcmBufferSource(
   audioCtx: AudioContext,
   bytes: ArrayBuffer,
   sampleRate: number,
-  rate: number,
 ): AudioBufferSourceNode | null {
   if (bytes.byteLength < 2) return null;
   const sampleCount = bytes.byteLength >> 1;
@@ -679,7 +675,6 @@ function createPcmBufferSource(
 
   const source = audioCtx.createBufferSource();
   source.buffer = buffer;
-  if (rate !== 1) source.playbackRate.value = rate;
   return source;
 }
 
