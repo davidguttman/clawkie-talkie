@@ -77,7 +77,6 @@ export interface DrivingLoop {
 }
 
 export interface DrivingLoopOptions {
-  ttsRate?: number;
   sttLanguage?: string;
   sessionId?: string;
   threadId?: string;
@@ -102,7 +101,7 @@ function dispatchPair(
 }
 
 export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
-  const { rtc, ttsRate } = opts;
+  const { rtc } = opts;
 
   const [{ ctx, side }, dispatch] = useReducer(dispatchPair, {
     ctx: initialContext,
@@ -226,7 +225,7 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
       }
       else if (s.kind === 'stopMic') runStopMic(sttRef);
       else if (s.kind === 'cancelMic') runCancelMic(sttRef);
-      else if (s.kind === 'armTts') runArmTts(rtcRef, ttsRef, ttsRate, dispatch);
+      else if (s.kind === 'armTts') runArmTts(rtcRef, ttsRef, dispatch);
       else if (s.kind === 'stopTts') runStopTts(ttsRef);
       else if (s.kind === 'cancelReply') runCancelReply(rtcRef, ttsRef);
     }
@@ -379,14 +378,12 @@ function runCancelMic(sttRef: React.MutableRefObject<STTHandle | null>): void {
 function runArmTts(
   rtcRef: React.MutableRefObject<DrivingLoopOptions['rtc']>,
   ttsRef: React.MutableRefObject<TTSHandle | null>,
-  rate: number | undefined,
   dispatch: Dispatch,
 ): void {
   const tts = playDaemonTts({
     addControlListener: rtcRef.current.addControlListener,
     addBinaryListener: rtcRef.current.addBinaryListener,
     sendControl: rtcRef.current.sendControl,
-    rate,
   });
   ttsRef.current = tts;
   void tts.done.then(() => {

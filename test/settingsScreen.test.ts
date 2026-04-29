@@ -61,7 +61,6 @@ describe('SettingsScreen legacy voice selection', () => {
     const settings: Settings = {
       voice: 'rex',
       tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'rex' },
-      speed: 1.05,
       format: 'md',
       timestamps: false,
     };
@@ -111,7 +110,6 @@ describe('SettingsScreen TTS catalog helpers', () => {
     const settings: Settings = {
       voice: 'nova',
       tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' },
-      speed: 1.05,
       format: 'md',
       timestamps: false,
     };
@@ -244,7 +242,6 @@ describe('SettingsScreen STT catalog helpers', () => {
       voice: 'nova',
       tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' },
       stt: { providerId: 'openai', model: 'whisper-1' },
-      speed: 1.05,
       format: 'md',
       timestamps: false,
     };
@@ -266,7 +263,6 @@ describe('SettingsScreen STT catalog helpers', () => {
       voice: 'rex',
       tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'rex' },
       stt: { providerId: 'xai', model: 'grok-stt' },
-      speed: 1.05,
       format: 'md',
       timestamps: false,
     };

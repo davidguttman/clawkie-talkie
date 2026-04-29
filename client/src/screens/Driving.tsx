@@ -14,7 +14,6 @@ import {
   setHoldMusicMuted,
   subscribeHoldMusicMuted,
 } from '../voice/holdMusic';
-import type { Settings } from '../storage';
 
 // Runtime driving surface driven by the daemon-owned state machine in
 // ../voice/drivingLoop.ts. The phone only captures mic PCM and plays
@@ -28,7 +27,6 @@ export function DrivingScreen({
   onHistory,
   onSettings,
   compact = false,
-  settings,
   sessionId,
   hostPeerId,
   threadId,
@@ -39,7 +37,6 @@ export function DrivingScreen({
   onHistory?: () => void;
   onSettings?: () => void;
   compact?: boolean;
-  settings?: Settings;
   sessionId?: string;
   hostPeerId?: string | null;
   threadId?: string;
@@ -52,7 +49,6 @@ export function DrivingScreen({
   const rtc = useRtc();
 
   const loop = useDrivingLoop({
-    ttsRate: settings?.speed ?? 1.05,
     sessionId,
     threadId,
     hostPeerId,

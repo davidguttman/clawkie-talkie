@@ -39,7 +39,6 @@ describe('settings storage', () => {
       'clawkie.settings.v1',
       JSON.stringify({
         stt: { providerId: 'xai', model: 'grok-stt' },
-        speed: 1.05,
       }),
     );
     const { loadSettings } = await import('../client/src/storage');
@@ -77,7 +76,6 @@ describe('settings storage', () => {
       JSON.stringify({
         tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' },
         voice: 'nova',
-        speed: 1.05,
       }),
     );
     const { loadSettings } = await import('../client/src/storage');
@@ -112,6 +110,7 @@ describe('settings storage', () => {
     const settings = loadSettings();
     expect(settings.tts.voice).toBe('rex');
     expect(settings.voice).toBe('rex');
+    expect('speed' in settings).toBe(false);
   });
 
   it('persists a new dynamic TTS provider, model, and voice intact', async () => {
@@ -119,7 +118,6 @@ describe('settings storage', () => {
       'clawkie.settings.v1',
       JSON.stringify({
         tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' },
-        speed: 1.05,
         format: 'txt',
         timestamps: true,
       }),
@@ -138,7 +136,6 @@ describe('settings storage', () => {
       JSON.stringify({
         tts: { providerId: ' openai ', model: '   ', voice: 123 },
         voice: ' rex ',
-        speed: 1.05,
       }),
     );
     const { loadSettings } = await import('../client/src/storage');
@@ -187,7 +184,7 @@ describe('settings storage', () => {
   it('exposes export settings without importing the rest of the Settings shape', async () => {
     localStorage.setItem(
       'clawkie.settings.v1',
-      JSON.stringify({ voice: 'leo', speed: 1.2, format: 'json', timestamps: true }),
+      JSON.stringify({ voice: 'leo', format: 'json', timestamps: true }),
     );
     const { loadExportSettings, DEFAULT_EXPORT_SETTINGS } = await import('../client/src/storage');
     expect(loadExportSettings()).toEqual({ format: 'json', timestamps: true });
