@@ -1,198 +1,169 @@
 # Clawkie Talkie
 
-Talk to an OpenClaw session from any browser, without installing an app or exposing your OpenClaw credentials.
+Push-to-talk voice for the OpenClaw session you are already in.
 
----
+Clawkie Talkie is not a separate assistant. It is a voice lane into an existing OpenClaw conversation: the same session, the same thread, the same context, with a phone-friendly interface for the moments when typing is the wrong tool.
 
-You are away from your desk and your agent needs a decision. Or you are in Discord and typing is too slow. Or you want a quick voice loop with the same OpenClaw session that is already doing the work.
+You ask OpenClaw to switch to voice. It gives you a link. You open the link on your phone, tap the big button, talk, stop, and hear the agent answer back.
 
-Clawkie Talkie does one small thing: it turns the current OpenClaw conversation into a browser-based walkie-talkie.
-
-The agent gives you a link:
+The original OpenClaw/Discord thread stays canonical. Your spoken turn is transcribed into that session, the agent responds in that session, and Clawkie Talkie plays the reply back to you.
 
 ```text
-https://clawkietalkie.app/voice#host=<host>&session=<session>&channel=<channel>&target=<target>
+text thread ── "switch to voice" ──▶ phone link ──▶ tap / talk / hear reply
+     ▲                                                        │
+     └──────────────── same OpenClaw session ◀────────────────┘
 ```
 
-You open it on your phone or laptop. You speak. The local daemon transcribes your audio, sends the turn into the same OpenClaw session, and streams the spoken reply back to the browser.
+## Why this exists
 
-No OpenClaw API keys in the browser. No provider credentials on the phone. No native app install. Just a voice lane into one existing agent session.
+OpenClaw is often running somewhere you are not: at your desk, in a Discord thread, in a browser workflow, in the middle of a task. Sometimes the next step is easier to say than type:
 
-## Is this for you
+- you are walking, driving, cooking, or away from the keyboard;
+- you want to give a quick correction without opening the whole workstation;
+- you need a back-and-forth with the agent, but the thread should remain the source of truth;
+- you want voice without giving a browser page your OpenClaw or provider credentials.
 
-**Yes, if:**
+Clawkie Talkie is the small bridge for that moment.
 
-- You run OpenClaw and want to continue a session by voice.
-- You want a phone-friendly voice surface without installing a mobile app.
-- You want provider credentials to stay in OpenClaw on your own machine.
-- You want agents to hand you a link like "switch to voice" or "continue this by voice."
+## The user experience
 
-**Not yet, if:**
+1. In an OpenClaw conversation, say:
 
-- You do not run OpenClaw.
-- You need a standalone voice assistant that is not tied to an OpenClaw session.
-- You need a documented Windows daemon install path. The daemon may work there, but this repo currently documents macOS and Linux.
+   ```text
+   switch to voice
+   ```
 
-## Getting started
+2. OpenClaw replies with a Clawkie Talkie link for that exact session.
+3. Open the link in a browser, usually on your phone.
+4. Tap the main button to record.
+5. Speak. You see live transcription while talking.
+6. Tap stop. The transcript is sent immediately.
+7. OpenClaw answers in the original session.
+8. Clawkie Talkie speaks the reply back through the browser.
 
-Clawkie Talkie has two parts:
+The interface is intentionally walkie-talkie shaped: one obvious start/stop control, visible transcript while speaking, a thinking state while the agent works, and spoken playback when the reply is ready.
 
-- A local daemon running on your Mac or Linux machine.
-- A hosted browser client at `https://clawkietalkie.app`.
+## What the link means
 
-The browser client does not hold credentials. The daemon talks to your local `openclaw` CLI, and OpenClaw keeps its own provider auth.
-
-Tell your agent:
+A real handoff URL looks like this:
 
 ```text
-Install Clawkie Talkie by following the instructions at https://github.com/davidguttman/clawkie-talkie/blob/master/AGENT-INSTALL.md. Before installing, check the downloaded files for anything suspicious or harmful. If you’re not confident it looks safe, stop and ask. When you’re finished, give me a plain English summary of what you did, including whether the daemon service is running and whether the OpenClaw voice handoff skill is installed.
+https://clawkietalkie.app/voice#host=<daemon>&session=<openclaw-session>&channel=<channel>&target=<target>
 ```
 
-That install flow:
+Those values are not a login token or a credential bundle. They are routing information:
 
-1. Downloads this repo into the agent's OpenClaw workspace.
-2. Installs daemon dependencies.
-3. Creates one stable daemon host ID.
-4. Configures a persistent `launchd` or `systemd --user` service.
-5. Verifies OpenClaw speech-to-text and text-to-speech support.
-6. Installs the OpenClaw `clawkie-voice-handoff` skill.
-7. Verifies the skill emits links for the same daemon host ID.
+- `host` — the stable local daemon ID on the user's machine.
+- `session` — the OpenClaw session to continue.
+- `channel` — where the original conversation lives.
+- `target` — where transcript/reply mirroring should be delivered, when the source is an external channel like Discord.
 
-After that, ask OpenClaw things like:
+The values live in the URL hash so they are parsed by the browser locally instead of being sent to the web server as normal request parameters.
+
+## The privacy boundary
+
+Clawkie Talkie has a hosted browser UI, but the private work happens locally.
+
+- The browser captures microphone audio and plays reply audio.
+- The browser stores only UI settings such as provider/model/voice IDs.
+- The browser does **not** receive provider API keys.
+- The browser does **not** receive OpenClaw credentials.
+- The local daemon talks to the local `openclaw` CLI.
+- OpenClaw's existing config/auth remains the owner of LLM, STT, and TTS credentials.
+
+The daemon is the trusted side. The browser is just the remote control and audio surface.
+
+## Architecture
 
 ```text
-switch to voice
+Phone / browser                          User's machine
+┌────────────────────────────┐          ┌────────────────────────────┐
+│ Clawkie Talkie web UI      │          │ Clawkie Talkie daemon      │
+│                            │          │                            │
+│ - mic capture              │  WebRTC  │ - session rendezvous       │
+│ - tap-to-talk control      │ ◀──────▶ │ - OpenClaw CLI calls       │
+│ - live transcript display  │          │ - STT / TTS orchestration  │
+│ - reply playback           │          │ - channel/thread delivery  │
+└────────────────────────────┘          └────────────────────────────┘
+                 │                                      │
+                 │ signaling only                       │ local process calls
+                 ▼                                      ▼
+          https://api.rambly.app                  openclaw
 ```
 
-or:
+The signaling service helps the browser and daemon find each other. The voice session itself runs over WebRTC. The daemon shells out to OpenClaw for transcription, the agent turn, reply delivery, and speech synthesis.
+
+There is no inbound HTTP port for the daemon. It connects outbound to signaling and providers.
+
+## Session model
+
+There is one durable daemon per machine. Its `DAEMON_PEER_ID` is the stable rendezvous identity used in `host=...`.
+
+Each voice handoff is then scoped by OpenClaw session:
 
 ```text
-continue this in Clawkie Talkie
+voice room = daemon host + OpenClaw session
 ```
 
-The agent should post a `/voice#...` link for the current session.
+That means the same daemon can support multiple OpenClaw sessions without mixing them together. A Discord thread, a webchat session, and another channel can all produce different voice rooms through the same local daemon.
 
-## What you see when you open a link
+The agent does not call a daemon API to mint a link. It builds the URL directly from already-known OpenClaw context: daemon host ID, session ID, channel, and target.
 
-Open the Clawkie Talkie link in a browser. Desktop and mobile browsers are both intended to work.
+## Install
 
-The page connects to your local daemon over WebRTC. Once connected, you can speak into the browser. Clawkie Talkie sends the audio to the daemon, the daemon runs local OpenClaw speech-to-text, OpenClaw replies in the original session, and the daemon sends speech audio back to the browser.
-
-The browser may let you choose available TTS and STT providers, models, and voices. Those choices are just provider/model/voice IDs. The browser never receives provider API keys.
-
-The link is scoped to one OpenClaw session. Multiple sessions can use the same daemon at the same time; each handoff gets its own deterministic voice room.
-
----
-
-## For agents
-
-Clawkie Talkie is a browser voice handoff system for OpenClaw. The human-facing client lives at `clawkietalkie.app`; the private host side is a local Node daemon running near OpenClaw.
-
-### Architecture
+The normal install path is agent-run. Tell your agent:
 
 ```text
-Browser / Phone                         Local machine
-┌──────────────────────────┐          ┌──────────────────────────┐
-│ Clawkie voice UI         │          │ Clawkie daemon           │
-│ microphone capture       │──RTC───▶ │ OpenClaw CLI             │
-│ speaker playback         │ ◀─RTC─── │ STT / agent / TTS loop   │
-│ settings IDs only        │          │ provider credentials     │
-└──────────────────────────┘          └──────────────────────────┘
-           │                                      │
-           └──── signaling / rendezvous only ─────┘
+Install Clawkie Talkie by following https://github.com/davidguttman/clawkie-talkie/blob/master/AGENT-INSTALL.md. Inspect the downloaded files first. Stop if anything looks suspicious. When done, report whether the daemon is running, whether OpenClaw STT/TTS smoke tests passed, and whether the voice handoff skill is installed.
 ```
 
-The signaling service helps the browser and daemon find each other. Application traffic runs over WebRTC. Provider credentials stay in OpenClaw's own configuration on the local machine.
+The install does three important things:
 
-### Handoff URL
+1. Runs the daemon as a persistent user service.
+2. Generates one stable `DAEMON_PEER_ID` and keeps it in the daemon `.env`.
+3. Installs the OpenClaw `clawkie-voice-handoff` skill with the same host ID.
 
-Agents construct the handoff URL directly from the current turn:
-
-```text
-https://clawkietalkie.app/voice#host=H&session=S&channel=C&target=T
-```
-
-Required fields:
-
-- `host` — stable daemon rendezvous ID.
-- `session` — OpenClaw session key/id to continue.
-- `channel` — source channel or surface.
-- `target` — delivery target for external channels. Omit only for webchat/internal session-only handoffs.
-
-Use hash parameters, not query parameters, when possible. Hash fragments are not sent to the web server. The browser parses them locally and passes them to the daemon over WebRTC.
-
-Examples:
-
-```text
-https://clawkietalkie.app/voice#host=H&session=S&channel=discord&target=channel%3A123
-https://clawkietalkie.app/voice#host=H&session=S&channel=webchat
-```
-
-### Rendezvous flow
-
-1. Browser joins daemon rendezvous room `H`.
-2. Browser sends `rendezvous.join` with the target session and optional delivery route.
-3. Daemon derives a deterministic per-session room from `host + session`.
-4. Browser reconnects to that voice room.
-5. Voice turns run there until the browser disconnects.
-
-There is no central link table, random join ID, TTL, claim step, or daemon API call. The URL is enough.
-
-### OpenClaw skill
-
-This repo ships an OpenClaw skill at:
-
-```text
-openclaw/clawkie-voice-handoff/SKILL.md
-```
-
-The installed copy is patched with this machine's stable `DAEMON_PEER_ID`. Once installed, the user should be able to ask for a voice handoff from an active OpenClaw session. The skill builds the `/voice#...` link from the current session metadata and the configured daemon host ID.
-
-Use [`AGENT-INSTALL.md`](./AGENT-INSTALL.md) for install, upgrade, repair, and verification instructions.
-
-## Installing the daemon
-
-End-user install docs are here:
+Manual daemon setup is documented here:
 
 - [Install the Clawkie Talkie daemon](./docs/install-daemon.md)
 
-Agent-run install docs are here:
+Agent install/upgrade/repair flow is documented here:
 
 - [Agent install instructions](./AGENT-INSTALL.md)
 
-The short version:
+## What must already work
+
+Clawkie Talkie depends on a working OpenClaw install for the same OS user that runs the daemon.
+
+At minimum, that user needs:
+
+- `openclaw` available on `PATH`;
+- a working OpenClaw session/runtime;
+- a configured audio transcription provider;
+- a configured text-to-speech provider.
+
+The daemon uses these commands at runtime:
 
 ```bash
-npm install
-cp .env.example .env
-node -e "console.log('DAEMON_PEER_ID=' + require('node:crypto').randomUUID())"
-npm run daemon
+openclaw infer audio transcribe --file <wav> --json
+openclaw agent --session-id <session> ...
+openclaw infer tts convert --text <reply> --output <file> --json --local
 ```
 
-A healthy daemon prints:
-
-```text
-Peer ID:  <daemon-peer-id>
-Join URL: https://clawkietalkie.app/?host=<daemon-peer-id>
-Waiting for phone…
-```
-
-For a real install, keep `DAEMON_PEER_ID` stable and run the daemon as a persistent per-user service using `launchd` on macOS or `systemd --user` on Linux.
+Provider selection is per request. Clawkie Talkie should not mutate OpenClaw's global provider preferences just because a user changes the voice settings in the browser.
 
 ## Local development
 
 From the repo root:
 
 ```bash
+npm install
 npm run dev
 ```
 
-That starts:
+That starts the daemon and the Vite client.
 
-- The local daemon.
-- The Vite client on `http://localhost:5173`.
-
-Useful checks:
+Common checks:
 
 ```bash
 npm test
@@ -200,40 +171,66 @@ npm run typecheck
 npm run build
 ```
 
-## Provider model
+Run only the daemon:
 
-Clawkie Talkie uses OpenClaw infer commands for speech:
+```bash
+npm run daemon
+```
 
-- STT: `openclaw infer audio transcribe --file <wav> --json`
-- TTS: `openclaw infer tts convert --text <text> --output <file> --json --local`
+A healthy daemon prints something like:
 
-The daemon discovers available TTS and STT providers from OpenClaw and sends normalized catalogs to the browser. The browser stores only selected provider/model/voice IDs.
+```text
+Peer ID:  <daemon-peer-id>
+Join URL: https://clawkietalkie.app/?host=<daemon-peer-id>
+Waiting for phone…
+```
 
-Clawkie Talkie should not mutate global OpenClaw provider preferences during normal use. Provider choices are applied per request when the daemon calls the OpenClaw infer commands.
+That host-only URL is a daemon connectivity hint. A real OpenClaw voice handoff uses `/voice#host=...&session=...&channel=...`.
 
-## Gotchas
+## Troubleshooting
 
-- **Daemon not running.** The browser can load, but it will not connect. Check the daemon service and logs.
-- **Bad session link.** Real voice links need `host`, `session`, and `channel`; external delivery also needs `target`.
-- **Changed daemon ID.** If `DAEMON_PEER_ID` changes, old links and the installed skill point at the wrong rendezvous room. Generate it once and keep it stable.
-- **OpenClaw missing from service PATH.** The daemon can start but voice turns fail because the service user cannot run `openclaw`.
-- **STT or TTS not configured.** The first voice turn may fail with an infer error. Verify `openclaw infer audio providers --json` and `openclaw infer tts providers --json` for the same user that runs the daemon.
-- **Mic permission blocked.** The browser must be allowed to use the microphone.
-- **WebRTC blocked.** Corporate firewalls, proxies, or blocked UDP/TURN traffic can prevent the browser and daemon from connecting.
-- **Host-only URL is not a session handoff.** The daemon's printed `https://clawkietalkie.app/?host=...` URL proves startup, but a real OpenClaw handoff uses `/voice#host=...&session=...&channel=...`.
+### The browser never connects
 
-## Repo layout
+Check that the daemon is running and that the `host` value in the link matches the daemon's `DAEMON_PEER_ID`.
 
-- `client/` — hosted browser voice UI.
-- `daemon/` — local Node/WebRTC/OpenClaw daemon.
-- `docs/install-daemon.md` — end-user daemon install guide.
-- `docs/voice-handoff.md` — deterministic rendezvous and protocol design.
-- `openclaw/clawkie-voice-handoff/` — OpenClaw skill source.
-- `test/` — protocol, client, daemon, and OpenClaw infer tests.
+### The page says the session is bad
 
-## More docs
+The handoff link is missing routing fields or was built for the wrong context. External channels need `host`, `session`, `channel`, and `target`. Webchat/internal links can omit `target`.
 
-- [Install the Clawkie Talkie daemon](./docs/install-daemon.md)
-- [Agent install instructions](./AGENT-INSTALL.md)
-- [Voice handoff protocol](./docs/voice-handoff.md)
-- [Daemon README](./daemon/README.md)
+### Voice records but no reply comes back
+
+Check daemon logs. Common causes are:
+
+- `openclaw` is not on the service user's `PATH`;
+- OpenClaw is not authenticated/configured for that user;
+- STT provider config is missing;
+- TTS provider config is missing;
+- the session ID in the link does not identify a real OpenClaw session.
+
+### Links break after restart
+
+`DAEMON_PEER_ID` changed. It should be generated once and kept stable. The daemon `.env` and the installed OpenClaw skill must use the same value.
+
+### It works manually but not as a service
+
+This is usually an environment problem. The launchd/systemd service needs the same access to `node`, `npm`, and `openclaw` that your interactive shell has.
+
+### WebRTC will not establish
+
+Corporate networks, VPNs, proxies, and blocked UDP/TURN traffic can prevent the browser and daemon from connecting.
+
+## Repo map
+
+- `client/` — phone/browser UI.
+- `daemon/` — local WebRTC/OpenClaw bridge.
+- `openclaw/clawkie-voice-handoff/` — skill source for generating handoff links.
+- `docs/install-daemon.md` — daemon install and service setup.
+- `docs/voice-handoff.md` — deterministic rendezvous protocol.
+- `test/` — client, daemon, protocol, and infer tests.
+
+## Current boundaries
+
+- macOS and Linux daemon install paths are documented.
+- Windows daemon install is not documented yet.
+- Clawkie Talkie is tied to OpenClaw sessions; it is not a standalone voice assistant.
+- The original OpenClaw/channel thread remains the transcript source of truth.
