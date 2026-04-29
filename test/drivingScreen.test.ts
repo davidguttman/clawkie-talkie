@@ -56,13 +56,13 @@ describe('DrivingScreen voice error labels', () => {
   });
 });
 
-describe('DrivingScreen media debug surface', () => {
-  it('keeps the hardware-event conclusion and keeper counters visible in debug mode', () => {
+describe('DrivingScreen audio debug surface', () => {
+  it('keeps remote TTS and STT chunk diagnostics visible in debug mode', () => {
     const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
 
-    expect(source).toContain('hardwareEvent=');
-    expect(source).toContain('probableLayer=');
-    expect(source).toContain('keeperEvents play=');
-    expect(source).toContain('ios_mic_session_before_js');
+    expect(source).toContain('AUDIO DEBUG');
+    expect(source).toContain('REMOTE TTS');
+    expect(source).toContain('remoteTtsAudio');
+    expect(source).toContain('sttChunking');
   });
 });

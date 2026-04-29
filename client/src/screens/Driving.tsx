@@ -2,13 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { HIFI, type AccentKey } from '../tokens';
 import { ButtonAura, LiveWave } from '../components/Phone';
 import { useDrivingLoop, type DrivingState } from '../voice/drivingLoop';
-import { getMediaSessionDebugSnapshot, useMediaSessionControls } from '../voice/mediaSession';
-import {
-  attachMediaSessionKeeperDebugHost,
-  getMediaSessionKeeperDebugSnapshot,
-  startMediaSessionKeeper,
-  stopMediaSessionKeeper,
-} from '../voice/mediaSessionKeeper';
 import {
   getRemoteTtsAudioDebugSnapshot,
   playPttPressTone,
@@ -84,23 +77,8 @@ export function DrivingScreen({
     tap,
   } = loop;
 
-  // Wire AirPods / lock-screen play-pause buttons to the same tap()
-  // entrypoint the on-screen PTT button uses. Feature-detected and a
-  // no-op when navigator.mediaSession is unavailable.
-  useMediaSessionControls(state, tap);
-
   useEffect(() => {
     return subscribeHoldMusicMuted(setHoldMusicMutedState);
-  }, []);
-
-  // Tear down the silent media-session keeper when the Driving
-  // screen unmounts. The keeper itself is started lazily from the
-  // PTT gesture (via unlockDaemonTtsAudio); we just own the
-  // teardown so it doesn't leak across full-screen navigations.
-  useEffect(() => {
-    return () => {
-      stopMediaSessionKeeper();
-    };
   }, []);
 
   const isRec = state === 'recording';
@@ -344,7 +322,7 @@ export function DrivingScreen({
       </div>
 
       {debugMode && (
-        <MediaSessionDebugPanel
+        <AudioDebugPanel
           baseFont={baseFont}
           compact={compact}
           state={state}
@@ -413,20 +391,16 @@ function useDebugMode(): boolean {
 }
 
 interface DebugSnapshot {
-  mediaSession: ReturnType<typeof getMediaSessionDebugSnapshot>;
-  keeper: ReturnType<typeof getMediaSessionKeeperDebugSnapshot>;
   remoteTts: ReturnType<typeof getRemoteTtsAudioDebugSnapshot>;
 }
 
 function readDebugSnapshot(): DebugSnapshot {
   return {
-    mediaSession: getMediaSessionDebugSnapshot(),
-    keeper: getMediaSessionKeeperDebugSnapshot(),
     remoteTts: getRemoteTtsAudioDebugSnapshot(),
   };
 }
 
-function MediaSessionDebugPanel({
+function AudioDebugPanel({
   baseFont,
   compact,
   state,
@@ -437,51 +411,13 @@ function MediaSessionDebugPanel({
   state: DrivingState;
   rtcStatus: string;
 }) {
-  const audioHostRef = useRef<HTMLDivElement | null>(null);
   const [snapshot, setSnapshot] = useState<DebugSnapshot>(() => readDebugSnapshot());
 
   useEffect(() => {
-    startMediaSessionKeeper();
-
-    let detachKeeperControls: (() => void) | null = null;
-    const sync = () => {
-      const host = audioHostRef.current;
-      if (host && !host.querySelector('audio') && getMediaSessionKeeperDebugSnapshot().present) {
-        detachKeeperControls?.();
-        detachKeeperControls = attachMediaSessionKeeperDebugHost(host);
-      }
-      setSnapshot(readDebugSnapshot());
-    };
-
-    sync();
-    const timer = window.setInterval(sync, 500);
-    return () => {
-      window.clearInterval(timer);
-      detachKeeperControls?.();
-    };
+    const timer = window.setInterval(() => setSnapshot(readDebugSnapshot()), 500);
+    return () => window.clearInterval(timer);
   }, []);
 
-  const mediaSessionRows = [
-    ['mediaSession', snapshot.mediaSession.available ? 'available' : 'missing'],
-    ['playbackState', snapshot.mediaSession.playbackState],
-    ['handlers', formatActionHandlers(snapshot.mediaSession.actionHandlers)],
-    ['micControl', formatMicrophoneDebug(snapshot.mediaSession.microphone)],
-    ['actions', `${snapshot.mediaSession.actions.count}`],
-    ['lastAction', formatLastMediaAction(snapshot.mediaSession.actions.last)],
-    ['metadata', snapshot.mediaSession.metadataInstalled ? 'installed' : 'not installed'],
-    ['drivingState', state],
-    ['rtc', rtcStatus],
-    ['sttChunking', formatSttChunking()],
-  ];
-  const keeperRows = [
-    ['present', boolLabel(snapshot.keeper.present)],
-    ['paused', nullableBoolLabel(snapshot.keeper.paused)],
-    ['currentTime', formatNumber(snapshot.keeper.currentTime)],
-    ['readyState', formatNullable(snapshot.keeper.readyState)],
-    ['events', `play=${snapshot.keeper.events.playCount} pause=${snapshot.keeper.events.pauseCount}`],
-    ['lastEvent', formatLastKeeperEvent(snapshot.keeper.events.last)],
-    ['src', formatSrc(snapshot.keeper.src)],
-  ];
   const remoteRows = [
     ['present', boolLabel(snapshot.remoteTts.present)],
     ['paused', nullableBoolLabel(snapshot.remoteTts.paused)],
@@ -489,8 +425,10 @@ function MediaSessionDebugPanel({
     ['readyState', formatNullable(snapshot.remoteTts.readyState)],
     ['srcObject', formatRemoteSrcObject(snapshot.remoteTts.srcObject)],
     ['src', formatSrc(snapshot.remoteTts.src)],
+    ['drivingState', state],
+    ['rtc', rtcStatus],
+    ['sttChunking', formatSttChunking()],
   ];
-  const conclusion = buildDebugConclusion(snapshot, state);
 
   return (
     <section
@@ -502,7 +440,7 @@ function MediaSessionDebugPanel({
         overflow: 'hidden',
         color: HIFI.ink2,
       }}
-      aria-label="Media session debug"
+      aria-label="Audio debug"
     >
       <div
         style={{
@@ -518,80 +456,16 @@ function MediaSessionDebugPanel({
           color: HIFI.ink,
         }}
       >
-        <span>MEDIA DEBUG</span>
-        <span style={{ color: snapshot.keeper.present ? HIFI.ai : '#ef6155' }}>
-          KEEPER {snapshot.keeper.present ? 'READY' : 'MISSING'}
+        <span>AUDIO DEBUG</span>
+        <span style={{ color: snapshot.remoteTts.present ? HIFI.ai : HIFI.ink3 }}>
+          REMOTE TTS {snapshot.remoteTts.present ? 'READY' : 'WAITING'}
         </span>
       </div>
 
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: compact ? '1fr' : '1fr 1fr',
-          gap: 5,
-          marginBottom: 6,
-          fontFamily: HIFI.fonts.mono,
-          fontSize: 10,
-          lineHeight: 1.35,
-          color: HIFI.ink2,
-        }}
-      >
-        <div
-          style={{
-            minWidth: 0,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-          title={conclusion.hardwareLine}
-        >
-          {conclusion.hardwareLine}
-        </div>
-        <div
-          style={{
-            minWidth: 0,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-          title={conclusion.keeperLine}
-        >
-          {conclusion.keeperLine}
-        </div>
-      </div>
-
-      <div
-        ref={audioHostRef}
-        style={{
-          minHeight: 36,
-          display: 'flex',
-          alignItems: 'center',
-          marginBottom: 7,
-          borderRadius: 8,
-          border: `1px solid ${HIFI.stroke}`,
-          background: 'rgba(255,255,255,0.04)',
-          padding: 4,
-        }}
-      >
-        {!snapshot.keeper.present && (
-          <div
-            style={{
-              width: '100%',
-              fontFamily: HIFI.fonts.mono,
-              fontSize: 10,
-              color: HIFI.ink3,
-              textAlign: 'center',
-            }}
-          >
-            keeper audio element not created
-          </div>
-        )}
-      </div>
-
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: compact ? '1fr' : '1fr 1fr 1fr',
+          gridTemplateColumns: '1fr',
           gap: compact ? 5 : 8,
           maxHeight: compact ? 118 : 132,
           overflowY: 'auto',
@@ -599,35 +473,10 @@ function MediaSessionDebugPanel({
           fontFamily: baseFont,
         }}
       >
-        <DebugGroup title="mediaSession" rows={mediaSessionRows} />
-        <DebugGroup title="keeperAudio" rows={keeperRows} />
         <DebugGroup title="remoteTtsAudio" rows={remoteRows} />
       </div>
     </section>
   );
-}
-
-function buildDebugConclusion(snapshot: DebugSnapshot, state: DrivingState): {
-  hardwareLine: string;
-  keeperLine: string;
-} {
-  const hardwareEvent = snapshot.mediaSession.actions.count > 0 ? 'yes' : 'no';
-  return {
-    hardwareLine: `hardwareEvent=${hardwareEvent} probableLayer=${probableLayerFor(snapshot, state)}`,
-    keeperLine: `keeperEvents play=${snapshot.keeper.events.playCount} pause=${
-      snapshot.keeper.events.pauseCount
-    } last=${formatLastKeeperEvent(snapshot.keeper.events.last)}`,
-  };
-}
-
-function probableLayerFor(snapshot: DebugSnapshot, state: DrivingState): string {
-  if (snapshot.mediaSession.actions.count > 0) return 'js_media_session';
-  if (snapshot.keeper.events.pauseCount > 0) return 'keeper_audio_element';
-  if (state === 'recording' && snapshot.mediaSession.microphone.desiredActive === true) {
-    return 'ios_mic_session_before_js';
-  }
-  if (snapshot.mediaSession.available) return 'platform_before_js';
-  return 'media_session_unavailable';
 }
 
 function DebugGroup({ title, rows }: { title: string; rows: string[][] }) {
@@ -706,45 +555,6 @@ function formatSrc(src: string | null): string {
   if (!src) return 'none';
   if (src.length <= 58) return src;
   return `${src.slice(0, 46)}... (${src.length} chars)`;
-}
-
-function formatActionHandlers(
-  handlers: ReturnType<typeof getMediaSessionDebugSnapshot>['actionHandlers'],
-): string {
-  return Object.entries(handlers)
-    .map(([action, status]) => `${action}:${status}`)
-    .join(' ');
-}
-
-function formatMicrophoneDebug(
-  microphone: ReturnType<typeof getMediaSessionDebugSnapshot>['microphone'],
-): string {
-  const availability = microphone.available ? 'available' : 'missing';
-  const desired = microphone.desiredActive === null ? 'n/a' : boolLabel(microphone.desiredActive);
-  const last = microphone.lastSetActive === null ? 'n/a' : boolLabel(microphone.lastSetActive);
-  const error = microphone.error ? ` error=${microphone.error}` : '';
-  return `${availability} status=${microphone.status} desired=${desired} last=${last}${error}`;
-}
-
-function formatLastMediaAction(
-  action: ReturnType<typeof getMediaSessionDebugSnapshot>['actions']['last'],
-): string {
-  if (!action) return 'none';
-  return `${action.action} #${action.count} ${action.result} state=${action.state} ${formatAge(
-    action.ageMs,
-  )} ago`;
-}
-
-function formatLastKeeperEvent(
-  event: ReturnType<typeof getMediaSessionKeeperDebugSnapshot>['events']['last'],
-): string {
-  if (!event) return 'none';
-  return `${event.type} ${formatAge(event.ageMs)} ago`;
-}
-
-function formatAge(ageMs: number): string {
-  if (ageMs < 1000) return `${Math.round(ageMs)}ms`;
-  return `${(ageMs / 1000).toFixed(1)}s`;
 }
 
 function formatRemoteSrcObject(
