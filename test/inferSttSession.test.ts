@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { OpenClawInferError } from '../daemon/src/openclawInfer';
-import { OpenClawInferSttSession } from '../daemon/src/inferSttSession';
+import { mergeOverlappingTranscriptText, OpenClawInferSttSession } from '../daemon/src/inferSttSession';
 
 function callbacks() {
   return {
@@ -25,6 +25,21 @@ function makePcmSamples(sampleCount: number, marker = 0): Uint8Array {
 function makeFilledPcmSamples(sampleCount: number, marker: number): Uint8Array {
   return new Uint8Array(sampleCount * 2).fill(marker);
 }
+
+describe('mergeOverlappingTranscriptText', () => {
+  it('dedupes suffix/prefix overlap phrases', () => {
+    expect(
+      mergeOverlappingTranscriptText(
+        'Okay, this is me testing',
+        'Okay this is me testing that overlap merge works',
+      ),
+    ).toBe('Okay, this is me testing that overlap merge works');
+  });
+
+  it('appends text when there is no transcript overlap', () => {
+    expect(mergeOverlappingTranscriptText('hello world', 'new words append')).toBe('hello world new words append');
+  });
+});
 
 describe('OpenClawInferSttSession', () => {
   it('fires onReady promptly when constructed', () => {
@@ -503,6 +518,95 @@ describe('OpenClawInferSttSession', () => {
     expect(chunkPcms[1]).toHaveLength(5_500 * 2);
     expect(chunkPcms[1]?.[0]).toBe(1);
     expect(chunkPcms[1]?.at(-1)).toBe(2);
+  });
+
+  it('dedupes repeated text from overlapping fixed-cadence partial windows', async () => {
+    const cb = callbacks();
+    const chunkTexts = [
+      'Okay, this is me testing',
+      'Okay, this is me testing that the sliding window keeps moving',
+    ];
+
+    const session = new OpenClawInferSttSession(
+      {
+        sampleRate: 1000,
+        enablePhraseChunks: true,
+        createTempDir: async () => '/tmp/openclaw-stt-test',
+        writeFile: async () => undefined,
+        cleanupTempDir: async () => undefined,
+        transcribeChunk: async ({ wavPath }) => chunkTexts[Number(wavPath.match(/chunk-(\d+)\.wav/)?.[1]) - 1] ?? '',
+        transcribe: async () => 'final',
+      },
+      cb,
+    );
+
+    session.sendAudio(makeFilledPcmSamples(10_000, 1));
+
+    await vi.waitFor(() => expect(cb.onPartial).toHaveBeenLastCalledWith('that the sliding window keeps moving', true));
+    expect(cb.onPartial).toHaveBeenCalledWith('Okay, this is me testing', true);
+    expect(cb.onPartial).not.toHaveBeenCalledWith(
+      'Okay, this is me testing that the sliding window keeps moving',
+      true,
+    );
+  });
+
+  it('appends non-overlapping new words across fixed-cadence partial windows', async () => {
+    const cb = callbacks();
+    const chunkTexts = ['hello world', 'new words append'];
+
+    const session = new OpenClawInferSttSession(
+      {
+        sampleRate: 1000,
+        enablePhraseChunks: true,
+        createTempDir: async () => '/tmp/openclaw-stt-test',
+        writeFile: async () => undefined,
+        cleanupTempDir: async () => undefined,
+        transcribeChunk: async ({ wavPath }) => chunkTexts[Number(wavPath.match(/chunk-(\d+)\.wav/)?.[1]) - 1] ?? '',
+        transcribe: async () => 'final',
+      },
+      cb,
+    );
+
+    session.sendAudio(makeFilledPcmSamples(10_000, 1));
+
+    await vi.waitFor(() => expect(cb.onPartial).toHaveBeenLastCalledWith('new words append', true));
+    expect(cb.onPartial).toHaveBeenCalledWith('hello world', true);
+  });
+
+  it('does not let out-of-order older partial results replace newer partial text', async () => {
+    const cb = callbacks();
+    const resolvers = new Map<number, (text: string) => void>();
+
+    const session = new OpenClawInferSttSession(
+      {
+        sampleRate: 1000,
+        enablePhraseChunks: true,
+        maxConcurrentChunkTranscripts: 2,
+        createTempDir: async () => '/tmp/openclaw-stt-test',
+        writeFile: async () => undefined,
+        cleanupTempDir: async () => undefined,
+        transcribeChunk: async ({ wavPath }) => {
+          const id = Number(wavPath.match(/chunk-(\d+)\.wav/)?.[1]);
+          return new Promise<string>((resolve) => resolvers.set(id, resolve));
+        },
+        transcribe: async () => 'final',
+      },
+      cb,
+    );
+
+    session.sendAudio(makeFilledPcmSamples(10_000, 1));
+
+    await vi.waitFor(() => expect(resolvers.has(1)).toBe(true));
+    await vi.waitFor(() => expect(resolvers.has(2)).toBe(true));
+
+    resolvers.get(2)?.('newer partial text');
+    await vi.waitFor(() => expect(cb.onPartial).toHaveBeenLastCalledWith('newer partial text', true));
+
+    resolvers.get(1)?.('older partial text');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(cb.onPartial).toHaveBeenCalledTimes(1);
+    expect(cb.onPartial).not.toHaveBeenCalledWith('older partial text', true);
   });
 
   it('bounds fixed-cadence chunk transcription concurrency without serializing all chunks', async () => {

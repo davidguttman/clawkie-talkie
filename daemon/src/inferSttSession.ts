@@ -28,6 +28,17 @@ type CleanupTempDirFn = (path: string) => Promise<void>;
 type DetectSpeechFn = (pcm: Buffer) => boolean;
 type LogFn = (message: string) => void;
 
+type TranscriptToken = {
+  value: string;
+  start: number;
+  end: number;
+};
+
+type TranscriptMergeResult = {
+  mergedText: string;
+  appendedText: string;
+};
+
 type PartialChunkJob = {
   id: number;
   pcm: Buffer;
@@ -81,6 +92,9 @@ export class OpenClawInferSttSession {
   private chunkTranscriptQueue: PartialChunkJob[] = [];
   private activeChunkTranscripts = 0;
   private chunkCounter = 0;
+  private mergedPartialText = '';
+  private lastMergedPartialWindowEndMs = -Infinity;
+  private lastMergedPartialJobId = 0;
   private speechDetectorDestroyed = false;
   private vadRemainder: Buffer = Buffer.alloc(0);
 
@@ -320,12 +334,30 @@ export class OpenClawInferSttSession {
           job.windowEndMs,
         )} done latencyMs=${Date.now() - startedAtMs}`,
       );
-      if (!this.closed && !this.audioDoneStarted && text) this.cb.onPartial(text, true);
+      this.emitMergedPartial(job, text);
     } catch {
       // Near-live chunks are opportunistic; the full-turn infer remains authoritative.
     } finally {
       if (tempDir) await this.cleanupTempDir(tempDir);
     }
+  }
+
+  private emitMergedPartial(job: PartialChunkJob, text: string): void {
+    if (this.closed || this.audioDoneStarted || !text) return;
+    if (
+      job.windowEndMs < this.lastMergedPartialWindowEndMs ||
+      (job.windowEndMs === this.lastMergedPartialWindowEndMs && job.id <= this.lastMergedPartialJobId)
+    ) {
+      return;
+    }
+
+    const { mergedText, appendedText } = mergePartialTranscriptText(this.mergedPartialText, text);
+    this.lastMergedPartialWindowEndMs = job.windowEndMs;
+    this.lastMergedPartialJobId = job.id;
+    if (mergedText === this.mergedPartialText || !appendedText) return;
+
+    this.mergedPartialText = mergedText;
+    this.cb.onPartial(appendedText, true);
   }
 
   private slicePcmWindow(startMs: number, endMs: number): Buffer {
@@ -386,4 +418,71 @@ export class OpenClawInferSttSession {
     if (!this.opts.enablePhraseChunks) return undefined;
     return new PhraseChunker({ sampleRate: this.opts.sampleRate ?? DEFAULT_SAMPLE_RATE });
   }
+}
+
+export function mergeOverlappingTranscriptText(previous: string, next: string): string {
+  return mergePartialTranscriptText(previous, next).mergedText;
+}
+
+function mergePartialTranscriptText(previous: string, next: string): TranscriptMergeResult {
+  const prev = previous.trim();
+  const incoming = next.trim();
+  if (!prev) return { mergedText: incoming, appendedText: incoming };
+  if (!incoming) return { mergedText: prev, appendedText: '' };
+
+  const previousTokens = transcriptTokens(prev);
+  const nextTokens = transcriptTokens(incoming);
+  let overlapTokenCount = 0;
+
+  const maxOverlap = Math.min(previousTokens.length, nextTokens.length);
+  for (let count = maxOverlap; count > 0; count -= 1) {
+    if (tokensEqual(previousTokens.slice(previousTokens.length - count), nextTokens.slice(0, count))) {
+      overlapTokenCount = count;
+      break;
+    }
+  }
+
+  if (overlapTokenCount > 0) {
+    const remainder = incoming.slice(nextTokens[overlapTokenCount - 1]?.end ?? 0).trimStart();
+    return {
+      mergedText: appendTranscriptText(prev, remainder),
+      appendedText: partialAppendText(remainder),
+    };
+  }
+
+  return { mergedText: appendTranscriptText(prev, incoming), appendedText: incoming };
+}
+
+function transcriptTokens(text: string): TranscriptToken[] {
+  const tokens: TranscriptToken[] = [];
+  const tokenPattern = /[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)?/gu;
+  for (const match of text.matchAll(tokenPattern)) {
+    tokens.push({
+      value: normalizeTranscriptToken(match[0] ?? ''),
+      start: match.index ?? 0,
+      end: (match.index ?? 0) + (match[0]?.length ?? 0),
+    });
+  }
+  return tokens;
+}
+
+function normalizeTranscriptToken(token: string): string {
+  return token.toLocaleLowerCase().replace(/’/g, "'");
+}
+
+function tokensEqual(left: TranscriptToken[], right: TranscriptToken[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((token, index) => token.value === right[index]?.value);
+}
+
+function appendTranscriptText(previous: string, addition: string): string {
+  const trimmedPrevious = previous.trimEnd();
+  const trimmedAddition = addition.trimStart();
+  if (!trimmedAddition) return trimmedPrevious;
+  if (/^[,.;:!?]/u.test(trimmedAddition)) return `${trimmedPrevious}${trimmedAddition}`;
+  return `${trimmedPrevious} ${trimmedAddition}`;
+}
+
+function partialAppendText(addition: string): string {
+  return addition.trimStart().replace(/^[,.;:!?]+\s*/u, '').trim();
 }
