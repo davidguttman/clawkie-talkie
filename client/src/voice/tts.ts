@@ -24,7 +24,6 @@
 //
 // The phone never touches an xAI API key or WebSocket either way.
 
-import { startMediaSessionKeeper } from './mediaSessionKeeper';
 import type { BufferedReplyAudio } from '../replay';
 
 const DEFAULT_SAMPLE_RATE = 24000;
@@ -231,13 +230,6 @@ export function unlockDaemonTtsAudio(): Promise<void> {
   // daemon's stream hasn't arrived yet. Once srcObject is assigned
   // later, mobile browsers will treat playback as gesture-authorized.
   primeRemoteAudioElement();
-
-  // Light up the silent media-session keeper so iOS keeps an active
-  // media session after this gesture — that's what makes AirPods /
-  // lock-screen play-pause buttons reach our setActionHandler
-  // callbacks while the app is otherwise idle. Imported lazily inline
-  // to avoid pulling DOM-only code into SSR/import-time evaluation.
-  startMediaSessionKeeper();
 
   const audioCtx = getSharedAudioContext();
   if (!audioCtx) return Promise.resolve();
