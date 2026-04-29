@@ -46,6 +46,19 @@ describe('DrivingScreen hold music mute control', () => {
   });
 });
 
+describe('DrivingScreen response scroll timing', () => {
+  it('resets AI response captions to the top instead of auto-scrolling to the bottom', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    expect(source).toContain('AI_RESPONSE_CAPTION_LABEL');
+    expect(source).toContain('isAiResponseCaption');
+    expect(source).toContain('lastAiResponseTextRef');
+    expect(source).toContain('el.scrollTop = 0');
+    expect(source).not.toContain('el.scrollTop = el.scrollHeight');
+    expect(source).not.toContain('scrollTop = scrollHeight');
+  });
+});
+
 describe('DrivingScreen voice error labels', () => {
   it('surfaces infer STT, infer TTS, and reply auth failures with distinct labels', () => {
     const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');

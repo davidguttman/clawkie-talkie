@@ -63,30 +63,99 @@ describe('recording', () => {
 });
 
 describe('thinking', () => {
-  it('reply.done moves to ai and arms the TTS player', () => {
+  it('reply.done stays thinking, hides the reply text, and arms the TTS player', () => {
     const { next, side } = reduce(thinking, {
       type: 'reply.done',
       text: 'sup',
     });
-    expect(next.state).toBe('ai');
-    expect(next.lastReplyText).toBe('sup');
-    expect(next.liveReplyText).toBe('sup');
+    expect(next.state).toBe('thinking');
+    expect(next.pendingReplyText).toBe('sup');
+    expect(next.lastReplyText).toBe('');
+    expect(next.liveReplyText).toBe('');
     expect(side).toEqual([{ kind: 'armTts' }]);
   });
 
+  it('tts.start with a pending reply reveals the response and enters ai', () => {
+    const { next, side } = reduce(
+      { ...thinking, pendingReplyText: 'sup', lastReplyText: 'previous audible reply' },
+      { type: 'tts.start' },
+    );
+
+    expect(next.state).toBe('ai');
+    expect(next.pendingReplyText).toBe('');
+    expect(next.lastReplyText).toBe('sup');
+    expect(next.liveReplyText).toBe('sup');
+    expect(side).toEqual([]);
+  });
+
+  it('stale tts.start without a pending reply does not show previous turn text', () => {
+    const { next, side } = reduce(
+      {
+        ...thinking,
+        pendingReplyText: '',
+        lastReplyText: 'previous audible reply',
+        liveReplyText: '',
+      },
+      { type: 'tts.start' },
+    );
+
+    expect(next.state).toBe('thinking');
+    expect(next.pendingReplyText).toBe('');
+    expect(next.lastReplyText).toBe('previous audible reply');
+    expect(next.liveReplyText).toBe('');
+    expect(side).toEqual([]);
+  });
+
+  it('reply.done then tts.error returns idle without exposing the pending reply', () => {
+    let ctx = reduce(thinking, { type: 'reply.done', text: 'unheard reply' }).next;
+
+    const { next, side } = reduce(ctx, {
+      type: 'tts.error',
+      reason: 'openclaw_infer_tts_failed',
+    });
+
+    expect(next.state).toBe('idle');
+    expect(next.error).toBe('openclaw_infer_tts_failed');
+    expect(next.pendingReplyText).toBe('');
+    expect(next.lastReplyText).toBe('');
+    expect(next.liveReplyText).toBe('');
+    expect(side).toEqual([]);
+  });
+
+  it('reply.done then tts.done returns idle without exposing the pending reply', () => {
+    const ctx = reduce(thinking, { type: 'reply.done', text: 'unheard reply' }).next;
+
+    const { next, side } = reduce(ctx, { type: 'tts.done' });
+
+    expect(next.state).toBe('idle');
+    expect(next.pendingReplyText).toBe('');
+    expect(next.lastReplyText).toBe('');
+    expect(next.liveReplyText).toBe('');
+    expect(side).toEqual([]);
+  });
+
   it('reply.error returns to idle with the reason', () => {
-    const { next, side } = reduce(thinking, {
+    const { next, side } = reduce({ ...thinking, pendingReplyText: 'unheard reply' }, {
       type: 'reply.error',
       reason: 'xai_http_500',
     });
     expect(next.state).toBe('idle');
     expect(next.error).toBe('xai_http_500');
+    expect(next.pendingReplyText).toBe('');
+    expect(next.lastReplyText).toBe('');
+    expect(next.liveReplyText).toBe('');
     expect(side).toEqual([]);
   });
 
-  it('tap during thinking cancels the reply and returns to idle', () => {
-    const { next, side } = reduce(thinking, { type: 'tap' });
+  it('reply.done then tap cancel clears the pending unseen reply', () => {
+    const ctx = reduce(thinking, { type: 'reply.done', text: 'unheard reply' }).next;
+
+    const { next, side } = reduce(ctx, { type: 'tap' });
+
     expect(next.state).toBe('idle');
+    expect(next.pendingReplyText).toBe('');
+    expect(next.lastReplyText).toBe('');
+    expect(next.liveReplyText).toBe('');
     expect(side).toEqual([{ kind: 'cancelReply' }]);
   });
 
@@ -132,7 +201,7 @@ describe('ai', () => {
 });
 
 describe('full happy-path sequence', () => {
-  it('idle → recording → thinking → ai → idle', () => {
+  it('idle → recording → thinking → reply ready hidden → ai → idle', () => {
     let ctx = idle;
     ctx = reduce(ctx, { type: 'tap' }).next;
     expect(ctx.state).toBe('recording');
@@ -141,7 +210,13 @@ describe('full happy-path sequence', () => {
     ctx = reduce(ctx, { type: 'stt.done', text: 'hi' }).next;
     expect(ctx.state).toBe('thinking');
     ctx = reduce(ctx, { type: 'reply.done', text: 'hello' }).next;
+    expect(ctx.state).toBe('thinking');
+    expect(ctx.pendingReplyText).toBe('hello');
+    expect(ctx.liveReplyText).toBe('');
+    ctx = reduce(ctx, { type: 'tts.start' }).next;
     expect(ctx.state).toBe('ai');
+    expect(ctx.pendingReplyText).toBe('');
+    expect(ctx.liveReplyText).toBe('hello');
     ctx = reduce(ctx, { type: 'tts.done' }).next;
     expect(ctx.state).toBe('idle');
     expect(ctx.lastReplyText).toBe('hello');
@@ -181,6 +256,21 @@ describe('displayedCaptionText', () => {
         'user words',
       ),
     ).toBe('ai words');
+  });
+
+  it('does not reveal a pending reply while still thinking', () => {
+    expect(
+      displayedCaptionText(
+        {
+          ...initialContext,
+          state: 'thinking',
+          lastUserText: 'user words',
+          pendingReplyText: 'hidden ai words',
+          liveReplyText: '',
+        },
+        'user words',
+      ),
+    ).toBe('user words');
   });
 });
 
