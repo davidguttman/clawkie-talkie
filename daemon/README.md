@@ -93,8 +93,8 @@ On startup the daemon prints:
 
 - `/` — marketing landing page placeholder. Reserved.
 - `/voice/` — canonical public user-facing handoff entrypoint.
-- `/voice.html` — compatibility redirect to `/voice/`, preserving both `?…`
-  and `#…`.
+- `/voice` — clean public handoff URL used in generated links; static hosts
+  resolve it to `/voice/`.
 
 The agent constructs the URL directly:
 

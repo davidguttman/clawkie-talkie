@@ -28,7 +28,6 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, 'index.html'),
         voice: resolve(__dirname, 'voice/index.html'),
-        voiceHtml: resolve(__dirname, 'voice.html'),
       },
     },
   },
