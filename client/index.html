@@ -8,7 +8,7 @@
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📻</text></svg>">
     <meta
       name="description"
-      content="Clawkie-Talkie is a hands-free voice surface for your OpenClaw session. Tap, talk, and hear the reply read back to you."
+      content="Clawkie-Talkie is push-to-talk voice for thinking out loud into your OpenClaw session — most often from the car. Hold the floor for a full thought, hear a long answer back, and read the canonical transcript later in the same thread."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -298,6 +298,7 @@
         display: flex;
         flex-direction: column;
         padding: 56px 18px 22px;
+        font-family: var(--mono);
       }
       .device-island {
         position: absolute;
@@ -353,6 +354,7 @@
         box-shadow: none;
       }
       .device-caption {
+        font-family: var(--mono);
         font-size: 14px;
         line-height: 1.5;
         color: var(--ink);
@@ -729,10 +731,16 @@
             A walkie-talkie<br />for your <span class="accent">agent</span>.
           </h1>
           <p class="lede">
-            Clawkie-Talkie is a hands-free voice surface your coding
-            agent installs and runs for you. You can't use it without
-            your agent &mdash; the daemon, the rendezvous, and the
-            voice link all live on the agent's machine.
+            Push-to-talk voice for thinking out loud into your main
+            OpenClaw session &mdash; most often from the car. Hold the
+            big button, talk through a whole paragraph without being
+            interrupted, and hear a long answer back with the full
+            session's context.
+          </p>
+          <p class="lede" style="margin-top:-18px;">
+            Same thread, same agent, same code. Hours later, open
+            OpenClaw at the desk and read everything that was said in
+            the car.
           </p>
           <p class="lede" style="margin-top:-18px;">
             Don't have Clawkie-Talkie yet? Tell your agent to install
@@ -747,9 +755,9 @@
             <a class="btn" href="#how">HOW IT WORKS</a>
           </div>
           <div class="hero-meta">
-            <span>OPENCLAW INFER</span>
-            <span>NATURAL TTS</span>
-            <span>TAP-TO-TALK VOICE LOOP</span>
+            <span>SAME OPENCLAW SESSION</span>
+            <span>LONG-FORM PUSH-TO-TALK</span>
+            <span>CANONICAL THREAD</span>
             <span>RUNS LOCAL</span>
           </div>
         </div>
@@ -758,14 +766,14 @@
           <div class="device-screen">
             <div class="device-island"></div>
             <div class="device-header">
-              <span>CLWK · DEMO</span>
+              <span>CLWK · f3c1 · agent</span>
               <span class="pill"><span class="dot"></span><span data-demo-pill>READY</span></span>
             </div>
             <div class="device-caption-label">
               <span class="dot"></span><span data-demo-label>READY</span>
             </div>
             <div class="device-caption" aria-live="polite">
-              <span data-demo-caption>Tap to continue the conversation.</span><span class="device-caret"></span>
+              <span data-demo-caption></span><span class="device-caret"></span>
             </div>
             <div class="device-wave">
               <span></span><span></span><span></span><span></span>
@@ -791,11 +799,12 @@
       <section id="how" class="block">
         <div class="section-head">
           <span class="pill amber"><span class="dot"></span>HOW IT WORKS</span>
-          <h2>Three taps. Zero friction.</h2>
+          <h2>Talk through the whole thought.</h2>
           <p>
-            One persistent local daemon does the heavy lifting &mdash;
-            transcription, reasoning, and speech synthesis &mdash; so the
-            phone is just a microphone and a speaker.
+            A voice lane into the OpenClaw session you already have
+            open. Hold the big button, land a paragraph at highway
+            speed, and let your main agent reply at length &mdash; with
+            the same context the desk already had.
           </p>
         </div>
         <div class="steps">
@@ -813,19 +822,21 @@
             <span class="step-num">02 · HANDOFF</span>
             <h3>Say "switch to voice."</h3>
             <p>
-              From any OpenClaw turn, the agent hands you a
-              deterministic rendezvous URL built from the current
-              session. Open it on the phone in your pocket &mdash;
-              that's the only thing you do.
+              From the OpenClaw thread you are already in, the agent
+              hands you a rendezvous URL built from that exact session.
+              Open it on the phone in your pocket &mdash; same thread,
+              same agent, same code.
             </p>
           </div>
           <div class="step">
-            <span class="step-num">03 · TALK</span>
-            <h3>Speak. Hear the reply.</h3>
+            <span class="step-num">03 · STEER</span>
+            <h3>Hold the floor. Read it later.</h3>
             <p>
-              Tap once to record, again to send. Live transcription
-              streams as you speak; the reply is read back through
-              your earbuds.
+              Press the button, talk through the whole prompt without
+              being interrupted, release. The reply plays back at
+              length while you drive. Hours later, open OpenClaw at
+              the desk and read the canonical transcript of everything
+              that was said.
             </p>
           </div>
         </div>
@@ -834,47 +845,51 @@
       <section id="features" class="block">
         <div class="section-head">
           <span class="pill"><span class="dot"></span>FEATURES</span>
-          <h2>Built like instrumentation, not a chatbot.</h2>
+          <h2>Built for long thoughts in moving cars.</h2>
           <p>
-            Every detail &mdash; the OLED palette, the mono caption
-            labels, the breathing aura on the record button &mdash; is
-            tuned so you can read state at a glance, mid-conversation.
+            Push-to-talk you can hold for a paragraph, full session
+            context on the other end, and a written transcript waiting
+            for you when you sit back down at the keyboard.
           </p>
         </div>
         <div class="features">
           <div class="feature">
-            <span class="pill"><span class="dot"></span>OPENCLAW INFER</span>
-            <h3>Words appear as you say them.</h3>
+            <span class="pill"><span class="dot"></span>HOLD THE FLOOR</span>
+            <h3>Long prompts, no interruptions.</h3>
             <p>
-              OpenClaw infer produces full-turn transcripts, while WASM
-              VAD committed chunks keep the live caption moving before
-              the turn is finalized.
+              Press the big button and talk for as long as the thought
+              takes &mdash; a paragraph, a few minutes, the whole frame
+              of an essay or an app idea. Nothing cuts you off until
+              you release.
             </p>
           </div>
           <div class="feature">
-            <span class="pill ai"><span class="dot"></span>NATURAL TTS</span>
-            <h3>Reply, read aloud.</h3>
+            <span class="pill ai"><span class="dot"></span>SAME SESSION</span>
+            <h3>Your main agent, full context.</h3>
             <p>
-              Daemon-side text-to-speech streams audio back to the phone
-              with low latency. Skip mid-sentence with a tap.
+              Every turn lands in the OpenClaw session you were
+              already working in. No fresh assistant, no lost thread
+              &mdash; the agent answers with the code, the prior turns,
+              and the project it already knows.
             </p>
           </div>
           <div class="feature">
-            <span class="pill think"><span class="dot"></span>POCKET-FRIENDLY</span>
-            <h3>Tap-to-talk, tuned for motion.</h3>
+            <span class="pill think"><span class="dot"></span>READ IT LATER</span>
+            <h3>Canonical transcript in the thread.</h3>
             <p>
-              A huge press-to-talk control, live captions, and replay
-              make it easy to use while walking, cooking, or working
-              away from the keyboard.
+              What you said in the car and what the agent answered are
+              both written into the original OpenClaw/Discord thread.
+              Open it from the laptop later and read everything in
+              order.
             </p>
           </div>
           <div class="feature">
             <span class="pill amber"><span class="dot"></span>LOCAL DAEMON</span>
-            <h3>One persistent session.</h3>
+            <h3>Runs on your machine.</h3>
             <p>
-              Your local daemon owns the WebRTC, STT, and TTS sessions.
-              Pull out a different phone mid-conversation and the
-              session follows you, not the device.
+              The persistent daemon owns the WebRTC link, the STT and
+              TTS calls, and the OpenClaw shell-out. The phone is
+              microphone and speaker; the trusted side stays at home.
             </p>
           </div>
         </div>
@@ -883,32 +898,37 @@
       <section id="use-cases" class="block">
         <div class="section-head">
           <span class="pill amber"><span class="dot"></span>USE CASES</span>
-          <h2>For when typing isn't an option.</h2>
+          <h2>The drive is the workspace.</h2>
         </div>
         <div class="cases">
           <article class="case">
-            <span class="label">DRIVING</span>
-            <h4>Pair-program from the car.</h4>
+            <span class="label">WRITING &amp; TRAINING</span>
+            <h4>Draft out loud, edit later.</h4>
             <p>
-              Talk through a deploy, walk through a stack trace, or
-              dictate the next commit message &mdash; without taking
-              your eyes off the road.
+              Talk through a whole opening, an argument, a piece of
+              training material. Land the idea on the highway, read
+              the transcript at the desk, polish the words you
+              actually said.
             </p>
           </article>
           <article class="case">
-            <span class="label">WALKING</span>
-            <h4>Think out loud on a walk.</h4>
+            <span class="label">APP &amp; PRODUCT IDEAS</span>
+            <h4>Explore the next thing on the drive.</h4>
             <p>
-              Long-form reasoning works better when you can move. Speak
-              the question, listen to the reply, refine, repeat.
+              Pitch your main agent a new product, an app concept, a
+              feature you've been turning over. Hold the floor for the
+              full framing &mdash; let the session you already have
+              push back with real context.
             </p>
           </article>
           <article class="case">
-            <span class="label">FOCUSING</span>
-            <h4>Voice handoff from chat.</h4>
+            <span class="label">FEATURES IN FLIGHT</span>
+            <h4>Keep the session moving.</h4>
             <p>
-              You're deep in a thread. Say "switch to voice." Keep going
-              without breaking the rhythm of the conversation.
+              You were mid-feature when you got in the car. Switch
+              that exact OpenClaw thread to voice, steer the next
+              decision in long form, and pick up the canonical
+              transcript when you stop.
             </p>
           </article>
         </div>
@@ -951,94 +971,86 @@
         var control = document.querySelector('[data-demo-advance]');
         if (!device || !control) return;
 
+        // Canonical scripted dialogue from docs/design/hifi-script.jsx
+        // (turns 3 + 4 — the short "you can't backspace" exchange).
+        var USER_LINE =
+          "Keep exploring. What's the counterargument? Someone could say you think better at a desk with tools.";
+        var AI_LINE =
+          "Right. The counter is that tools create affordances for editing, not for thinking. At a desk you start shaping words before you have the idea. In the car you have to finish the thought because you can't backspace.";
+
+        // State sequence mirrors the real driving reducer:
+        // idle → recording → thinking(transcribing) → thinking(pending) → ai → idle.
+        // Labels/pills/glyphs/control-labels come from client/src/screens/Driving.tsx.
         var demoSteps = [
           {
             id: 'idle-ready',
             phase: 'idle',
             pill: 'READY',
             label: 'READY',
-            text: 'Tap to continue the conversation.',
+            text: '',
             glyph: '●',
             controlLabel: 'TAP TO TALK',
             live: false,
-            durationMs: 2200
+            durationMs: 1600
           },
           {
-            id: 'recording-auth-plan',
+            id: 'recording-counter',
             phase: 'recording',
             pill: 'REC',
             label: 'YOU · LIVE',
-            text: 'walk me through the deploy plan for the auth service',
+            text: USER_LINE,
             glyph: '■',
             controlLabel: 'TAP TO STOP',
             live: true,
-            durationMs: 3600
+            stream: true,
+            streamMs: 38,
+            tailMs: 700
           },
           {
             id: 'thinking-transcribing',
             phase: 'thinking',
             pill: 'THINKING',
             label: 'TRANSCRIBING · OPENCLAW',
-            text: 'finalizing your turn and preparing the reply...',
+            text: USER_LINE,
             glyph: '◐',
-            controlLabel: 'THINKING',
+            controlLabel: 'THINKING…',
             live: true,
-            durationMs: 2200
+            durationMs: 1500
+          },
+          {
+            id: 'thinking-pending',
+            phase: 'thinking',
+            pill: 'THINKING',
+            label: 'THINKING',
+            text: '',
+            glyph: '◐',
+            controlLabel: 'THINKING…',
+            live: false,
+            durationMs: 900
           },
           {
             id: 'ai-readback',
             phase: 'ai',
             pill: 'READING REPLY',
             label: 'AI · READING ALOUD',
-            text: 'Start with the database migration, deploy the auth service behind the feature flag, then watch login errors before opening traffic.',
+            text: AI_LINE,
             glyph: '◉',
             controlLabel: 'TAP TO SILENCE',
             live: true,
-            durationMs: 4400
+            stream: true,
+            streamMs: 32,
+            tailMs: 900
           },
           {
-            id: 'idle-next-turn',
+            id: 'idle-ai-last',
             phase: 'idle',
             pill: 'READY',
             label: 'AI · LAST',
-            text: 'Start with the database migration, deploy behind the flag, then watch login errors.',
+            text: AI_LINE,
             glyph: '●',
             controlLabel: 'TAP TO TALK',
             live: false,
             durationMs: 2600
-          },
-          {
-            id: 'recording-follow-up',
-            phase: 'recording',
-            pill: 'REC',
-            label: 'YOU · LIVE',
-            text: 'what should I check first if rollback starts looking likely',
-            glyph: '■',
-            controlLabel: 'TAP TO STOP',
-            live: true,
-            durationMs: 3200
-          },
-          {
-            id: 'thinking-follow-up',
-            phase: 'thinking',
-            pill: 'THINKING',
-            label: 'THINKING',
-            text: 'checking the rollback path...',
-            glyph: '◐',
-            controlLabel: 'THINKING',
-            live: true,
-            durationMs: 1800
-          },
-          {
-            id: 'ai-follow-up',
-            phase: 'ai',
-            pill: 'READING REPLY',
-            label: 'AI · READING ALOUD',
-            text: 'Check migration reversibility first. If that is clean, compare error rate, latency, and auth callback failures against the pre-deploy baseline.',
-            glyph: '◉',
-            controlLabel: 'TAP TO SILENCE',
-            live: true,
-            durationMs: 4200
           }
         ];
 
@@ -1051,19 +1063,15 @@
         };
         var index = 0;
         var timer = 0;
+        var streamId = 0;
         var motionQuery = window.matchMedia
           ? window.matchMedia('(prefers-reduced-motion: reduce)')
           : { matches: false, addEventListener: null, addListener: null };
 
-        function render(step) {
-          device.dataset.demoPhase = step.phase;
-          device.dataset.demoLive = step.live ? 'true' : 'false';
-          nodes.pill.textContent = step.pill;
-          nodes.label.textContent = step.label;
-          nodes.caption.textContent = step.text;
-          nodes.glyph.textContent = step.glyph;
-          nodes.controlLabel.textContent = step.controlLabel;
-          control.setAttribute('aria-label', step.controlLabel + ': advance Clawkie-Talkie demo');
+        function clearStream() {
+          if (!streamId) return;
+          window.clearInterval(streamId);
+          streamId = 0;
         }
 
         function clearDemoTimer() {
@@ -1072,18 +1080,58 @@
           timer = 0;
         }
 
+        function render(step) {
+          clearStream();
+          device.dataset.demoPhase = step.phase;
+          device.dataset.demoLive = step.live ? 'true' : 'false';
+          nodes.pill.textContent = step.pill;
+          nodes.label.textContent = step.label;
+          nodes.glyph.textContent = step.glyph;
+          nodes.controlLabel.textContent = step.controlLabel;
+          control.setAttribute('aria-label', step.controlLabel + ': advance Clawkie-Talkie demo');
+          if (step.stream && !motionQuery.matches) {
+            nodes.caption.textContent = '';
+          } else {
+            nodes.caption.textContent = step.text;
+          }
+        }
+
+        function stepDuration(step) {
+          if (step.stream && !motionQuery.matches) {
+            return step.text.length * (step.streamMs || 40) + (step.tailMs || 600);
+          }
+          return step.durationMs || 2000;
+        }
+
+        function startStreaming(step) {
+          if (!step.stream || motionQuery.matches) return;
+          var i = 0;
+          var text = step.text;
+          var speed = step.streamMs || 40;
+          streamId = window.setInterval(function () {
+            i++;
+            nodes.caption.textContent = text.slice(0, i);
+            if (i >= text.length) {
+              window.clearInterval(streamId);
+              streamId = 0;
+            }
+          }, speed);
+        }
+
         function scheduleAutoplay() {
           clearDemoTimer();
           if (motionQuery.matches) return;
+          var step = demoSteps[index];
           timer = window.setTimeout(function () {
             advance('auto');
-          }, demoSteps[index].durationMs);
+          }, stepDuration(step));
         }
 
         function advance(reason) {
           clearDemoTimer();
           index = (index + 1) % demoSteps.length;
           render(demoSteps[index]);
+          startStreaming(demoSteps[index]);
           if (reason === 'auto' || reason === 'manual') {
             scheduleAutoplay();
           }
@@ -1100,6 +1148,7 @@
         }
 
         render(demoSteps[index]);
+        startStreaming(demoSteps[index]);
         scheduleAutoplay();
       })();
     </script>
