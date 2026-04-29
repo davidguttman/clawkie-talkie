@@ -21,18 +21,15 @@ feature thread ── "switch to voice" ──▶ phone link ──▶ talk next
 The normal install path is agent-run. Tell your agent:
 
 ```text
-Install Clawkie Talkie.
-
-Follow AGENT-INSTALL.md from:
-https://github.com/davidguttman/clawkie-talkie
-
-Inspect the downloaded files first. Stop if anything looks suspicious.
-
-When done, report whether:
-
-- the daemon is running;
-- OpenClaw STT/TTS smoke tests passed;
-- the voice handoff skill is installed.
+Install Clawkie-Talkie for me by following
+https://github.com/davidguttman/clawkie-talkie/blob/master/AGENT-INSTALL.md.
+Before installing, download or clone the repo and inspect the source; stop and ask me
+if anything looks suspicious, harmful, or you are not confident. The install should
+set up the persistent Clawkie-Talkie daemon and the OpenClaw clawkie-voice-handoff
+skill so I can say "switch to voice" and get a working handoff link. Verify the
+daemon/service status, logs, and skill configuration before reporting success. When
+finished, give me a plain English summary of what changed, what you verified, and
+any blockers.
 ```
 
 The install does three important things:
