@@ -41,9 +41,9 @@ CLAWKIE_SOURCE_DIR="$OPENCLAW_WORKSPACE/external/clawkie-talkie"
 mkdir -p "$(dirname "$CLAWKIE_SOURCE_DIR")"
 cd "$(dirname "$CLAWKIE_SOURCE_DIR")"
 curl -L -o clawkie-talkie.zip \
-  https://github.com/davidguttman/clawkietalkie/archive/HEAD.zip
+  https://github.com/davidguttman/clawkie-talkie/archive/HEAD.zip
 unzip -q clawkie-talkie.zip
-extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkietalkie-*' | head -n 1)
+extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkie-talkie-*' | head -n 1)
 rm -rf "$CLAWKIE_SOURCE_DIR"
 mv "$extracted_dir" "$CLAWKIE_SOURCE_DIR"
 rm clawkie-talkie.zip
@@ -270,10 +270,10 @@ If installed from a ZIP, download the latest ZIP and refresh the source folder. 
 : "${CLAWKIE_SOURCE_DIR:?set this to the existing Clawkie Talkie source directory}"
 cd "$(dirname "$CLAWKIE_SOURCE_DIR")"
 curl -L -o clawkie-talkie.zip \
-  https://github.com/davidguttman/clawkietalkie/archive/HEAD.zip
+  https://github.com/davidguttman/clawkie-talkie/archive/HEAD.zip
 cp "$CLAWKIE_SOURCE_DIR/.env" /tmp/clawkie-talkie.env.bak
 unzip -q -o clawkie-talkie.zip
-extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkietalkie-*' | head -n 1)
+extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkie-talkie-*' | head -n 1)
 rm -rf "$CLAWKIE_SOURCE_DIR"
 mv "$extracted_dir" "$CLAWKIE_SOURCE_DIR"
 mv /tmp/clawkie-talkie.env.bak "$CLAWKIE_SOURCE_DIR/.env"

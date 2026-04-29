@@ -23,7 +23,7 @@ Do not install credentials into the browser. The browser receives only voice han
 
 ## Source
 
-Public GitHub repo: `davidguttman/clawkietalkie`
+Public GitHub repo: `davidguttman/clawkie-talkie`
 
 ## Choose install mode first
 
@@ -61,9 +61,9 @@ The preserved daemon `DAEMON_PEER_ID` and installed skill `CLAWKIE_DAEMON_HOST_I
    trap 'rm -rf "$workdir"' EXIT
    cd "$workdir"
    curl -L -o clawkie-talkie.zip \
-     https://github.com/davidguttman/clawkietalkie/archive/HEAD.zip
+     https://github.com/davidguttman/clawkie-talkie/archive/HEAD.zip
    unzip -q clawkie-talkie.zip
-   extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkietalkie-*' | head -n 1)
+   extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkie-talkie-*' | head -n 1)
    mkdir -p "$(dirname "$CLAWKIE_SOURCE_DIR")"
    mv "$extracted_dir" "$CLAWKIE_SOURCE_DIR"
    cd "$CLAWKIE_SOURCE_DIR"
@@ -118,9 +118,9 @@ Use this flow when `CLAWKIE_SOURCE_DIR` already exists, the daemon has run befor
    cd "$workdir"
 
    curl -L -o clawkie-talkie.zip \
-     https://github.com/davidguttman/clawkietalkie/archive/HEAD.zip
+     https://github.com/davidguttman/clawkie-talkie/archive/HEAD.zip
    unzip -q clawkie-talkie.zip
-   extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkietalkie-*' | head -n 1)
+   extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkie-talkie-*' | head -n 1)
 
    rsync -a --delete \
      --exclude '.env' \
