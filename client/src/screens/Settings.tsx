@@ -7,6 +7,9 @@ import type { SttCatalog, SttSelection, TtsCatalog, TtsSelection } from '../voic
 // TTS provider credentials are NOT stored on the phone — OpenClaw owns
 // provider auth. This screen only edits on-device voice / export preferences.
 
+export const DEFAULT_PROVIDER_OPTION_ID = '__default__';
+const STALE_PROVIDER_OPTION_ID = '__saved_provider__';
+
 export interface TtsVoiceOption {
   id: string;
   label: string;
@@ -68,7 +71,8 @@ export function SettingsScreen({
     setSettings(withSttSelection(settings, selection));
 
   const providerOptions = configuredTtsProviders(ttsCatalog);
-  const currentProvider = providerForSelection(providerOptions, ttsCatalog, settings.tts);
+  const currentProvider = providerForSelection(providerOptions, settings.tts);
+  const ttsProviderValue = ttsProviderValueForSelection(providerOptions, settings.tts);
   const effectiveSelection: TtsSelection = currentProvider
     ? {
         providerId: currentProvider.id,
@@ -80,10 +84,15 @@ export function SettingsScreen({
   const selectedVoice = voiceOptions.some((voice) => voice.id === effectiveSelection.voice)
     ? effectiveSelection.voice ?? ''
     : voiceOptions[0]?.id ?? '';
-  const statusText = ttsCatalogStatusText(ttsCatalog, currentProvider);
+  const statusText = ttsCatalogStatusText(
+    ttsCatalog,
+    currentProvider,
+    isDefaultTtsSelection(settings.tts),
+  );
 
   const sttProviderOptions = configuredSttProviders(sttCatalog);
-  const currentSttProvider = sttProviderForSelection(sttProviderOptions, sttCatalog, settings.stt);
+  const currentSttProvider = sttProviderForSelection(sttProviderOptions, settings.stt);
+  const sttProviderValue = sttProviderValueForSelection(sttProviderOptions, settings.stt);
   const effectiveSttSelection: SttSelection = currentSttProvider
     ? {
         providerId: currentSttProvider.id,
@@ -92,7 +101,11 @@ export function SettingsScreen({
           : {}),
       }
     : settings.stt;
-  const sttStatusText = sttCatalogStatusText(sttCatalog, currentSttProvider);
+  const sttStatusText = sttCatalogStatusText(
+    sttCatalog,
+    currentSttProvider,
+    isDefaultSttSelection(settings.stt),
+  );
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', color: HIFI.ink }}>
@@ -101,20 +114,27 @@ export function SettingsScreen({
         <SettingsSection title="TRANSCRIPTION">
           <SelectRow
             label="Provider"
-            value={currentSttProvider?.id ?? ''}
+            value={sttProviderValue}
             setValue={(providerId) => {
+              if (providerId === DEFAULT_PROVIDER_OPTION_ID) {
+                updateSttSelection({});
+                return;
+              }
               const provider = sttProviderOptions.find((option) => option.id === providerId);
               if (!provider?.selectable) return;
               updateSttSelection(nextSttSelectionAfterProviderChange(provider, settings.stt));
             }}
-            options={sttProviderOptions.length > 0
-              ? sttProviderOptions.map((provider) => ({
-                  id: provider.id,
-                  label: provider.label,
-                  disabled: !provider.selectable,
-                }))
-              : [{ id: '', label: 'Loading from daemon…', disabled: true }]}
-            disabled={!sttCatalog || sttProviderOptions.length === 0}
+            options={[
+              { id: DEFAULT_PROVIDER_OPTION_ID, label: 'Default' },
+              ...staleProviderOption(settings.stt, currentSttProvider, sttProviderOptions),
+              ...(sttProviderOptions.length > 0
+                ? sttProviderOptions.map((provider) => ({
+                    id: provider.id,
+                    label: provider.label,
+                    disabled: !provider.selectable,
+                  }))
+                : [{ id: '', label: 'Loading from daemon...', disabled: true }]),
+            ]}
           />
           {currentSttProvider && currentSttProvider.models.length > 1 && (
             <SelectRow
@@ -134,20 +154,27 @@ export function SettingsScreen({
         <SettingsSection title="VOICE">
           <SelectRow
             label="Provider"
-            value={currentProvider?.id ?? ''}
+            value={ttsProviderValue}
             setValue={(providerId) => {
+              if (providerId === DEFAULT_PROVIDER_OPTION_ID) {
+                updateTtsSelection({});
+                return;
+              }
               const provider = providerOptions.find((option) => option.id === providerId);
               if (!provider?.selectable) return;
               updateTtsSelection(nextTtsSelectionAfterProviderChange(provider, settings.tts));
             }}
-            options={providerOptions.length > 0
-              ? providerOptions.map((provider) => ({
-                  id: provider.id,
-                  label: providerSelectLabel(provider),
-                  disabled: !provider.selectable,
-                }))
-              : [{ id: '', label: 'Loading from daemon…', disabled: true }]}
-            disabled={!ttsCatalog || providerOptions.length === 0}
+            options={[
+              { id: DEFAULT_PROVIDER_OPTION_ID, label: 'Default' },
+              ...staleProviderOption(settings.tts, currentProvider, providerOptions),
+              ...(providerOptions.length > 0
+                ? providerOptions.map((provider) => ({
+                    id: provider.id,
+                    label: providerSelectLabel(provider),
+                    disabled: !provider.selectable,
+                  }))
+                : [{ id: '', label: 'Loading from daemon...', disabled: true }]),
+            ]}
           />
           {currentProvider && currentProvider.models.length > 1 && (
             <SelectRow
@@ -165,20 +192,22 @@ export function SettingsScreen({
               disabled={!currentProvider.selectable}
             />
           )}
-          <SelectRow
-            label="Voice"
-            value={selectedVoice}
-            setValue={(voiceId) => {
-              if (!currentProvider?.selectable) return;
-              const voice = voiceOptions.find((option) => option.id === voiceId);
-              if (!voice || voice.disabled) return;
-              updateTtsSelection(nextTtsSelectionAfterVoiceChange(effectiveSelection, voice));
-            }}
-            options={voiceOptions.length > 0
-              ? voiceOptions
-              : [{ id: '', label: 'No voices available', disabled: true }]}
-            disabled={!currentProvider?.selectable || voiceOptions.every((voice) => voice.disabled)}
-          />
+          {currentProvider && (
+            <SelectRow
+              label="Voice"
+              value={selectedVoice}
+              setValue={(voiceId) => {
+                if (!currentProvider?.selectable) return;
+                const voice = voiceOptions.find((option) => option.id === voiceId);
+                if (!voice || voice.disabled) return;
+                updateTtsSelection(nextTtsSelectionAfterVoiceChange(effectiveSelection, voice));
+              }}
+              options={voiceOptions.length > 0
+                ? voiceOptions
+                : [{ id: '', label: 'No voices available', disabled: true }]}
+              disabled={!currentProvider?.selectable || voiceOptions.every((voice) => voice.disabled)}
+            />
+          )}
           <StatusRow text={statusText} onRefresh={onRefreshTtsCatalog} />
         </SettingsSection>
 
@@ -254,7 +283,7 @@ export function voicesForSelection(
   }
 
   const providers = configuredTtsProviders(catalog);
-  const provider = providerForSelection(providers, catalog, selection);
+  const provider = providerForSelection(providers, selection);
   if (!provider) {
     return selection.voice ? [{ id: selection.voice, label: selection.voice, disabled: true }] : [];
   }
@@ -301,6 +330,34 @@ export function withTtsSelection(settings: Settings, selection: TtsSelection): S
 
 export function withSttSelection(settings: Settings, selection: SttSelection): Settings {
   return { ...settings, stt: selection };
+}
+
+export function isDefaultTtsSelection(selection: TtsSelection): boolean {
+  return !selection.providerId && !selection.model && !selection.voice;
+}
+
+export function isDefaultSttSelection(selection: SttSelection): boolean {
+  return !selection.providerId && !selection.model;
+}
+
+export function ttsProviderValueForSelection(
+  providers: TtsProviderOption[],
+  selection: TtsSelection,
+): string {
+  return providerForSelection(providers, selection)?.id
+    ?? selection.providerId
+    ?? (isDefaultTtsSelection(selection) ? undefined : STALE_PROVIDER_OPTION_ID)
+    ?? DEFAULT_PROVIDER_OPTION_ID;
+}
+
+export function sttProviderValueForSelection(
+  providers: SttProviderOption[],
+  selection: SttSelection,
+): string {
+  return sttProviderForSelection(providers, selection)?.id
+    ?? selection.providerId
+    ?? (isDefaultSttSelection(selection) ? undefined : STALE_PROVIDER_OPTION_ID)
+    ?? DEFAULT_PROVIDER_OPTION_ID;
 }
 
 export function configuredSttProviders(catalog: SttCatalog | null): SttProviderOption[] {
@@ -352,7 +409,9 @@ export function nextSttSelectionAfterModelChange(
 export function ttsCatalogStatusText(
   catalog: TtsCatalog | null,
   provider: TtsProviderOption | undefined,
+  isDefaultSelection = false,
 ): string {
+  if (isDefaultSelection) return 'OpenClaw will choose voice defaults';
   if (!catalog) return 'Connect to daemon to load voices';
   if (provider && provider.models.length === 0) return 'Provider has no selectable models';
   if (!provider?.selectable) return 'Provider unavailable';
@@ -362,7 +421,9 @@ export function ttsCatalogStatusText(
 export function sttCatalogStatusText(
   catalog: SttCatalog | null,
   provider: SttProviderOption | undefined,
+  isDefaultSelection = false,
 ): string {
+  if (isDefaultSelection) return 'OpenClaw will choose transcription defaults';
   if (!catalog) return 'Connect to daemon to load transcription providers';
   if (provider && provider.models.length === 0) return 'Transcription provider has no selectable models';
   if (!provider?.selectable) return 'Transcription provider unavailable';
@@ -371,14 +432,10 @@ export function sttCatalogStatusText(
 
 function sttProviderForSelection(
   providers: SttProviderOption[],
-  catalog: SttCatalog | null,
   selection: SttSelection,
 ): SttProviderOption | undefined {
-  return providers.find((provider) => provider.id === selection.providerId)
-    ?? providers.find((provider) => provider.selected)
-    ?? providers.find((provider) => provider.id === catalog?.activeProvider)
-    ?? providers.find((provider) => provider.selectable)
-    ?? providers[0];
+  if (!selection.providerId) return undefined;
+  return providers.find((provider) => provider.id === selection.providerId);
 }
 
 function preferredSttModel(provider: SttProviderOption, selection: SttSelection): string | undefined {
@@ -405,14 +462,10 @@ function providerRank(
 
 function providerForSelection(
   providers: TtsProviderOption[],
-  catalog: TtsCatalog | null,
   selection: TtsSelection,
 ): TtsProviderOption | undefined {
-  return providers.find((provider) => provider.id === selection.providerId)
-    ?? providers.find((provider) => provider.selected)
-    ?? providers.find((provider) => provider.id === catalog?.activeProvider)
-    ?? providers.find((provider) => provider.selectable)
-    ?? providers[0];
+  if (!selection.providerId) return undefined;
+  return providers.find((provider) => provider.id === selection.providerId);
 }
 
 function preferredModel(provider: TtsProviderOption, selection: TtsSelection): string | undefined {
@@ -425,6 +478,21 @@ function preferredVoice(provider: TtsProviderOption, selection: TtsSelection): s
     return selection.voice;
   }
   return provider.voices[0]?.id;
+}
+
+function staleProviderOption<T extends { id: string }>(
+  selection: { providerId?: string; model?: string; voice?: string },
+  currentProvider: T | undefined,
+  providerOptions: T[],
+): Array<{ id: string; label: string; disabled: true }> {
+  const providerId = selection.providerId;
+  if (!providerId || currentProvider || providerOptions.some((provider) => provider.id === providerId)) {
+    if (!providerId && (selection.model || selection.voice)) {
+      return [{ id: STALE_PROVIDER_OPTION_ID, label: 'Saved selection (unavailable)', disabled: true }];
+    }
+    return [];
+  }
+  return [{ id: providerId, label: `${providerId} (unavailable)`, disabled: true }];
 }
 
 function SettingsSection({ title, children }: { title: string; children: ReactNode }) {

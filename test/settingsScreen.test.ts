@@ -2,11 +2,16 @@ import { describe, expect, it } from 'vitest';
 import {
   configuredSttProviders,
   configuredTtsProviders,
+  DEFAULT_PROVIDER_OPTION_ID,
+  isDefaultSttSelection,
+  isDefaultTtsSelection,
   nextSttSelectionAfterModelChange,
   nextSttSelectionAfterProviderChange,
   nextTtsSelectionAfterProviderChange,
   nextTtsSelectionAfterVoiceChange,
+  sttProviderValueForSelection,
   sttCatalogStatusText,
+  ttsProviderValueForSelection,
   ttsCatalogStatusText,
   voicesForSelection,
   withLegacyVoiceSelection,
@@ -92,6 +97,27 @@ describe('SettingsScreen TTS catalog helpers', () => {
     });
   });
 
+  it('treats an empty saved TTS selection as Default instead of the catalog active provider', () => {
+    const providers = configuredTtsProviders(catalog());
+
+    expect(ttsProviderValueForSelection(providers, {})).toBe(DEFAULT_PROVIDER_OPTION_ID);
+    expect(isDefaultTtsSelection({})).toBe(true);
+    expect(ttsCatalogStatusText(catalog(), undefined, true)).toBe(
+      'OpenClaw will choose voice defaults',
+    );
+  });
+
+  it('keeps stale TTS provider ids distinct so Default can clear them', () => {
+    const providers = configuredTtsProviders(catalog());
+
+    expect(ttsProviderValueForSelection(providers, { providerId: 'missing-provider' })).toBe(
+      'missing-provider',
+    );
+    expect(ttsProviderValueForSelection(providers, { voice: 'legacy-voice' })).not.toBe(
+      DEFAULT_PROVIDER_OPTION_ID,
+    );
+  });
+
   it('selecting a configured available provider with no voices clears the previous provider voice', () => {
     const emptyVoiceProvider = configuredTtsProviders(catalog({
       providers: [
@@ -132,6 +158,23 @@ describe('SettingsScreen TTS catalog helpers', () => {
         { id: 'nova', label: 'Nova' },
       ),
     ).toEqual({ providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' });
+  });
+
+  it('choosing Default for TTS clears provider, model, canonical voice, and legacy voice', () => {
+    const settings: Settings = {
+      voice: 'nova',
+      tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' },
+      stt: { providerId: 'xai', model: 'grok-stt' },
+      speed: 1.05,
+      format: 'md',
+      timestamps: false,
+    };
+
+    expect(withTtsSelection(settings, {})).toEqual({
+      ...settings,
+      voice: '',
+      tts: {},
+    });
   });
 
   it('falls back to a disabled current saved voice label while the catalog is loading', () => {
@@ -235,6 +278,27 @@ describe('SettingsScreen STT catalog helpers', () => {
       providerId: 'xai',
       model: 'grok-stt',
     });
+  });
+
+  it('treats an empty saved STT selection as Default instead of the catalog active provider', () => {
+    const providers = configuredSttProviders(sttCatalog());
+
+    expect(sttProviderValueForSelection(providers, {})).toBe(DEFAULT_PROVIDER_OPTION_ID);
+    expect(isDefaultSttSelection({})).toBe(true);
+    expect(sttCatalogStatusText(sttCatalog(), undefined, true)).toBe(
+      'OpenClaw will choose transcription defaults',
+    );
+  });
+
+  it('keeps stale STT provider ids distinct so Default can clear them', () => {
+    const providers = configuredSttProviders(sttCatalog());
+
+    expect(sttProviderValueForSelection(providers, { providerId: 'missing-provider' })).toBe(
+      'missing-provider',
+    );
+    expect(sttProviderValueForSelection(providers, { model: 'legacy-model' })).not.toBe(
+      DEFAULT_PROVIDER_OPTION_ID,
+    );
   });
 
   it('changing only the STT model preserves provider and TTS settings', () => {

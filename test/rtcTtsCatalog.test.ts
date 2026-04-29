@@ -222,6 +222,23 @@ afterEach(async () => {
 });
 
 describe('RtcProvider TTS catalog and settings sync', () => {
+  it('omits provider, model, and voice hints from initial rendezvous.join for Default settings', async () => {
+    await renderRtcProvider({ voiceSettings: { voice: '', tts: {}, stt: {} } });
+    const rendezvousClient = rtcMock.instances[0];
+
+    await act(async () => {
+      rendezvousClient.emitStatus('open');
+    });
+
+    expect(sentOf(rendezvousClient, 'rendezvous.join')).toEqual([
+      {
+        t: 'rendezvous.join',
+        sessionId: 'session-1',
+        delivery: { channel: 'discord', target: 'channel:thread-1' },
+      },
+    ]);
+  });
+
   it('requests the TTS catalog once after the voice room opens', async () => {
     await renderRtcProvider();
     const rendezvousClient = rtcMock.instances[0];
@@ -423,6 +440,54 @@ describe('RtcProvider TTS catalog and settings sync', () => {
     expect(sentOf(voiceClient, 'settings.update')).toHaveLength(2);
   });
 
+  it('sends an explicit clearing settings.update when explicit settings change to Default', async () => {
+    await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+    await act(async () => {
+      voiceClient.emitStatus('open');
+    });
+    expect(sentOf(voiceClient, 'settings.update')).toEqual([
+      { t: 'settings.update', settings: initialSettings },
+    ]);
+
+    await activeRender!.rerender({ voiceSettings: { voice: '', tts: {}, stt: {} } });
+
+    expect(sentOf(voiceClient, 'settings.update')).toEqual([
+      { t: 'settings.update', settings: initialSettings },
+      { t: 'settings.update', settings: {} },
+    ]);
+  });
+
+  it('clears explicit rendezvous.join settings when switched to Default before the voice room opens', async () => {
+    await renderRtcProvider();
+    const rendezvousClient = rtcMock.instances[0];
+
+    await act(async () => {
+      rendezvousClient.emitStatus('open');
+    });
+    expect(sentOf(rendezvousClient, 'rendezvous.join')).toEqual([
+      {
+        t: 'rendezvous.join',
+        sessionId: 'session-1',
+        delivery: { channel: 'discord', target: 'channel:thread-1' },
+        settings: initialSettings,
+      },
+    ]);
+
+    await activeRender!.rerender({ voiceSettings: { voice: '', tts: {}, stt: {} } });
+    await act(async () => {
+      rendezvousClient.emitControl({ t: 'rendezvous.accept', roomId: 'voice-room-1' });
+    });
+    const voiceClient = rtcMock.instances[1];
+    await act(async () => {
+      voiceClient.emitStatus('open');
+    });
+
+    expect(sentOf(voiceClient, 'settings.update')).toEqual([
+      { t: 'settings.update', settings: {} },
+    ]);
+  });
+
   it('resets settings dedupe after returning to a rendezvous room', async () => {
     await renderRtcProvider();
     const firstVoiceClient = await openRendezvousAndAccept('voice-room-1');
@@ -602,5 +667,26 @@ describe('RtcProvider STT catalog and settings sync', () => {
     });
 
     expect(sentOf(voiceClient, 'settings.update')).toHaveLength(1);
+  });
+});
+
+describe('App voice settings mapping', () => {
+  it('includes explicit STT settings for RtcProvider', async () => {
+    const { voiceSettingsForRtc } = await import('../client/src/app');
+
+    expect(
+      voiceSettingsForRtc({
+        voice: 'nova',
+        tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' },
+        stt: { providerId: 'xai', model: 'grok-stt' },
+        speed: 1.05,
+        format: 'md',
+        timestamps: false,
+      }),
+    ).toEqual({
+      voice: 'nova',
+      tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' },
+      stt: { providerId: 'xai', model: 'grok-stt' },
+    });
   });
 });

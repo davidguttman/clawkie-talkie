@@ -67,8 +67,9 @@ function parseInitial() {
 export function voiceSettingsForRtc(settings: Settings): VoiceSettings {
   return normalizeVoiceSettingsForRtc({
     tts: settings.tts,
+    stt: settings.stt,
     voice: settings.voice,
-  }) ?? { tts: settings.tts, voice: settings.voice };
+  }) ?? {};
 }
 
 export function App() {

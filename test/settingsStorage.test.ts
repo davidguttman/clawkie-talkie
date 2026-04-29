@@ -181,6 +181,23 @@ describe('settings storage', () => {
     expect(loadSettings().tts.voice).toBe('leo');
   });
 
+  it('saveSettings preserves Default TTS as empty TTS and blank legacy voice', async () => {
+    const { saveSettings, loadSettings, DEFAULT_SETTINGS } = await import('../client/src/storage');
+    saveSettings({
+      ...DEFAULT_SETTINGS,
+      tts: {},
+      voice: '',
+    });
+
+    const raw = localStorage.getItem('clawkie.settings.v1');
+    expect(raw).not.toBeNull();
+    const parsed = JSON.parse(raw as string);
+    expect(parsed.tts).toEqual({});
+    expect(parsed.voice).toBe('');
+    expect(loadSettings().tts).toEqual({});
+    expect(loadSettings().voice).toBe('');
+  });
+
   it('exposes export settings without importing the rest of the Settings shape', async () => {
     localStorage.setItem(
       'clawkie.settings.v1',

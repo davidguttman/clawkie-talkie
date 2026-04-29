@@ -315,10 +315,11 @@ export class DaemonPeer {
         },
       });
       this.voiceSessions.set(roomId, session);
-    } else if (msg.settings) {
-      // A returning phone may have changed its TTS preference between
-      // joins; apply it so the next TTS turn picks up the new selection.
-      existingSession.applyVoiceSettings(msg.settings);
+    } else {
+      // A returning phone may have changed its TTS/STT preference between
+      // joins. Omitted settings on an existing session mean local Default,
+      // so clear any explicit hints retained by the daemon.
+      existingSession.applyVoiceSettings(msg.settings ?? {});
     }
 
     this.sendRendezvous(rp, daemonToPhone.rendezvousAccept(roomId));

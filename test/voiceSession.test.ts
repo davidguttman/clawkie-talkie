@@ -398,6 +398,20 @@ describe('voice session OpenClaw infer STT runtime', () => {
     expect(sttMocks.inferCtor.mock.calls[0][0]).not.toHaveProperty('model');
   });
 
+  it('omits the STT model after Default clears a prior explicit selection', async () => {
+    const { session } = makeVoiceSession();
+
+    sendControl(session, {
+      t: 'settings.update',
+      settings: { stt: { providerId: 'xai', model: 'grok-stt' } },
+    });
+    sendControl(session, { t: 'settings.update', settings: {} });
+    sendControl(session, { t: 'stt.start' });
+
+    await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+    expect(sttMocks.inferCtor.mock.calls[0][0]).not.toHaveProperty('model');
+  });
+
   it('reads initial STT selection from voiceSettings on construction', async () => {
     const session = new VoiceSession({
       sttLanguage: 'en',
@@ -643,6 +657,28 @@ describe('voice session OpenClaw infer STT runtime', () => {
     const { session } = makeVoiceSession();
 
     sendControl(session, { t: 'settings.update', settings: { voice: 'rex' } });
+    sendControl(session, { t: 'stt.start' });
+    await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+    const fakeStt = sttMocks.inferCtor.mock.results[0].value;
+
+    fakeStt.cb.onDone('hello');
+    await vi.waitFor(() => expect(ttsMocks.inferTtsCtor).toHaveBeenCalledTimes(1));
+    const fakeTts = ttsMocks.inferTtsCtor.mock.results[0].value;
+
+    expect(fakeTts.opts).toEqual({
+      text: 'spoken reply',
+    });
+  });
+
+  it('omits TTS model and voice after Default clears a prior explicit selection', async () => {
+    chatMocks.runChat.mockResolvedValue({ text: 'spoken reply' });
+    const { session } = makeVoiceSession();
+
+    sendControl(session, {
+      t: 'settings.update',
+      settings: { tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' } },
+    });
+    sendControl(session, { t: 'settings.update', settings: {} });
     sendControl(session, { t: 'stt.start' });
     await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
     const fakeStt = sttMocks.inferCtor.mock.results[0].value;
