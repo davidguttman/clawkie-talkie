@@ -193,16 +193,13 @@ The daemon does not require any provider API key in `.env`. All LLM/STT/TTS auth
 
 Do not regenerate the UUID on later updates, reinstalls, dependency repairs, or service repairs — keep it stable so existing handoff links and the installed skill remain valid.
 
-The installed daemon defaults the client origin to `https://clawkietalkie.app`, so `CT_CLIENT_ORIGIN` is not required. Only set it as an override if the user explicitly wants to point at a non-default client deployment. The signaling server is also non-configurable for end-user installs.
+A normal install only needs `DAEMON_PEER_ID` in `.env`. Do not add other variables unless the user explicitly asks for an override.
 
-Optional `.env` values:
+Advanced overrides (rare — leave unset for normal installs):
 
-```env
-CT_STT_LANGUAGE=en
-CT_THREAD_ID=
-# Override the default client origin (https://clawkietalkie.app):
-# CT_CLIENT_ORIGIN=
-```
+- `CT_STT_LANGUAGE` — optional language hint forwarded to `openclaw infer audio transcribe`. Default lets the transcription model auto-detect.
+- `CT_THREAD_ID` — fallback Discord thread ID for transcript/debug posts when the daemon is invoked without a session that derives one. Not part of OpenClaw infer/provider setup.
+- `CT_CLIENT_ORIGIN` — override the client origin printed in the Join URL. Installed daemons already default to `https://clawkietalkie.app`. Not part of OpenClaw infer/provider setup. The signaling server is non-configurable for end-user installs.
 
 ## Configure OpenClaw infer support
 
