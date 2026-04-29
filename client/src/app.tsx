@@ -24,7 +24,7 @@ import {
 import { parseHandoffUrl, type HandoffRoute } from './voice/handoffUrl';
 import type { VoiceSettings } from './voice/protocol';
 
-type ScreenId = 'driving' | 'history' | 'transcript' | 'error';
+type ScreenId = 'driving' | 'transcript' | 'error';
 
 export function parseInitialSearch(search: string): {
   screen: ScreenId;
@@ -76,6 +76,7 @@ export function App() {
   const [screen, setScreen] = useState<ScreenId>(initial.screen);
   const [openSession, setOpenSession] = useState<string | undefined>(initial.sessionId);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [settings, setSettingsState] = useState<Settings>(() => loadSettings());
   const [isNarrow, setIsNarrow] = useState(
     () => typeof window !== 'undefined' && window.innerWidth < 900,
@@ -93,6 +94,14 @@ export function App() {
 
   const go = useCallback((s: ScreenId) => {
     setScreen(s);
+  }, []);
+  const openSettings = useCallback(() => {
+    setHistoryOpen(false);
+    setSettingsOpen(true);
+  }, []);
+  const openHistory = useCallback(() => {
+    setSettingsOpen(false);
+    setHistoryOpen(true);
   }, []);
 
   const compact = isNarrow;
@@ -128,22 +137,12 @@ export function App() {
               ? replayLastReply
               : undefined
           }
-          onHistory={() => go('history')}
-          onSettings={() => setSettingsOpen(true)}
+          onHistory={openHistory}
+          onSettings={openSettings}
           compact={compact}
           sessionId={initial.sessionId}
           hostPeerId={initial.hostPeerId}
           threadId={initial.threadId}
-        />
-      )}
-      {screen === 'history' && (
-        <HistoryScreen
-          onBack={() => go('driving')}
-          onOpenSession={(sessionId) => {
-            setOpenSession(sessionId);
-            go('transcript');
-          }}
-          compact={compact}
         />
       )}
       {screen === 'transcript' && (
@@ -174,7 +173,8 @@ export function App() {
     </>
   );
 
-  const baseContentIsolationProps: { 'aria-hidden'?: true; inert?: '' } = settingsOpen
+  const overlayOpen = settingsOpen || historyOpen;
+  const baseContentIsolationProps: { 'aria-hidden'?: true; inert?: '' } = overlayOpen
     ? { 'aria-hidden': true, inert: '' }
     : {};
   const appContent = (
@@ -189,6 +189,17 @@ export function App() {
       <div {...baseContentIsolationProps} style={{ height: '100%', minHeight: 0 }}>
         {screenContent}
       </div>
+      {historyOpen && (
+        <HistoryOverlay
+          onClose={() => setHistoryOpen(false)}
+          onOpenSession={(sessionId) => {
+            setHistoryOpen(false);
+            setOpenSession(sessionId);
+            go('transcript');
+          }}
+          compact={compact}
+        />
+      )}
       {settingsOpen && (
         <SettingsOverlay
           setSettingsOpen={setSettingsOpen}
@@ -217,6 +228,73 @@ export function App() {
         <ResponsiveRuntime isNarrow={isNarrow}>{appContent}</ResponsiveRuntime>
       </RtcDisconnectGate>
     </RtcProvider>
+  );
+}
+
+function HistoryOverlay({
+  onClose,
+  onOpenSession,
+  compact,
+}: {
+  onClose: () => void;
+  onOpenSession: (sessionId: string) => void;
+  compact: boolean;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    dialogRef.current?.focus();
+  }, []);
+
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        inset: 0,
+        zIndex: 100,
+        minHeight: 0,
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        aria-hidden="true"
+        onClick={() => undefined}
+        onPointerDown={() => undefined}
+        onTouchStart={() => undefined}
+        style={{
+          position: 'absolute',
+          inset: 0,
+          zIndex: 0,
+          background: 'rgba(0, 0, 0, 0.42)',
+          pointerEvents: 'auto',
+          touchAction: 'none',
+        }}
+      />
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="History"
+        tabIndex={-1}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.stopPropagation();
+            onClose();
+          }
+        }}
+        style={{
+          position: 'relative',
+          zIndex: 1,
+          height: '100%',
+          minHeight: 0,
+          outline: 'none',
+          background: HIFI.bg,
+          pointerEvents: 'auto',
+        }}
+      >
+        <HistoryScreen onBack={onClose} onOpenSession={onOpenSession} compact={compact} />
+      </div>
+    </div>
   );
 }
 

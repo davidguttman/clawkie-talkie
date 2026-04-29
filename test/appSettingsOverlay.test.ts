@@ -90,7 +90,10 @@ describe('App Settings overlay contract', () => {
     expect(renderContainer).toMatch(/overflow:\s*['"]hidden['"]/);
     expect(renderContainer).toMatch(/\{\.\.\.baseContentIsolationProps\}/);
     expect(appSource).toMatch(
-      /const\s+baseContentIsolationProps:\s*\{\s*['"]aria-hidden['"]\?:\s*true;\s*inert\?:\s*['"]{2}\s*\}\s*=\s*settingsOpen\s*\?\s*\{\s*['"]aria-hidden['"]:\s*true,\s*inert:\s*['"]{2}\s*\}/,
+      /const\s+overlayOpen\s*=\s*settingsOpen\s*\|\|\s*historyOpen;/,
+    );
+    expect(appSource).toMatch(
+      /const\s+baseContentIsolationProps:\s*\{\s*['"]aria-hidden['"]\?:\s*true;\s*inert\?:\s*['"]{2}\s*\}\s*=\s*overlayOpen\s*\?\s*\{\s*['"]aria-hidden['"]:\s*true,\s*inert:\s*['"]{2}\s*\}/,
     );
   });
 
