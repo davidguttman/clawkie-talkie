@@ -4,9 +4,13 @@
 // the daemon (from the repo-root `.env`), NOT the phone — the browser never
 // sees a key. Fields here are strictly UI/voice/export preferences.
 
-import type { TtsSelection as ProtocolTtsSelection } from './voice/protocol';
+import type {
+  SttSelection as ProtocolSttSelection,
+  TtsSelection as ProtocolTtsSelection,
+} from './voice/protocol';
 
 export type TtsSelection = ProtocolTtsSelection;
+export type SttSelection = ProtocolSttSelection;
 
 // Legacy static voice labels retained for migration/fallback display only.
 // Storage normalization must not validate against them: provider support is
@@ -34,6 +38,7 @@ export interface Settings extends ExportSettings {
   // New code should use `settings.tts.voice`.
   voice: string;
   tts: TtsSelection;
+  stt: SttSelection;
   speed: number;
 }
 
@@ -48,6 +53,7 @@ export const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
 export const DEFAULT_SETTINGS: Settings = {
   voice: '',
   tts: {},
+  stt: {},
   speed: 1.05,
   ...DEFAULT_EXPORT_SETTINGS,
 };
@@ -84,6 +90,7 @@ function readRawSettings(): unknown {
 function normalizeSettings(value: unknown): Settings {
   const source = (value && typeof value === 'object') ? (value as Record<string, unknown>) : {};
   const tts = normalizeTtsSelection(source.tts, source.voice);
+  const stt = normalizeSttSelection(source.stt);
   const voice = tts.voice ?? DEFAULT_SETTINGS.voice;
   const speed = typeof source.speed === 'number' && Number.isFinite(source.speed)
     ? clamp(source.speed, 0.5, 2)
@@ -94,7 +101,7 @@ function normalizeSettings(value: unknown): Settings {
   const timestamps = typeof source.timestamps === 'boolean'
     ? source.timestamps
     : DEFAULT_SETTINGS.timestamps;
-  return { voice, tts, speed, format, timestamps };
+  return { voice, tts, stt, speed, format, timestamps };
 }
 
 function normalizeSettingsForSave(settings: Settings): Settings {
@@ -119,6 +126,16 @@ function normalizeTtsSelection(value: unknown, legacyVoice: unknown): TtsSelecti
     ...(providerId ? { providerId } : {}),
     ...(model ? { model } : {}),
     ...(voice ? { voice } : {}),
+  };
+}
+
+function normalizeSttSelection(value: unknown): SttSelection {
+  const source = (value && typeof value === 'object') ? (value as Record<string, unknown>) : {};
+  const providerId = normalizeOptionalString(source.providerId);
+  const model = normalizeOptionalString(source.model);
+  return {
+    ...(providerId ? { providerId } : {}),
+    ...(model ? { model } : {}),
   };
 }
 

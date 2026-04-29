@@ -27,9 +27,15 @@ export interface TtsSelection {
   voice?: string;
 }
 
+export interface SttSelection {
+  providerId?: string;
+  model?: string;
+}
+
 export interface VoiceSettings {
   voice?: string;
   tts?: TtsSelection;
+  stt?: SttSelection;
 }
 
 export interface TtsCatalogVoice {
@@ -53,6 +59,21 @@ export interface TtsCatalog {
   providers: TtsCatalogProvider[];
 }
 
+export interface SttCatalogProvider {
+  id: string;
+  name: string;
+  configured: boolean;
+  selected: boolean;
+  available: boolean;
+  models: string[];
+}
+
+export interface SttCatalog {
+  activeProvider?: string;
+  generatedAt: string;
+  providers: SttCatalogProvider[];
+}
+
 export type PhoneToDaemon =
   | {
       t: 'rendezvous.join';
@@ -62,6 +83,7 @@ export type PhoneToDaemon =
     }
   | { t: 'settings.update'; settings: VoiceSettings }
   | { t: 'tts.catalog.request' }
+  | { t: 'stt.catalog.request' }
   | { t: 'stt.start' }
   | { t: 'stt.audio.done' }
   | { t: 'stt.cancel' }
@@ -81,6 +103,7 @@ export type DaemonToPhone =
   | { t: 'reply.error'; message: string }
   | { t: 'tts.start'; sample_rate: number }
   | { t: 'tts.catalog'; catalog: TtsCatalog }
+  | { t: 'stt.catalog'; catalog: SttCatalog }
   | { t: 'tts.done' }
   | { t: 'tts.error'; message: string };
 
@@ -96,6 +119,7 @@ export const phoneToDaemon = {
     settings,
   }),
   ttsCatalogRequest: (): PhoneToDaemon => ({ t: 'tts.catalog.request' }),
+  sttCatalogRequest: (): PhoneToDaemon => ({ t: 'stt.catalog.request' }),
   sttStart: (): PhoneToDaemon => ({ t: 'stt.start' }),
   sttAudioDone: (): PhoneToDaemon => ({ t: 'stt.audio.done' }),
   sttCancel: (): PhoneToDaemon => ({ t: 'stt.cancel' }),
@@ -126,6 +150,7 @@ export const daemonToPhone = {
     sample_rate: sampleRate,
   }),
   ttsCatalog: (catalog: TtsCatalog): DaemonToPhone => ({ t: 'tts.catalog', catalog }),
+  sttCatalog: (catalog: SttCatalog): DaemonToPhone => ({ t: 'stt.catalog', catalog }),
   ttsDone: (): DaemonToPhone => ({ t: 'tts.done' }),
   ttsError: (message: string): DaemonToPhone => ({ t: 'tts.error', message }),
 };

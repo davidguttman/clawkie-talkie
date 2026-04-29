@@ -2,7 +2,7 @@ import { useEffect, type ReactNode } from 'react';
 import { HIFI } from '../tokens';
 import { ScreenHeader, ScrollBody } from '../components/ScreenChrome';
 import type { Settings } from '../storage';
-import type { TtsCatalog, TtsSelection } from '../voice/protocol';
+import type { SttCatalog, SttSelection, TtsCatalog, TtsSelection } from '../voice/protocol';
 
 // TTS provider credentials are NOT stored on the phone — OpenClaw owns
 // provider auth. This screen only edits on-device voice / export preferences.
@@ -24,12 +24,24 @@ export interface TtsProviderOption {
   voices: TtsVoiceOption[];
 }
 
+export interface SttProviderOption {
+  id: string;
+  label: string;
+  configured: boolean;
+  selected: boolean;
+  available: boolean;
+  selectable: boolean;
+  models: string[];
+}
+
 export function SettingsScreen({
   onBack,
   settings,
   setSettings,
   ttsCatalog,
   onRefreshTtsCatalog,
+  sttCatalog,
+  onRefreshSttCatalog,
   compact = false,
 }: {
   onBack: () => void;
@@ -37,16 +49,23 @@ export function SettingsScreen({
   setSettings: (next: Settings) => void;
   ttsCatalog: TtsCatalog | null;
   onRefreshTtsCatalog?: () => void;
+  sttCatalog: SttCatalog | null;
+  onRefreshSttCatalog?: () => void;
   compact?: boolean;
 }) {
   useEffect(() => {
     if (!ttsCatalog) onRefreshTtsCatalog?.();
   }, [ttsCatalog, onRefreshTtsCatalog]);
+  useEffect(() => {
+    if (!sttCatalog) onRefreshSttCatalog?.();
+  }, [sttCatalog, onRefreshSttCatalog]);
 
   const update = <K extends keyof Settings>(k: K, v: Settings[K]) =>
     setSettings({ ...settings, [k]: v });
   const updateTtsSelection = (selection: TtsSelection) =>
     setSettings(withTtsSelection(settings, selection));
+  const updateSttSelection = (selection: SttSelection) =>
+    setSettings(withSttSelection(settings, selection));
 
   const providerOptions = configuredTtsProviders(ttsCatalog);
   const currentProvider = providerForSelection(providerOptions, ttsCatalog, settings.tts);
@@ -61,18 +80,57 @@ export function SettingsScreen({
   const selectedVoice = voiceOptions.some((voice) => voice.id === effectiveSelection.voice)
     ? effectiveSelection.voice ?? ''
     : voiceOptions[0]?.id ?? '';
-  const statusText = !ttsCatalog
-    ? 'Connect to daemon to load voices'
-    : currentProvider && currentProvider.models.length === 0
-      ? 'Provider has no selectable models'
-      : !currentProvider?.selectable
-        ? 'Provider unavailable'
-        : 'Loaded from daemon';
+  const statusText = ttsCatalogStatusText(ttsCatalog, currentProvider);
+
+  const sttProviderOptions = configuredSttProviders(sttCatalog);
+  const currentSttProvider = sttProviderForSelection(sttProviderOptions, sttCatalog, settings.stt);
+  const effectiveSttSelection: SttSelection = currentSttProvider
+    ? {
+        providerId: currentSttProvider.id,
+        ...(preferredSttModel(currentSttProvider, settings.stt)
+          ? { model: preferredSttModel(currentSttProvider, settings.stt) }
+          : {}),
+      }
+    : settings.stt;
+  const sttStatusText = sttCatalogStatusText(sttCatalog, currentSttProvider);
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', color: HIFI.ink }}>
       <ScreenHeader title="Settings" onBack={onBack} />
       <ScrollBody pad={compact ? 2 : 22}>
+        <SettingsSection title="TRANSCRIPTION">
+          <SelectRow
+            label="Provider"
+            value={currentSttProvider?.id ?? ''}
+            setValue={(providerId) => {
+              const provider = sttProviderOptions.find((option) => option.id === providerId);
+              if (!provider?.selectable) return;
+              updateSttSelection(nextSttSelectionAfterProviderChange(provider, settings.stt));
+            }}
+            options={sttProviderOptions.length > 0
+              ? sttProviderOptions.map((provider) => ({
+                  id: provider.id,
+                  label: provider.label,
+                  disabled: !provider.selectable,
+                }))
+              : [{ id: '', label: 'Loading from daemon…', disabled: true }]}
+            disabled={!sttCatalog || sttProviderOptions.length === 0}
+          />
+          {currentSttProvider && currentSttProvider.models.length > 1 && (
+            <SelectRow
+              label="Model"
+              value={effectiveSttSelection.model ?? currentSttProvider.models[0] ?? ''}
+              setValue={(model) => {
+                if (!currentSttProvider.selectable) return;
+                updateSttSelection(nextSttSelectionAfterModelChange(effectiveSttSelection, model));
+              }}
+              options={currentSttProvider.models.map((model) => ({ id: model, label: model }))}
+              disabled={!currentSttProvider.selectable}
+            />
+          )}
+          <StatusRow text={sttStatusText} onRefresh={onRefreshSttCatalog} />
+        </SettingsSection>
+
         <SettingsSection title="VOICE">
           <SelectRow
             label="Provider"
@@ -248,6 +306,93 @@ export function withTtsSelection(settings: Settings, selection: TtsSelection): S
     voice: selection.voice ?? '',
     tts: selection,
   };
+}
+
+export function withSttSelection(settings: Settings, selection: SttSelection): Settings {
+  return { ...settings, stt: selection };
+}
+
+export function configuredSttProviders(catalog: SttCatalog | null): SttProviderOption[] {
+  if (!catalog) return [];
+  return catalog.providers
+    .map((provider) => {
+      const selectable = provider.configured && provider.available && provider.models.length > 0;
+      const baseLabel = provider.name || provider.id;
+      const label = provider.configured && provider.available && provider.models.length === 0
+        ? `${baseLabel} (no model)`
+        : baseLabel;
+      return {
+        id: provider.id,
+        label,
+        configured: provider.configured,
+        selected: provider.selected || provider.id === catalog.activeProvider,
+        available: provider.available,
+        selectable,
+        models: [...provider.models],
+      };
+    })
+    .sort((a, b) => providerRank(a) - providerRank(b)
+      || Number(b.selected) - Number(a.selected)
+      || a.label.localeCompare(b.label));
+}
+
+export function nextSttSelectionAfterProviderChange(
+  provider: SttProviderOption,
+  current: SttSelection = {},
+): SttSelection {
+  if (!provider.selectable) return { ...current };
+  const model = preferredSttModel(provider, current);
+  return {
+    providerId: provider.id,
+    ...(model ? { model } : {}),
+  };
+}
+
+export function nextSttSelectionAfterModelChange(
+  selection: SttSelection,
+  model: string,
+): SttSelection {
+  return {
+    ...selection,
+    model,
+  };
+}
+
+export function ttsCatalogStatusText(
+  catalog: TtsCatalog | null,
+  provider: TtsProviderOption | undefined,
+): string {
+  if (!catalog) return 'Connect to daemon to load voices';
+  if (provider && provider.models.length === 0) return 'Provider has no selectable models';
+  if (!provider?.selectable) return 'Provider unavailable';
+  return 'Loaded from daemon';
+}
+
+export function sttCatalogStatusText(
+  catalog: SttCatalog | null,
+  provider: SttProviderOption | undefined,
+): string {
+  if (!catalog) return 'Connect to daemon to load transcription providers';
+  if (provider && provider.models.length === 0) return 'Transcription provider has no selectable models';
+  if (!provider?.selectable) return 'Transcription provider unavailable';
+  return 'Loaded from daemon';
+}
+
+function sttProviderForSelection(
+  providers: SttProviderOption[],
+  catalog: SttCatalog | null,
+  selection: SttSelection,
+): SttProviderOption | undefined {
+  return providers.find((provider) => provider.id === selection.providerId)
+    ?? providers.find((provider) => provider.selected)
+    ?? providers.find((provider) => provider.id === catalog?.activeProvider)
+    ?? providers.find((provider) => provider.selectable)
+    ?? providers[0];
+}
+
+function preferredSttModel(provider: SttProviderOption, selection: SttSelection): string | undefined {
+  if (selection.model && provider.models.includes(selection.model)) return selection.model;
+  return provider.models[0];
 }
 
 function providerSelectLabel(provider: TtsProviderOption): string {

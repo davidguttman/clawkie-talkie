@@ -252,6 +252,56 @@ describe('OpenClawInferSttSession', () => {
     expect(wavInputs[0]).toEqual(input);
   });
 
+  it('forwards the configured model into the full-turn infer request', async () => {
+    const cb = callbacks();
+    const inferCalls: Array<{ wavPath: string; model?: string; language?: string }> = [];
+
+    const session = new OpenClawInferSttSession(
+      {
+        language: 'en',
+        model: 'xai/grok-stt',
+        createTempDir: async () => '/tmp/openclaw-stt-test',
+        writeFile: async () => undefined,
+        cleanupTempDir: async () => undefined,
+        transcribe: async (request) => {
+          inferCalls.push(request);
+          return 'with model';
+        },
+      },
+      cb,
+    );
+
+    session.sendAudio(makePcm([1, 2]));
+    await session.signalAudioDone();
+
+    expect(inferCalls).toHaveLength(1);
+    expect(inferCalls[0]).toMatchObject({ language: 'en', model: 'xai/grok-stt' });
+  });
+
+  it('omits the model field when no STT model override is set', async () => {
+    const cb = callbacks();
+    const inferCalls: Array<{ wavPath: string; model?: string }> = [];
+
+    const session = new OpenClawInferSttSession(
+      {
+        createTempDir: async () => '/tmp/openclaw-stt-test',
+        writeFile: async () => undefined,
+        cleanupTempDir: async () => undefined,
+        transcribe: async (request) => {
+          inferCalls.push(request);
+          return 'no model';
+        },
+      },
+      cb,
+    );
+
+    session.sendAudio(makePcm([1, 2]));
+    await session.signalAudioDone();
+
+    expect(inferCalls).toHaveLength(1);
+    expect(inferCalls[0].model).toBeUndefined();
+  });
+
   it('writes one full-turn WAV and calls infer once with language', async () => {
     const cb = callbacks();
     const writes: Array<{ path: string; data: Buffer }> = [];

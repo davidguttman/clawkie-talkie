@@ -16,6 +16,7 @@ const DEFAULT_MAX_CONCURRENT_CHUNK_TRANSCRIPTS = 2;
 type TranscribeRequest = {
   wavPath: string;
   language?: string;
+  model?: string;
   signal?: AbortSignal;
 };
 
@@ -61,6 +62,7 @@ type PhraseChunkerLike = {
 export interface OpenClawInferSttSessionOptions {
   sampleRate?: number;
   language?: string;
+  model?: string;
   transcribe?: TranscribeFn;
   transcribeChunk?: TranscribeFn;
   pcmToWav?: PcmToWavFn;
@@ -147,6 +149,7 @@ export class OpenClawInferSttSession {
       const text = await this.transcribe({
         wavPath,
         language: this.opts.language,
+        ...(this.opts.model ? { model: this.opts.model } : {}),
         signal: this.abortController.signal,
       });
       this.log(`[stt] final infer done latencyMs=${Date.now() - finalStartedAtMs}`);
@@ -327,6 +330,7 @@ export class OpenClawInferSttSession {
       const text = await this.transcribeChunk({
         wavPath,
         language: this.opts.language,
+        ...(this.opts.model ? { model: this.opts.model } : {}),
         signal: this.chunkAbortController.signal,
       });
       this.log(

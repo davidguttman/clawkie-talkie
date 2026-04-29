@@ -51,24 +51,42 @@ The only daemon state that survives between turns is `roomId -> VoiceSession`
 for actively connected voice rooms — necessary because WebRTC/STT/TTS need
 live objects.
 
-## TTS catalog and settings
+## TTS and STT catalogs and settings
 
-The daemon is the source of truth for TTS provider metadata. After the browser
-opens the per-session voice room, it requests the catalog and the daemon loads
-it with `openclaw infer tts providers --json`. The daemon sends the normalized
-provider/model/voice ids back over the WebRTC DataChannel.
+The daemon is the source of truth for both TTS (speech output) and STT
+(transcription input) provider metadata. After the browser opens the
+per-session voice room, it requests both catalogs once:
 
-Phone settings store only ids such as `providerId`, `model`, and `voice`; they
-do not store provider credentials or provider-specific auth material. On each
-TTS request, the daemon applies the selected ids per request by passing the
-selected model as `--model <provider>/<model>` and the selected voice as
-`--voice <voice>` to `openclaw infer tts convert`. It must not call
-`openclaw infer tts set-provider`, because that would change global OpenClaw
-state outside the voice room.
+- `tts.catalog.request` → daemon loads `openclaw infer tts providers --json` and
+  replies with `tts.catalog`.
+- `stt.catalog.request` → daemon loads `openclaw infer audio providers --json`
+  and replies with `stt.catalog`.
 
-If OpenClaw reports a provider but does not expose a model id that can be passed
-to `--model`, the settings UI should hide or disable that provider instead of
-falling back to global provider mutation.
+Both catalogs are normalized and sent over the WebRTC DataChannel.
+
+Phone settings store only ids — `tts: { providerId, model, voice }` and
+`stt: { providerId, model }`. They do not store provider credentials or
+provider-specific auth material. The phone selects TTS and STT independently:
+choosing OpenAI for TTS does not pin transcription to OpenAI, and vice versa.
+
+The phone communicates selections to the daemon over the same voice room:
+
+- An initial selection is included in `rendezvous.join { settings: {…} }`.
+- Subsequent changes flow as `settings.update { settings: { tts?, stt?, voice? } }`.
+
+The daemon applies selections per request:
+
+- TTS: `openclaw infer tts convert --model <provider>/<model> --voice <voice>`
+  (model and voice are passed only when both fields are non-empty).
+- STT: `openclaw infer audio transcribe --file <wav> --json --model
+  <provider>/<model>` (model is passed only when both provider and model are
+  non-empty; the optional `--language` hint is preserved).
+
+Clawkie Talkie must not call `openclaw infer tts set-provider`, an equivalent
+global audio set-provider, or any other command that mutates OpenClaw's global
+provider preferences. If OpenClaw reports a provider but does not expose a
+model id that can be passed to `--model`, the settings UI should hide or
+disable that provider instead of falling back to global provider mutation.
 
 ## URL contract
 
@@ -154,10 +172,15 @@ sequenceDiagram
   `/voice/index.html`.
 - `openclaw infer tts providers --json` — catalog includes at least one
   configured provider.
+- `openclaw infer audio providers --json` — bare-array audio provider catalog
+  includes at least one configured provider with a `defaultModels.audio` value.
 - `openclaw infer tts convert --text "catalog smoke" --output
   /tmp/clawkie-tts-smoke.mp3 --json --local --model openai/gpt-4o-mini-tts
   --voice nova` — explicit per-request TTS smoke returns JSON with an output
   path and does not require `openclaw infer tts set-provider`.
+- `openclaw infer audio transcribe --file <fixture.wav> --json --model
+  <configured-provider>/<model>` — explicit per-request STT smoke returns JSON
+  with a transcript text and does not mutate OpenClaw's global audio provider.
 - Live verification (only with explicit authorization): two simultaneous
   `/voice#…` links pointing at the same `host=H` but different `session`
   values must reach READY independently and not cross-talk.

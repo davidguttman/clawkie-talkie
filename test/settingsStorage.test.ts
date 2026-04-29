@@ -31,6 +31,76 @@ describe('settings storage', () => {
     expect(settings.tts.providerId).toBeUndefined();
     expect(settings.tts.model).toBeUndefined();
     expect(settings.tts.voice).toBeUndefined();
+    expect(settings.stt).toEqual({});
+  });
+
+  it('persists a new STT provider/model selection intact', async () => {
+    localStorage.setItem(
+      'clawkie.settings.v1',
+      JSON.stringify({
+        stt: { providerId: 'xai', model: 'grok-stt' },
+        speed: 1.05,
+      }),
+    );
+    const { loadSettings } = await import('../client/src/storage');
+    const settings = loadSettings();
+    expect(settings.stt).toEqual({ providerId: 'xai', model: 'grok-stt' });
+  });
+
+  it('trims STT string fields and drops empty or non-string values', async () => {
+    localStorage.setItem(
+      'clawkie.settings.v1',
+      JSON.stringify({
+        stt: { providerId: ' xai ', model: '   ' },
+      }),
+    );
+    const { loadSettings } = await import('../client/src/storage');
+    const settings = loadSettings();
+    expect(settings.stt).toEqual({ providerId: 'xai' });
+  });
+
+  it('drops non-string STT fields entirely', async () => {
+    localStorage.setItem(
+      'clawkie.settings.v1',
+      JSON.stringify({
+        stt: { providerId: 42, model: ['nope'] },
+      }),
+    );
+    const { loadSettings } = await import('../client/src/storage');
+    const settings = loadSettings();
+    expect(settings.stt).toEqual({});
+  });
+
+  it('loads existing TTS-only records without an STT field unchanged', async () => {
+    localStorage.setItem(
+      'clawkie.settings.v1',
+      JSON.stringify({
+        tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' },
+        voice: 'nova',
+        speed: 1.05,
+      }),
+    );
+    const { loadSettings } = await import('../client/src/storage');
+    const settings = loadSettings();
+    expect(settings.stt).toEqual({});
+    expect(settings.tts).toEqual({ providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' });
+  });
+
+  it('saveSettings preserves the STT selection alongside TTS', async () => {
+    const { saveSettings, loadSettings, DEFAULT_SETTINGS } = await import('../client/src/storage');
+    saveSettings({
+      ...DEFAULT_SETTINGS,
+      tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' },
+      voice: 'nova',
+      stt: { providerId: 'xai', model: 'grok-stt' },
+    });
+
+    const raw = localStorage.getItem('clawkie.settings.v1');
+    expect(raw).not.toBeNull();
+    const parsed = JSON.parse(raw as string);
+    expect(parsed.stt).toEqual({ providerId: 'xai', model: 'grok-stt' });
+    expect(parsed.tts.voice).toBe('nova');
+    expect(loadSettings().stt).toEqual({ providerId: 'xai', model: 'grok-stt' });
   });
 
   it('migrates a legacy voice into the dynamic TTS selection', async () => {

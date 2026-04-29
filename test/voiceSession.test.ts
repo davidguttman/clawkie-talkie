@@ -88,7 +88,7 @@ vi.mock('../daemon/src/vad.js', () => ({
 }));
 
 import { ChatError } from '../daemon/src/chatSession.js';
-import type { TtsCatalog } from '../daemon/src/protocol.js';
+import type { SttCatalog, TtsCatalog } from '../daemon/src/protocol.js';
 import {
   createVoiceSessionState,
   decidePhoneConnection,
@@ -99,6 +99,7 @@ import {
 function makeVoiceSession(overrides: {
   createSpeechDetector?: SpeechDetectorFactory;
   ttsCatalogProvider?: () => Promise<TtsCatalog>;
+  sttCatalogProvider?: () => Promise<SttCatalog>;
   onClose?: (roomId: string) => void;
 } = {}) {
   const fakeVad = {
@@ -116,6 +117,7 @@ function makeVoiceSession(overrides: {
     delivery: { channel: 'discord', target: 'channel:thread-1' },
     createSpeechDetector,
     ...(overrides.ttsCatalogProvider ? { ttsCatalogProvider: overrides.ttsCatalogProvider } : {}),
+    ...(overrides.sttCatalogProvider ? { sttCatalogProvider: overrides.sttCatalogProvider } : {}),
     onClose: overrides.onClose ?? vi.fn(),
   });
   const peer = {
@@ -283,12 +285,152 @@ describe('voice session TTS catalog runtime', () => {
   });
 });
 
+describe('voice session STT catalog runtime', () => {
+  beforeEach(() => {
+    chatMocks.runChat.mockReset();
+  });
+
+  it('sends the STT catalog when the phone requests it', async () => {
+    const catalog: SttCatalog = {
+      activeProvider: 'xai',
+      generatedAt: '2026-04-29T00:00:00.000Z',
+      providers: [
+        {
+          id: 'xai',
+          name: 'xai',
+          configured: true,
+          selected: true,
+          available: true,
+          models: ['grok-stt'],
+        },
+      ],
+    };
+    const sttCatalogProvider = vi.fn(async () => catalog);
+    const { session, peer } = makeVoiceSession({ sttCatalogProvider });
+
+    sendControl(session, { t: 'stt.catalog.request' });
+
+    await vi.waitFor(() => {
+      expect(sentJson(peer)).toContainEqual({ t: 'stt.catalog', catalog });
+    });
+    expect(sttCatalogProvider).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends an empty STT catalog when the catalog load fails without closing the session', async () => {
+    const onClose = vi.fn();
+    const sttCatalogProvider = vi.fn(async () => {
+      throw new Error('catalog failed');
+    });
+    const { session, peer } = makeVoiceSession({ sttCatalogProvider, onClose });
+
+    sendControl(session, { t: 'stt.catalog.request' });
+
+    await vi.waitFor(() => {
+      expect(sentJson(peer)).toContainEqual({
+        t: 'stt.catalog',
+        catalog: {
+          activeProvider: undefined,
+          generatedAt: expect.any(String),
+          providers: [],
+        },
+      });
+    });
+    expect(onClose).not.toHaveBeenCalled();
+    expect((session as unknown as { state: { closed: boolean } }).state.closed).toBe(false);
+  });
+
+  it('does not respond to stt.catalog.request from the TTS catalog provider', async () => {
+    const ttsCatalogProvider = vi.fn(async () => ({
+      activeProvider: 'openai',
+      generatedAt: '2026-04-29T00:00:00.000Z',
+      providers: [],
+    }));
+    const sttCatalogProvider = vi.fn(async () => ({
+      activeProvider: 'xai',
+      generatedAt: '2026-04-29T00:00:00.000Z',
+      providers: [],
+    }));
+    const { session } = makeVoiceSession({ ttsCatalogProvider, sttCatalogProvider });
+
+    sendControl(session, { t: 'stt.catalog.request' });
+
+    await vi.waitFor(() => {
+      expect(sttCatalogProvider).toHaveBeenCalledTimes(1);
+    });
+    expect(ttsCatalogProvider).not.toHaveBeenCalled();
+  });
+});
+
 describe('voice session OpenClaw infer STT runtime', () => {
   beforeEach(() => {
     sttMocks.inferCtor.mockClear();
     ttsMocks.inferTtsCtor.mockClear();
     chatMocks.runChat.mockReset();
     chatMocks.runChat.mockReturnValue(new Promise(() => {}));
+  });
+
+  it('passes the selected STT provider/model into OpenClawInferSttSession when both are set', async () => {
+    const { session } = makeVoiceSession();
+
+    sendControl(session, {
+      t: 'settings.update',
+      settings: { stt: { providerId: 'xai', model: 'grok-stt' } },
+    });
+    sendControl(session, { t: 'stt.start' });
+
+    await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+    expect(sttMocks.inferCtor.mock.calls[0][0]).toMatchObject({
+      language: 'en',
+      model: 'xai/grok-stt',
+    });
+  });
+
+  it('omits the STT model when only one of provider or model is set', async () => {
+    const { session } = makeVoiceSession();
+
+    sendControl(session, {
+      t: 'settings.update',
+      settings: { stt: { providerId: 'xai' } },
+    });
+    sendControl(session, { t: 'stt.start' });
+
+    await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+    expect(sttMocks.inferCtor.mock.calls[0][0]).not.toHaveProperty('model');
+  });
+
+  it('reads initial STT selection from voiceSettings on construction', async () => {
+    const session = new VoiceSession({
+      sttLanguage: 'en',
+      signalServer: 'https://signal.example',
+      iceServers: [],
+      hostPeerId: 'host-1',
+      roomId: 'host-1:session-1',
+      sessionId: 'session-1',
+      delivery: { channel: 'discord', target: 'channel:thread-1' },
+      voiceSettings: { stt: { providerId: 'openai', model: 'whisper-1' } },
+      createSpeechDetector: vi.fn(async () => ({ isSpeech: () => true, destroy: () => {} })),
+      onClose: vi.fn(),
+    });
+    const peer = { destroyed: false, send: vi.fn() };
+    (session as unknown as { peer: typeof peer; connected: boolean }).peer = peer;
+    (session as unknown as { connected: boolean }).connected = true;
+
+    sendControl(session, { t: 'stt.start' });
+    await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+    expect(sttMocks.inferCtor.mock.calls[0][0]).toMatchObject({ model: 'openai/whisper-1' });
+  });
+
+  it('changing only the TTS selection does not introduce an STT model override', async () => {
+    const { session } = makeVoiceSession();
+
+    sendControl(session, {
+      t: 'settings.update',
+      settings: { tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' } },
+    });
+    sendControl(session, { t: 'stt.start' });
+
+    await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+    expect(sttMocks.inferCtor.mock.calls[0][0]).not.toHaveProperty('model');
   });
 
   it('opens OpenClaw infer STT with phrase chunking and WASM VAD on stt.start', async () => {

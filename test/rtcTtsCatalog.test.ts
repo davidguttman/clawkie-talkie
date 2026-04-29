@@ -3,7 +3,7 @@ import type { Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ControlMessage, RtcClientOptions, RtcStatus } from '../client/src/rtc/client';
 import type { RtcContextValue, RtcRendezvous } from '../client/src/rtc/RtcContext';
-import type { TtsCatalog, VoiceSettings } from '../client/src/voice/protocol';
+import type { SttCatalog, TtsCatalog, VoiceSettings } from '../client/src/voice/protocol';
 
 interface FakeRtcClientInstance {
   hostPeerId: string;
@@ -126,7 +126,12 @@ const catalog: TtsCatalog = {
 };
 
 type RenderedRtc = {
-  context(): RtcContextValue & { ttsCatalog?: TtsCatalog | null; requestTtsCatalog?: () => void };
+  context(): RtcContextValue & {
+    ttsCatalog?: TtsCatalog | null;
+    requestTtsCatalog?: () => void;
+    sttCatalog?: SttCatalog | null;
+    requestSttCatalog?: () => void;
+  };
   rerender(props?: Partial<RtcProviderProps>): Promise<void>;
   unmount(): Promise<void>;
 };
@@ -444,5 +449,158 @@ describe('RtcProvider TTS catalog and settings sync', () => {
     expect(sentOf(secondVoiceClient, 'settings.update')).toEqual([
       { t: 'settings.update', settings: initialSettings },
     ]);
+  });
+});
+
+describe('RtcProvider STT catalog and settings sync', () => {
+  const sttCatalog: SttCatalog = {
+    activeProvider: 'xai',
+    generatedAt: '2026-04-29T00:00:00.000Z',
+    providers: [
+      {
+        id: 'xai',
+        name: 'xai',
+        configured: true,
+        selected: true,
+        available: true,
+        models: ['grok-stt'],
+      },
+    ],
+  };
+
+  it('requests both TTS and STT catalogs once after the voice room opens', async () => {
+    await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+    await act(async () => {
+      voiceClient.emitStatus('open');
+    });
+    expect(sentOf(voiceClient, 'tts.catalog.request')).toEqual([{ t: 'tts.catalog.request' }]);
+    expect(sentOf(voiceClient, 'stt.catalog.request')).toEqual([{ t: 'stt.catalog.request' }]);
+
+    await activeRender!.rerender({ voiceSettings: { ...initialSettings } });
+    expect(sentOf(voiceClient, 'stt.catalog.request')).toHaveLength(1);
+  });
+
+  it('does not send manual STT catalog requests while still in the rendezvous room', async () => {
+    const rendered = await renderRtcProvider();
+    const rendezvousClient = rtcMock.instances[0];
+
+    await act(async () => {
+      rendered.context().requestSttCatalog?.();
+    });
+    expect(sentOf(rendezvousClient, 'stt.catalog.request')).toHaveLength(0);
+
+    await act(async () => {
+      rendezvousClient.emitStatus('open');
+    });
+    await act(async () => {
+      rendered.context().requestSttCatalog?.();
+    });
+    expect(sentOf(rendezvousClient, 'stt.catalog.request')).toHaveLength(0);
+  });
+
+  it('does not send manual STT catalog requests before the voice room opens', async () => {
+    const rendered = await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+
+    await act(async () => {
+      rendered.context().requestSttCatalog?.();
+    });
+
+    expect(sentOf(voiceClient, 'stt.catalog.request')).toHaveLength(0);
+  });
+
+  it('lets context consumers request the STT catalog explicitly', async () => {
+    const rendered = await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+    await act(async () => {
+      voiceClient.emitStatus('open');
+    });
+
+    await act(async () => {
+      rendered.context().requestSttCatalog?.();
+    });
+
+    expect(sentOf(voiceClient, 'stt.catalog.request')).toHaveLength(2);
+  });
+
+  it('exposes received STT catalogs to context consumers', async () => {
+    const rendered = await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+    await act(async () => {
+      voiceClient.emitStatus('open');
+      voiceClient.emitControl({ t: 'stt.catalog', catalog: sttCatalog });
+    });
+
+    expect(rendered.context().sttCatalog).toEqual(sttCatalog);
+  });
+
+  it('includes settings.stt in the initial rendezvous.join when present', async () => {
+    const settings: VoiceSettings = {
+      voice: 'eve',
+      tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'eve' },
+      stt: { providerId: 'xai', model: 'grok-stt' },
+    };
+    await renderRtcProvider({ voiceSettings: settings });
+    const rendezvousClient = rtcMock.instances[0];
+
+    await act(async () => {
+      rendezvousClient.emitStatus('open');
+    });
+
+    const joins = sentOf(rendezvousClient, 'rendezvous.join');
+    expect(joins).toHaveLength(1);
+    const join = joins[0] as { settings?: VoiceSettings };
+    expect(join.settings?.stt).toEqual({ providerId: 'xai', model: 'grok-stt' });
+  });
+
+  it('emits settings.update when only the STT selection changes', async () => {
+    const startingSettings: VoiceSettings = {
+      voice: 'eve',
+      tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'eve' },
+      stt: { providerId: 'xai', model: 'grok-stt' },
+    };
+    await renderRtcProvider({ voiceSettings: startingSettings });
+    const voiceClient = await openRendezvousAndAccept();
+    await act(async () => {
+      voiceClient.emitStatus('open');
+    });
+    expect(sentOf(voiceClient, 'settings.update')).toHaveLength(1);
+
+    const sttChange: VoiceSettings = {
+      ...startingSettings,
+      stt: { providerId: 'openai', model: 'whisper-1' },
+    };
+    await activeRender!.rerender({ voiceSettings: sttChange });
+
+    expect(sentOf(voiceClient, 'settings.update')).toHaveLength(2);
+    const last = sentOf(voiceClient, 'settings.update').at(-1) as {
+      settings?: VoiceSettings;
+    };
+    expect(last.settings?.stt).toEqual({ providerId: 'openai', model: 'whisper-1' });
+  });
+
+  it('dedupes when neither TTS nor STT selection has changed', async () => {
+    const startingSettings: VoiceSettings = {
+      voice: 'eve',
+      tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'eve' },
+      stt: { providerId: 'xai', model: 'grok-stt' },
+    };
+    await renderRtcProvider({ voiceSettings: startingSettings });
+    const voiceClient = await openRendezvousAndAccept();
+    await act(async () => {
+      voiceClient.emitStatus('open');
+    });
+    expect(sentOf(voiceClient, 'settings.update')).toHaveLength(1);
+
+    await activeRender!.rerender({
+      voiceSettings: {
+        ...startingSettings,
+        tts: { ...startingSettings.tts },
+        stt: { ...startingSettings.stt },
+      },
+    });
+
+    expect(sentOf(voiceClient, 'settings.update')).toHaveLength(1);
   });
 });

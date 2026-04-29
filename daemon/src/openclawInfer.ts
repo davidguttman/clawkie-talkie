@@ -1,5 +1,11 @@
 import { execFile } from 'node:child_process';
-import type { TtsCatalog, TtsCatalogProvider, TtsCatalogVoice } from './protocol.js';
+import type {
+  SttCatalog,
+  SttCatalogProvider,
+  TtsCatalog,
+  TtsCatalogProvider,
+  TtsCatalogVoice,
+} from './protocol.js';
 
 export interface InferTranscribeCommandOptions {
   filePath: string;
@@ -22,6 +28,7 @@ export interface InferCommand {
 export type InferTranscribeCommand = InferCommand;
 export type InferTtsCommand = InferCommand;
 export type InferTtsProvidersCommand = InferCommand;
+export type InferAudioProvidersCommand = InferCommand;
 
 export interface OpenClawInferExecRequest {
   command: string;
@@ -85,6 +92,10 @@ export function buildInferTranscribeCommand(
 
 export function buildInferTtsProvidersCommand(): InferTtsProvidersCommand {
   return { command: 'openclaw', args: ['infer', 'tts', 'providers', '--json'] };
+}
+
+export function buildInferAudioProvidersCommand(): InferAudioProvidersCommand {
+  return { command: 'openclaw', args: ['infer', 'audio', 'providers', '--json'] };
 }
 
 export function buildInferTtsCommand(opts: InferTtsCommandOptions): InferTtsCommand {
@@ -228,6 +239,80 @@ export async function synthesizeTtsWithOpenClawInfer(
     const stderr = stderrFromError(error);
     const detail = stderr ? `: ${stderr}` : errorMessage(error);
     throw new Error(`openclaw_infer_tts_failed${detail}`, { cause: error });
+  }
+}
+
+export function parseInferAudioProviders(stdout: string): SttCatalog {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    throw new Error('Invalid OpenClaw infer audio providers JSON');
+  }
+
+  if (!Array.isArray(parsed)) {
+    throw new Error('OpenClaw infer audio providers output must be an array');
+  }
+
+  const providers: SttCatalogProvider[] = [];
+  parsed.forEach((entry, index) => {
+    if (typeof entry !== 'object' || entry === null) {
+      throw new Error(`OpenClaw infer audio provider at index ${index} is not an object`);
+    }
+    const record = entry as Record<string, unknown>;
+    const capabilities = normalizeStringArray(record.capabilities);
+    if (!capabilities.includes('audio')) return;
+    if (typeof record.id !== 'string' || record.id.length === 0) {
+      throw new Error(`OpenClaw infer audio provider missing id at index ${index}`);
+    }
+    const defaultModels = (record.defaultModels && typeof record.defaultModels === 'object'
+      ? (record.defaultModels as Record<string, unknown>)
+      : {}) as Record<string, unknown>;
+    const audioModel =
+      typeof defaultModels.audio === 'string' && defaultModels.audio.length > 0
+        ? defaultModels.audio
+        : undefined;
+    providers.push({
+      id: record.id,
+      name:
+        typeof record.name === 'string' && record.name.length > 0 ? record.name : record.id,
+      configured: record.configured === true,
+      selected: record.selected === true,
+      available: record.available === true,
+      models: audioModel ? [audioModel] : [],
+    });
+  });
+
+  const selected = providers.find((provider) => provider.selected);
+  return {
+    activeProvider: selected?.id,
+    generatedAt: new Date().toISOString(),
+    providers,
+  };
+}
+
+export async function getSttCatalogWithOpenClawInfer(opts: {
+  exec?: OpenClawInferExec;
+  signal?: AbortSignal;
+} = {}): Promise<SttCatalog> {
+  const command = buildInferAudioProvidersCommand();
+  const runExec = opts.exec ?? execOpenClawInfer;
+
+  try {
+    const request: OpenClawInferExecRequest = { ...command };
+    if (opts.signal) request.signal = opts.signal;
+    const result = await runExec(request);
+    return parseInferAudioProviders(result.stdout);
+  } catch (error) {
+    const stderr = stderrFromError(error);
+    const detail = stderr ? `: ${stderr}` : errorMessage(error);
+    throw Object.assign(
+      new Error(`openclaw_infer_stt_catalog_failed${detail}`, { cause: error }),
+      {
+        code: 'openclaw_infer_stt_catalog_failed',
+        stderr,
+      },
+    );
   }
 }
 

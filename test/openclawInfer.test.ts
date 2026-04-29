@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { pcm16ToWavBuffer } from '../daemon/src/audio';
 import {
+  buildInferAudioProvidersCommand,
   buildInferTranscribeCommand,
   buildInferTtsCommand,
+  getSttCatalogWithOpenClawInfer,
+  parseInferAudioProviders,
   parseInferTranscript,
   parseInferTtsOutput,
   synthesizeTtsWithOpenClawInfer,
@@ -296,5 +299,159 @@ describe('synthesizeTtsWithOpenClawInfer', () => {
         },
       }),
     ).rejects.toThrow(/openclaw_infer_tts_failed/);
+  });
+});
+
+describe('buildInferAudioProvidersCommand', () => {
+  it('builds the OpenClaw infer audio providers command', () => {
+    expect(buildInferAudioProvidersCommand()).toEqual({
+      command: 'openclaw',
+      args: ['infer', 'audio', 'providers', '--json'],
+    });
+  });
+});
+
+describe('parseInferAudioProviders', () => {
+  it('normalizes the bare-array audio provider output', () => {
+    const stdout = JSON.stringify([
+      {
+        available: true,
+        configured: true,
+        selected: false,
+        id: 'xai',
+        capabilities: ['audio'],
+        defaultModels: { audio: 'grok-stt' },
+      },
+      {
+        available: true,
+        configured: true,
+        selected: true,
+        id: 'openai',
+        name: 'OpenAI',
+        capabilities: ['audio', 'tts'],
+        defaultModels: { audio: 'whisper-1', tts: 'gpt-4o-mini-tts' },
+      },
+    ]);
+
+    const catalog = parseInferAudioProviders(stdout);
+
+    expect(catalog).toEqual({
+      activeProvider: 'openai',
+      generatedAt: expect.any(String),
+      providers: [
+        {
+          id: 'xai',
+          name: 'xai',
+          configured: true,
+          selected: false,
+          available: true,
+          models: ['grok-stt'],
+        },
+        {
+          id: 'openai',
+          name: 'OpenAI',
+          configured: true,
+          selected: true,
+          available: true,
+          models: ['whisper-1'],
+        },
+      ],
+    });
+  });
+
+  it('filters providers without audio capability', () => {
+    const stdout = JSON.stringify([
+      {
+        available: true,
+        configured: true,
+        id: 'tts-only',
+        capabilities: ['tts'],
+        defaultModels: { tts: 'voice-1' },
+      },
+      {
+        available: true,
+        configured: true,
+        id: 'audio-yes',
+        capabilities: ['audio'],
+        defaultModels: { audio: 'a-1' },
+      },
+    ]);
+
+    const catalog = parseInferAudioProviders(stdout);
+
+    expect(catalog.providers.map((p) => p.id)).toEqual(['audio-yes']);
+  });
+
+  it('tolerates missing defaultModels.audio with empty models', () => {
+    const stdout = JSON.stringify([
+      {
+        available: true,
+        configured: true,
+        id: 'xai',
+        capabilities: ['audio'],
+      },
+    ]);
+
+    const catalog = parseInferAudioProviders(stdout);
+    expect(catalog.providers[0]?.models).toEqual([]);
+  });
+
+  it('rejects invalid JSON', () => {
+    expect(() => parseInferAudioProviders('not json')).toThrow(
+      /Invalid OpenClaw infer audio providers JSON/i,
+    );
+  });
+
+  it('rejects non-array payloads and missing provider ids', () => {
+    expect(() => parseInferAudioProviders(JSON.stringify({ providers: [] }))).toThrow(
+      /audio providers output must be an array/i,
+    );
+    expect(() =>
+      parseInferAudioProviders(JSON.stringify([{ capabilities: ['audio'] }])),
+    ).toThrow(/audio provider missing id/i);
+  });
+});
+
+describe('getSttCatalogWithOpenClawInfer', () => {
+  it('calls the audio providers command and returns the normalized catalog', async () => {
+    const calls: Array<{ command: string; args: string[]; signal?: AbortSignal }> = [];
+
+    const catalog = await getSttCatalogWithOpenClawInfer({
+      exec: async (request) => {
+        calls.push(request);
+        return {
+          stdout: JSON.stringify([
+            {
+              available: true,
+              configured: true,
+              selected: true,
+              id: 'xai',
+              capabilities: ['audio'],
+              defaultModels: { audio: 'grok-stt' },
+            },
+          ]),
+          stderr: '',
+        };
+      },
+    });
+
+    expect(calls).toEqual([{ ...buildInferAudioProvidersCommand() }]);
+    expect(catalog.activeProvider).toBe('xai');
+    expect(catalog.providers[0]?.models).toEqual(['grok-stt']);
+  });
+
+  it('maps exec failures to a stable STT catalog error code', async () => {
+    const failure = Object.assign(new Error('process failed'), { stderr: 'provider exploded' });
+
+    await expect(
+      getSttCatalogWithOpenClawInfer({
+        exec: async () => {
+          throw failure;
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: 'openclaw_infer_stt_catalog_failed',
+      message: expect.stringContaining('openclaw_infer_stt_catalog_failed'),
+    });
   });
 });

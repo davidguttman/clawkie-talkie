@@ -15,13 +15,14 @@ import wrtc from '@roamhq/wrtc';
 import SimplePeer from 'simple-peer';
 import { runChat, ChatError, type DeliveryTarget as ChatDeliveryTarget } from './chatSession.js';
 import { OpenClawInferTtsSession, TTS_SAMPLE_RATE, type TtsSessionCallbacks, type TtsSessionOptions } from './ttsSession.js';
-import { daemonToPhone, type PhoneToDaemon, type TtsCatalog, type TtsSelection, type VoiceSettings } from './protocol.js';
+import { daemonToPhone, type PhoneToDaemon, type SttCatalog, type SttSelection, type TtsCatalog, type TtsSelection, type VoiceSettings } from './protocol.js';
 import { OpenClawInferSttSession, type OpenClawInferSttSessionOptions } from './inferSttSession.js';
 import type { SttSessionCallbacks } from './sttTypes.js';
 import { createWasmVad, type SpeechDetector, type WasmVadOptions } from './vad.js';
 import { SignalClient, type SignalData } from './signal.js';
 import { classifySignal, decideForwardToLivePeer, decideIncomingSignal } from './signalKind.js';
 import { createEmptyTtsCatalog, defaultTtsCatalogCache } from './ttsCatalog.js';
+import { createEmptySttCatalog, defaultSttCatalogCache } from './sttCatalog.js';
 
 const MAX_BUFFERED_CANDIDATES_PER_PEER = 32;
 import {
@@ -149,6 +150,7 @@ export interface VoiceSessionRuntimeOptions {
   createSpeechDetector?: SpeechDetectorFactory;
   ttsSessionFactory?: TtsSessionFactory;
   ttsCatalogProvider?: () => Promise<TtsCatalog>;
+  sttCatalogProvider?: () => Promise<SttCatalog>;
   onClose: (roomId: string) => void;
 }
 
@@ -176,6 +178,7 @@ export class VoiceSession {
   private resampledRemainder: Buffer = Buffer.alloc(0);
   private closing = false;
   private ttsSelection: TtsSelection = {};
+  private sttSelection: SttSelection = {};
   private sttOpenToken = 0;
   private readonly replacedRemoteIds = new Set<string>();
   private readonly pendingCandidates = new Map<string, SignalPayload[]>();
@@ -183,6 +186,7 @@ export class VoiceSession {
   constructor(private readonly opts: VoiceSessionRuntimeOptions) {
     this.roomId = opts.roomId;
     this.ttsSelection = normalizeTtsSelection(opts.voiceSettings);
+    this.sttSelection = normalizeSttSelection(opts.voiceSettings);
     this.state = createVoiceSessionState({
       roomId: opts.roomId,
       sessionId: opts.sessionId,
@@ -268,6 +272,7 @@ export class VoiceSession {
 
   applyVoiceSettings(settings: VoiceSettings | null | undefined): void {
     this.ttsSelection = normalizeTtsSelection(settings);
+    this.sttSelection = normalizeSttSelection(settings);
   }
 
   // Test/manager hooks so callers can inspect the selection currently
@@ -621,6 +626,10 @@ export class VoiceSession {
       void this.sendTtsCatalog();
       return;
     }
+    if (msg.t === 'stt.catalog.request') {
+      void this.sendSttCatalog();
+      return;
+    }
     if (msg.t === 'stt.start') {
       this.resetTurn('stt_restart');
       // Routing is room-bound — ignore any payload on stt.start.
@@ -656,6 +665,16 @@ export class VoiceSession {
     }
   }
 
+  private async sendSttCatalog(): Promise<void> {
+    try {
+      const loadCatalog = this.opts.sttCatalogProvider ?? (() => defaultSttCatalogCache.get());
+      const catalog = await loadCatalog();
+      this.send(daemonToPhone.sttCatalog(catalog));
+    } catch {
+      this.send(daemonToPhone.sttCatalog(createEmptySttCatalog()));
+    }
+  }
+
   private async openStt(): Promise<void> {
     const token = ++this.sttOpenToken;
     console.error(`[voice ${this.roomId}] opening OpenClaw infer STT session`);
@@ -686,10 +705,12 @@ export class VoiceSession {
     }
 
     const enablePhraseChunks = !!speechDetector;
+    const sttModel = sttModelOverride(this.sttSelection);
     const sttOptions: OpenClawInferSttSessionOptions = {
       language: this.opts.sttLanguage,
       sampleRate: STT_SAMPLE_RATE,
       enablePhraseChunks,
+      ...(sttModel ? { model: sttModel } : {}),
     };
     if (speechDetector) sttOptions.speechDetector = speechDetector;
 
@@ -935,6 +956,23 @@ function normalizeTtsSelection(settings: VoiceSettings | null | undefined): TtsS
 }
 
 function ttsModelOverride(selection: TtsSelection): string | undefined {
+  return selection.providerId && selection.model
+    ? `${selection.providerId}/${selection.model}`
+    : undefined;
+}
+
+function normalizeSttSelection(settings: VoiceSettings | null | undefined): SttSelection {
+  const settingsRecord = objectRecord(settings);
+  const stt = objectRecord(settingsRecord.stt);
+  const providerId = trimmedString(stt.providerId);
+  const model = trimmedString(stt.model);
+  return {
+    ...(providerId ? { providerId } : {}),
+    ...(model ? { model } : {}),
+  };
+}
+
+function sttModelOverride(selection: SttSelection): string | undefined {
   return selection.providerId && selection.model
     ? `${selection.providerId}/${selection.model}`
     : undefined;

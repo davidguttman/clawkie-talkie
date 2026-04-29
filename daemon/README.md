@@ -42,13 +42,20 @@ its own configuration; the daemon does not hold provider API keys. The root
 one exists (`--env-file-if-exists=.env`).
 
 The daemon discovers the available TTS provider/model/voice catalog by running
-`openclaw infer tts providers --json` locally. It sends the normalized catalog
-to the phone over the WebRTC DataChannel; the phone stores only provider,
-model, and voice ids, never provider credentials. When synthesizing speech, the
-daemon applies the selected provider/model/voice per request by passing the
-selected model id to `openclaw infer tts convert --model <provider>/<model>`
-and the selected voice id to `--voice <voice>`. Clawkie Talkie must not call
-`openclaw infer tts set-provider` or mutate OpenClaw's global TTS preference.
+`openclaw infer tts providers --json` locally and the matching transcription
+provider catalog by running `openclaw infer audio providers --json`. It sends
+both normalized catalogs to the phone over the WebRTC DataChannel; the phone
+stores only provider, model, and voice ids, never provider credentials. When
+synthesizing speech, the daemon applies the selected TTS provider/model/voice
+per request by passing the selected model id to `openclaw infer tts convert
+--model <provider>/<model>` and the selected voice id to `--voice <voice>`.
+When transcribing, the daemon applies the selected STT provider/model per
+request by passing `openclaw infer audio transcribe --file <wav> --json
+--model <provider>/<model>`. Clawkie Talkie must not call
+`openclaw infer tts set-provider`, an equivalent global STT/audio
+set-provider, or any other command that mutates OpenClaw's global provider
+preferences. TTS and STT selections are independent — the user picks a TTS
+provider for speech output and (separately) an STT provider for transcription.
 If a configured provider exposes no model id that can be selected per request,
 the client UI should leave it hidden or disabled instead of changing global
 OpenClaw state as a fallback.
@@ -121,8 +128,11 @@ Phone → daemon (voice lane on `H:<safeSession>`):
 - `{"t":"stt.start"}` — routing is bound at rendezvous time, not per turn
 - `{"t":"tts.catalog.request"}` — ask the daemon for its current normalized
   OpenClaw TTS provider/model/voice catalog
-- `{"t":"settings.update","settings":{"tts":{"providerId":"…","model":"…","voice":"…"}}}`
-  — update this voice room's per-request TTS selection by id
+- `{"t":"stt.catalog.request"}` — ask the daemon for its current normalized
+  OpenClaw audio (transcription) provider/model catalog
+- `{"t":"settings.update","settings":{"tts":{"providerId":"…","model":"…","voice":"…"},"stt":{"providerId":"…","model":"…"}}}`
+  — update this voice room's per-request TTS and/or STT selections by id; either
+  branch may be omitted, and TTS and STT are tracked independently
 - binary PCM16LE mono @ 16 kHz — streamed to daemon-side OpenClaw infer STT
 - `{"t":"stt.audio.done"}`
 - `{"t":"stt.cancel"}`
@@ -140,6 +150,8 @@ Daemon → phone (voice lane):
 - `{"t":"reply.error","message":"…"}`
 - `{"t":"tts.catalog","catalog":{"providers":[…]}}` — catalog discovered
   from `openclaw infer tts providers --json`
+- `{"t":"stt.catalog","catalog":{"providers":[…]}}` — catalog discovered
+  from `openclaw infer audio providers --json`
 - `{"t":"tts.start","sample_rate":24000}`
 - binary PCM16LE mono TTS audio (or as a WebRTC track)
 - `{"t":"tts.done"}`

@@ -13,7 +13,7 @@ import {
 } from 'react';
 import { RtcClient, type ControlMessage, type RtcStatus } from './client';
 import { attachDaemonRemoteStream, detachDaemonRemoteStream } from '../voice/tts';
-import { phoneToDaemon, type DeliveryTarget, type TtsCatalog, type VoiceSettings } from '../voice/protocol';
+import { phoneToDaemon, type DeliveryTarget, type SttCatalog, type TtsCatalog, type VoiceSettings } from '../voice/protocol';
 
 export interface RtcContextValue {
   status: RtcStatus;
@@ -28,6 +28,8 @@ export interface RtcContextValue {
   addRemoteStreamListener: (fn: (stream: MediaStream) => void) => () => void;
   ttsCatalog: TtsCatalog | null;
   requestTtsCatalog: () => void;
+  sttCatalog: SttCatalog | null;
+  requestSttCatalog: () => void;
   hasClient: boolean;
 }
 
@@ -43,6 +45,8 @@ const Ctx = createContext<RtcContextValue>({
   addRemoteStreamListener: () => noop,
   ttsCatalog: null,
   requestTtsCatalog: noop,
+  sttCatalog: null,
+  requestSttCatalog: noop,
   hasClient: false,
 });
 
@@ -63,15 +67,17 @@ export function normalizeVoiceSettingsForRtc(voiceSettings?: VoiceSettings | nul
   };
 }
 
-function ttsSelectionKey(voiceSettings?: VoiceSettings | null): string | null {
+function voiceSelectionKey(voiceSettings?: VoiceSettings | null): string | null {
   const normalized = normalizeVoiceSettingsForRtc(voiceSettings);
   if (!normalized) return null;
   const providerId = normalized.tts?.providerId ?? '';
   const model = normalized.tts?.model ?? '';
   const voice = normalized.tts?.voice ?? normalized.voice ?? '';
   const legacyVoice = normalized.voice ?? '';
-  if (!providerId && !model && !voice && !legacyVoice) return null;
-  return JSON.stringify({ providerId, model, voice, legacyVoice });
+  const sttProviderId = normalized.stt?.providerId ?? '';
+  const sttModel = normalized.stt?.model ?? '';
+  if (!providerId && !model && !voice && !legacyVoice && !sttProviderId && !sttModel) return null;
+  return JSON.stringify({ providerId, model, voice, legacyVoice, sttProviderId, sttModel });
 }
 
 export interface RtcRendezvous {
@@ -93,6 +99,7 @@ export function RtcProvider({
   const [status, setStatus] = useState<RtcStatus>('idle');
   const [detail, setDetail] = useState<string | undefined>(undefined);
   const [ttsCatalog, setTtsCatalog] = useState<TtsCatalog | null>(null);
+  const [sttCatalog, setSttCatalog] = useState<SttCatalog | null>(null);
   // The active room flips from the rendezvous host to the
   // deterministic per-session voice room after `rendezvous.accept`
   // arrives. Each flip re-creates the underlying RtcClient.
@@ -130,6 +137,9 @@ export function RtcProvider({
         }
         if (msg.t === 'tts.catalog' && msg.catalog && typeof msg.catalog === 'object') {
           setTtsCatalog(msg.catalog as TtsCatalog);
+        }
+        if (msg.t === 'stt.catalog' && msg.catalog && typeof msg.catalog === 'object') {
+          setSttCatalog(msg.catalog as SttCatalog);
         }
         for (const fn of controlListenersRef.current) fn(msg);
       },
@@ -182,7 +192,7 @@ export function RtcProvider({
     if (activeRoomId === hostPeerId) return;
     if (status !== 'open') return;
     if (!normalizedVoiceSettings) return;
-    const key = ttsSelectionKey(normalizedVoiceSettings);
+    const key = voiceSelectionKey(normalizedVoiceSettings);
     if (!key) return;
     if (lastSentVoiceRef.current === key) return;
     lastSentVoiceRef.current = key;
@@ -195,6 +205,12 @@ export function RtcProvider({
     clientRef.current?.sendControl(phoneToDaemon.ttsCatalogRequest());
   }, [activeRoomId, hostPeerId, status]);
 
+  const requestSttCatalog = useCallback(() => {
+    if (!activeRoomId || activeRoomId === hostPeerId) return;
+    if (status !== 'open') return;
+    clientRef.current?.sendControl(phoneToDaemon.sttCatalogRequest());
+  }, [activeRoomId, hostPeerId, status]);
+
   const catalogRequestedRoomRef = useRef<string | null>(null);
   useEffect(() => {
     if (!rendezvous || !hostPeerId) return;
@@ -203,7 +219,8 @@ export function RtcProvider({
     if (catalogRequestedRoomRef.current === activeRoomId) return;
     catalogRequestedRoomRef.current = activeRoomId;
     requestTtsCatalog();
-  }, [rendezvous, hostPeerId, activeRoomId, status, requestTtsCatalog]);
+    requestSttCatalog();
+  }, [rendezvous, hostPeerId, activeRoomId, status, requestTtsCatalog, requestSttCatalog]);
 
   useEffect(() => {
     // Reset the dedupe state when the voice room is torn down, so the
@@ -279,6 +296,8 @@ export function RtcProvider({
       addRemoteStreamListener,
       ttsCatalog,
       requestTtsCatalog,
+      sttCatalog,
+      requestSttCatalog,
       hasClient: !!hostPeerId,
     }),
     [
@@ -291,6 +310,8 @@ export function RtcProvider({
       addRemoteStreamListener,
       ttsCatalog,
       requestTtsCatalog,
+      sttCatalog,
+      requestSttCatalog,
       hostPeerId,
     ],
   );

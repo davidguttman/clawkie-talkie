@@ -233,7 +233,7 @@ function SettingsOverlay({
   compact: boolean;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
-  const { ttsCatalog, requestTtsCatalog } = useRtc();
+  const { ttsCatalog, requestTtsCatalog, sttCatalog, requestSttCatalog } = useRtc();
 
   useEffect(() => {
     dialogRef.current?.focus();
@@ -291,6 +291,8 @@ function SettingsOverlay({
           setSettings={setSettings}
           ttsCatalog={ttsCatalog}
           onRefreshTtsCatalog={requestTtsCatalog}
+          sttCatalog={sttCatalog}
+          onRefreshSttCatalog={requestSttCatalog}
           compact={compact}
         />
       </div>
