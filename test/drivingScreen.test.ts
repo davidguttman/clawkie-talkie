@@ -33,6 +33,17 @@ describe('DrivingScreen settings button', () => {
   });
 });
 
+describe('DrivingScreen replay control', () => {
+  it('gates the replay footer button on an explicit canReplay prop', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    expect(source).toContain('canReplay = false');
+    expect(source).toContain('onReplay && canReplay');
+    expect(source).not.toContain('ReplayNotice');
+    expect(source).not.toContain('replayNotice');
+  });
+});
+
 describe('DrivingScreen hold music mute control', () => {
   it('replaces the thinking icon with a speaker/mute toggle wired to hold music storage', () => {
     const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');

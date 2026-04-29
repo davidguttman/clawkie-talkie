@@ -31,8 +31,9 @@ export interface ReplayRequest {
 export interface ReplayResult {
   ok: boolean;
   mode: 'audio' | 'text' | 'none';
-  message: string;
 }
+
+export const REPLAY_AVAILABILITY_CHANGED_EVENT = 'clawkie:replay-availability-changed';
 
 export function selectReplaySource(request: ReplayRequest): ReplaySelection {
   if (hasReplayAudio(request.audio)) {
@@ -42,6 +43,22 @@ export function selectReplaySource(request: ReplayRequest): ReplaySelection {
   if (!text) return { kind: 'none', reason: 'no_audio_or_text' };
   if (request.canSpeakText) return { kind: 'text', text };
   return { kind: 'none', reason: 'text_playback_unavailable' };
+}
+
+export function canReplayAssistantReply(request: ReplayRequest): boolean {
+  return selectReplaySource(request).kind !== 'none';
+}
+
+export function notifyReplayAvailabilityChanged(): void {
+  if (typeof window === 'undefined') return;
+  if (typeof window.dispatchEvent !== 'function') return;
+  window.dispatchEvent(new Event(REPLAY_AVAILABILITY_CHANGED_EVENT));
+}
+
+export function subscribeReplayAvailabilityChanges(listener: () => void): () => void {
+  if (typeof window === 'undefined') return () => undefined;
+  window.addEventListener(REPLAY_AVAILABILITY_CHANGED_EVENT, listener);
+  return () => window.removeEventListener(REPLAY_AVAILABILITY_CHANGED_EVENT, listener);
 }
 
 function hasReplayAudio(audio: BufferedReplyAudio | null): audio is BufferedReplyAudio {
@@ -63,18 +80,14 @@ export async function replayAssistantReply({
   const selection = selectReplaySource({ audio, text, canSpeakText });
   if (selection.kind === 'audio') {
     await playAudio(selection.audio);
-    return { ok: true, mode: 'audio', message: 'Replaying last spoken reply' };
+    return { ok: true, mode: 'audio' };
   }
   if (selection.kind === 'text') {
     await speakText(selection.text);
-    return { ok: true, mode: 'text', message: 'Replaying from saved text' };
+    return { ok: true, mode: 'text' };
   }
   return {
     ok: false,
     mode: 'none',
-    message:
-      selection.reason === 'no_audio_or_text'
-        ? 'Nothing to replay yet'
-        : 'Replay unavailable on this browser',
   };
 }

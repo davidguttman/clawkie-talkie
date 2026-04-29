@@ -91,9 +91,10 @@ disable that provider instead of falling back to global provider mutation.
 ## URL contract
 
 - `/` — marketing landing page placeholder.
-- `/voice` — public user-facing voice handoff path. Forwards to `/voice.html`
-  while preserving both `?…` and `#…`.
-- `/voice.html` — voice app HTML.
+- `/voice/` — canonical public user-facing voice handoff path. Static hosts
+  serve this from `/voice/index.html`.
+- `/voice.html` — compatibility redirect to `/voice/`, preserving both `?…`
+  and `#…`.
 
 Required handoff args (accepted from hash fragment, then query string):
 
@@ -168,8 +169,8 @@ sequenceDiagram
   `protocol`, `chatSession`, `appRouting`, `appEntry`,
   `multiSessionRendezvous`.
 - `npm run typecheck` — client and daemon TypeScript.
-- `npm run build` — Vite multi-page build emits `/`, `/voice.html`, and
-  `/voice/index.html`.
+- `npm run build` — Vite multi-page build emits `/`, canonical
+  `/voice/index.html`, and the `/voice.html` compatibility redirect.
 - `openclaw infer tts providers --json` — catalog includes at least one
   configured provider.
 - `openclaw infer audio providers --json` — bare-array audio provider catalog

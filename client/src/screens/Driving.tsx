@@ -24,6 +24,7 @@ export function DrivingScreen({
   accent = 'amber',
   fontMode = 'mono',
   onReplay,
+  canReplay = false,
   onHistory,
   onSettings,
   compact = false,
@@ -33,7 +34,8 @@ export function DrivingScreen({
 }: {
   accent?: AccentKey;
   fontMode?: 'mono' | 'sans';
-  onReplay?: () => string | Promise<string>;
+  onReplay?: () => void | Promise<void>;
+  canReplay?: boolean;
   onHistory?: () => void;
   onSettings?: () => void;
   compact?: boolean;
@@ -43,7 +45,6 @@ export function DrivingScreen({
 }) {
   const accentCfg = HIFI.accents[accent] || HIFI.accents.amber;
   const debugMode = useDebugMode();
-  const [replayNotice, setReplayNotice] = useState<string | null>(null);
   const [holdMusicMuted, setHoldMusicMutedState] = useState(() => getHoldMusicMuted());
 
   const rtc = useRtc();
@@ -132,6 +133,7 @@ export function DrivingScreen({
 
   const headerLabel = buildHeaderLabel({ sessionId, hostPeerId });
   const rowGap = compact ? 8 : 10;
+  const replayEnabled = !!onReplay && canReplay;
   const pttButtonSize = compact
     ? 'clamp(164px, min(52vw, 29dvh), 208px)'
     : 'clamp(188px, min(42vw, 30dvh), 208px)';
@@ -339,41 +341,11 @@ export function DrivingScreen({
         <FooterButton
           icon="↺"
           label="REPLAY"
-          onClick={
-            onReplay
-              ? async () => {
-                  const message = await onReplay();
-                  setReplayNotice(message);
-                }
-              : undefined
-          }
+          onClick={replayEnabled ? onReplay : undefined}
           compact={compact}
         />
         <FooterButton icon="≡" label="HISTORY" onClick={onHistory} compact={compact} />
       </div>
-      {replayNotice && <ReplayNotice message={replayNotice} compact={compact} />}
-    </div>
-  );
-}
-
-function ReplayNotice({ message, compact }: { message: string; compact: boolean }) {
-  return (
-    <div
-      role="status"
-      style={{
-        marginTop: compact ? -2 : 0,
-        minWidth: 0,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-        fontFamily: HIFI.fonts.mono,
-        fontSize: 10,
-        letterSpacing: 1,
-        color: HIFI.ink3,
-        textAlign: 'center',
-      }}
-    >
-      {message.toUpperCase()}
     </div>
   );
 }

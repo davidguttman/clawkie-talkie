@@ -24,7 +24,7 @@
 //
 // The phone never touches an xAI API key or WebSocket either way.
 
-import type { BufferedReplyAudio } from '../replay';
+import { notifyReplayAvailabilityChanged, type BufferedReplyAudio } from '../replay';
 
 const DEFAULT_SAMPLE_RATE = 24000;
 const VISUALIZER_FFT_SIZE = 512;
@@ -448,7 +448,10 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
     if (!err && !state.stopped && remoteRecorder) {
       remoteRecorder.stop().then(
         (audio) => {
-          if (audio) lastBufferedReplyAudio = audio;
+          if (audio) {
+            lastBufferedReplyAudio = audio;
+            notifyReplayAvailabilityChanged();
+          }
           finishCleanup();
         },
         () => finishCleanup(),
@@ -464,6 +467,7 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
         byteLength: state.replayBytes,
         createdAt: Date.now(),
       };
+      notifyReplayAvailabilityChanged();
     }
     finishCleanup();
   };

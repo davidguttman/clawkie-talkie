@@ -92,9 +92,9 @@ On startup the daemon prints:
 ## Public URL contract
 
 - `/` — marketing landing page placeholder. Reserved.
-- `/voice` — public user-facing handoff entrypoint. Preserves both `?…` and
-  `#…` when forwarding to `/voice.html`.
-- `/voice.html` — voice app HTML.
+- `/voice/` — canonical public user-facing handoff entrypoint.
+- `/voice.html` — compatibility redirect to `/voice/`, preserving both `?…`
+  and `#…`.
 
 The agent constructs the URL directly:
 

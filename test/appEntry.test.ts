@@ -12,18 +12,18 @@ describe('app HTML entry points', () => {
     expect(html).not.toContain('/src/main.tsx');
   });
 
-  it('serves the voice app from /voice.html', () => {
-    const path = resolve(root, 'client/voice.html');
+  it('serves the voice app from /voice/index.html', () => {
+    const path = resolve(root, 'client/voice/index.html');
     expect(existsSync(path)).toBe(true);
     const html = readFileSync(path, 'utf8');
     expect(html).toContain('/src/main.tsx');
     expect(html).toContain('id="root"');
   });
 
-  it('preserves search and hash from /voice when redirecting to /voice.html', () => {
-    const path = resolve(root, 'client/voice/index.html');
+  it('preserves search and hash from /voice.html when redirecting to /voice/', () => {
+    const path = resolve(root, 'client/voice.html');
     expect(existsSync(path)).toBe(true);
     const html = readFileSync(path, 'utf8');
-    expect(html).toContain("'/voice.html' + location.search + location.hash");
+    expect(html).toContain("'/voice/' + location.search + location.hash");
   });
 });

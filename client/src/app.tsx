@@ -14,7 +14,11 @@ import {
   saveSettings,
   type Settings,
 } from './storage';
-import { replayAssistantReply } from './replay';
+import {
+  canReplayAssistantReply,
+  replayAssistantReply,
+  subscribeReplayAvailabilityChanges,
+} from './replay';
 import {
   canSpeakReplayText,
   getLastBufferedReplyAudio,
@@ -79,6 +83,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [settings, setSettingsState] = useState<Settings>(() => loadSettings());
+  const [replayAvailabilityTick, setReplayAvailabilityTick] = useState(0);
   const [isNarrow, setIsNarrow] = useState(
     () => typeof window !== 'undefined' && window.innerWidth < 900,
   );
@@ -91,6 +96,12 @@ export function App() {
     const onResize = () => setIsNarrow(window.innerWidth < 900);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  useEffect(() => {
+    return subscribeReplayAvailabilityChanges(() => {
+      setReplayAvailabilityTick((tick) => tick + 1);
+    });
   }, []);
 
   const go = useCallback((s: ScreenId) => {
@@ -114,18 +125,28 @@ export function App() {
   const replayLastReply = useCallback(async () => {
     const session = currentSessionId ? loadTranscriptSession(currentSessionId) : null;
     try {
-      const result = await replayAssistantReply({
+      await replayAssistantReply({
         audio: getLastBufferedReplyAudio(),
         text: latestAssistantText(session),
         canSpeakText: canSpeakReplayText(),
         playAudio: playBufferedReplyAudio,
         speakText: speakReplayText,
       });
-      return result.message;
     } catch {
-      return 'Replay unavailable on this browser';
+      // The replay button is only enabled when a source exists, but playback
+      // can still fail if the browser rejects audio at the last moment.
     }
   }, [currentSessionId]);
+
+  const canReplayLastReply = useMemo(() => {
+    void replayAvailabilityTick;
+    const session = currentSessionId ? loadTranscriptSession(currentSessionId) : null;
+    return canReplayAssistantReply({
+      audio: getLastBufferedReplyAudio(),
+      text: latestAssistantText(session),
+      canSpeakText: canSpeakReplayText(),
+    });
+  }, [currentSessionId, replayAvailabilityTick]);
 
   const screenContent = (
     <>
@@ -138,6 +159,7 @@ export function App() {
               ? replayLastReply
               : undefined
           }
+          canReplay={canReplayLastReply}
           onHistory={openHistory}
           onSettings={openSettings}
           compact={compact}

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  canReplayAssistantReply,
   replayAssistantReply,
   selectReplaySource,
   type BufferedReplyAudio,
@@ -68,6 +69,13 @@ describe('replay selection', () => {
       kind: 'none',
       reason: 'no_audio_or_text',
     });
+  });
+
+  it('reports replayability only when a source can actually play', () => {
+    expect(canReplayAssistantReply({ audio, text: null, canSpeakText: false })).toBe(true);
+    expect(canReplayAssistantReply({ audio: null, text: 'saved text', canSpeakText: true })).toBe(true);
+    expect(canReplayAssistantReply({ audio: null, text: 'saved text', canSpeakText: false })).toBe(false);
+    expect(canReplayAssistantReply({ audio: null, text: null, canSpeakText: true })).toBe(false);
   });
 });
 

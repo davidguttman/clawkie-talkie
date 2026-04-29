@@ -8,6 +8,7 @@ import type {
   SttSelection as ProtocolSttSelection,
   TtsSelection as ProtocolTtsSelection,
 } from './voice/protocol';
+import { notifyReplayAvailabilityChanged } from './replay';
 
 export type TtsSelection = ProtocolTtsSelection;
 export type SttSelection = ProtocolSttSelection;
@@ -230,6 +231,7 @@ export function appendTranscriptTurn(
     ...(turn.error ? { error: turn.error } : {}),
   });
   writeTranscriptStore(store);
+  if (turn.role === 'assistant' && text) notifyReplayAvailabilityChanged();
   return cloneSession(session);
 }
 
