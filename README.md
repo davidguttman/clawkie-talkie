@@ -1,29 +1,33 @@
 # Clawkie Talkie
 
-Push-to-talk voice for the OpenClaw session you are already in.
+Push-to-talk voice for moving an OpenClaw session forward when you are away from the keyboard.
+
+The main use case is simple: you have a feature or writing task already in motion, then you get in the car. Instead of letting the session stall until you are back at your desk, you switch that same OpenClaw thread to voice, give direction from your phone, and let the agent keep pushing.
 
 Clawkie Talkie is not a separate assistant. It is a voice lane into an existing OpenClaw conversation: the same session, the same thread, the same context, with a phone-friendly interface for the moments when typing is the wrong tool.
 
-You ask OpenClaw to switch to voice. It gives you a link. You open the link on your phone, tap the big button, talk, stop, and hear the agent answer back.
+You ask OpenClaw to switch to voice. It gives you a link. You open the link on your phone, tap the big button, talk through the next decision, stop, and hear the agent answer back.
 
-The original OpenClaw/Discord thread stays canonical. Your spoken turn is transcribed into that session, the agent responds in that session, and Clawkie Talkie plays the reply back to you.
+The original OpenClaw/Discord thread stays canonical. Your spoken direction is transcribed into that session, the agent responds in that session, and Clawkie Talkie plays the reply back to you.
 
 ```text
-text thread ── "switch to voice" ──▶ phone link ──▶ tap / talk / hear reply
-     ▲                                                        │
-     └──────────────── same OpenClaw session ◀────────────────┘
+feature thread ── "switch to voice" ──▶ phone link ──▶ talk next step
+      ▲                                                        │
+      └──────────── same OpenClaw session keeps moving ◀───────┘
 ```
 
 ## Why this exists
 
-OpenClaw is often running somewhere you are not: at your desk, in a Discord thread, in a browser workflow, in the middle of a task. Sometimes the next step is easier to say than type:
+OpenClaw is often running somewhere you are not: at your desk, in a Discord thread, in a browser workflow, in the middle of a task. Sometimes the next useful contribution is not a carefully typed prompt; it is a quick piece of direction:
 
-- you are walking, driving, cooking, or away from the keyboard;
-- you want to give a quick correction without opening the whole workstation;
-- you need a back-and-forth with the agent, but the thread should remain the source of truth;
-- you want voice without giving a browser page your OpenClaw or provider credentials.
+- “keep going, but make the README speak to the car use case”;
+- “ship the smaller version first, then open a follow-up”;
+- “ask Codex to try option B and report back”;
+- “rewrite that section in plain English, then commit it.”
 
-Clawkie Talkie is the small bridge for that moment.
+Clawkie Talkie is for those moments: walking out the door, driving, cooking, pacing, or otherwise away from the workstation, while the work still has momentum.
+
+It gives you a voice interface for steering the existing session, especially for writing, product direction, review feedback, and feature work that can keep advancing without you typing every turn.
 
 ## The user experience
 
@@ -36,12 +40,13 @@ Clawkie Talkie is the small bridge for that moment.
 2. OpenClaw replies with a Clawkie Talkie link for that exact session.
 3. Open the link in a browser, usually on your phone.
 4. Tap the main button to record.
-5. Speak. You see live transcription while talking.
-6. Tap stop. The transcript is sent immediately.
-7. OpenClaw answers in the original session.
-8. Clawkie Talkie speaks the reply back through the browser.
+5. Say the next piece of direction: what to write, what to change, what to test, what to ask the implementation agent, or what decision to make.
+6. Watch the live transcript while talking.
+7. Tap stop. The transcript is sent immediately.
+8. OpenClaw answers in the original session.
+9. Clawkie Talkie speaks the reply back through the browser.
 
-The interface is intentionally walkie-talkie shaped: one obvious start/stop control, visible transcript while speaking, a thinking state while the agent works, and spoken playback when the reply is ready.
+The interface is intentionally walkie-talkie shaped: one obvious start/stop control, visible transcript while speaking, a thinking state while the agent works, and spoken playback when the reply is ready. It is built for steering work in short bursts, not for becoming a separate chat app.
 
 ## What the link means
 
