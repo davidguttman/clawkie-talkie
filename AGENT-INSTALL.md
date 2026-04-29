@@ -12,6 +12,19 @@ Your goals:
 
 Do not install credentials into the browser. The browser receives only voice handoff URLs. All LLM/STT/TTS provider auth lives in OpenClaw's own configuration; the daemon does not read or hold provider API keys.
 
+## Hard prerequisite: OpenClaw 2026.4.25+
+
+Clawkie Talkie requires OpenClaw **2026.4.25 or newer** for the same OS user that will run the daemon.
+
+Before installing, reinstalling, or upgrading Clawkie Talkie:
+
+1. Check the user's OpenClaw version.
+2. If OpenClaw is missing, unconfigured, or older than `2026.4.25`, stop the Clawkie Talkie install.
+3. Help the user update or repair OpenClaw first.
+4. Resume Clawkie Talkie only after `openclaw status` works for OpenClaw 2026.4.25+.
+
+Do not treat an OpenClaw update as optional and do not leave it as a task for the user to figure out manually.
+
 ## Safety rules
 
 - Do not commit `.env`, generated host IDs, LaunchAgent plists with private paths, or systemd unit files with private paths.
@@ -19,7 +32,6 @@ Do not install credentials into the browser. The browser receives only voice han
 - Treat `DAEMON_PEER_ID` as private-ish: not a password, but do not publish it or post it in public channels.
 - Use the public Clawkie Talkie client origin and the persistent daemon path; do not use local development shortcuts for an end-user install.
 - Do not start/stop unrelated services.
-- If OpenClaw is not installed/configured, stop and report the missing prerequisite.
 
 ## Source
 
@@ -149,10 +161,11 @@ From the user's shell account that will run the daemon:
 node -v
 npm -v
 command -v openclaw
+openclaw --version || true
 openclaw status
 ```
 
-Use Node 22 LTS or newer when possible. If `openclaw` is missing or not configured, stop and tell the user OpenClaw must be installed/configured first.
+Use Node 22 LTS or newer when possible. OpenClaw must be 2026.4.25 or newer. If `openclaw` is missing, older than 2026.4.25, or not configured, stop the Clawkie Talkie install and help the user update/configure OpenClaw first. Do not continue until the same OS user that will run the daemon has a working OpenClaw 2026.4.25+ install.
 
 ## Install dependencies
 
