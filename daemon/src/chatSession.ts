@@ -211,6 +211,7 @@ interface OpenClawAgentJsonPayload {
 
 interface OpenClawAgentJsonResponse {
   result?: { payloads?: OpenClawAgentJsonPayload[] };
+  payloads?: OpenClawAgentJsonPayload[];
 }
 
 function parseOpenClawAgentJson(stdout: string): OpenClawAgentJsonResponse {
@@ -234,7 +235,11 @@ function extractReplyFromAgentJson(response: OpenClawAgentJsonResponse): {
   text: string;
   hasMedia: boolean;
 } {
-  const payloads = Array.isArray(response.result?.payloads) ? response.result!.payloads! : [];
+  const payloads = Array.isArray(response.result?.payloads)
+    ? response.result!.payloads!
+    : Array.isArray(response.payloads)
+      ? response.payloads
+      : [];
   const textParts: string[] = [];
   let hasMedia = false;
   for (const payload of payloads) {

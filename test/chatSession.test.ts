@@ -94,6 +94,32 @@ describe('runChat OpenClaw CLI integration', () => {
     ).rejects.toMatchObject({ code: 'openclaw_reply_unparseable' });
   });
 
+  it('accepts top-level { payloads } JSON shape from the openclaw embedded fallback path', async () => {
+    // When the gateway call fails, the openclaw CLI runs the agent locally
+    // and emits the embedded run result directly — `{ payloads, meta }` —
+    // rather than the gateway-shaped `{ result: { payloads } }`.
+    execMock.mockImplementation((cmd) => {
+      const command = String(cmd);
+      if (command.includes('openclaw "agent"')) {
+        return Promise.resolve({
+          stdout: JSON.stringify({
+            payloads: [{ text: 'fallback reply' }],
+            meta: { transport: 'embedded', fallbackFrom: 'gateway' },
+          }) + '\n',
+          stderr: '',
+        });
+      }
+      return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+    });
+
+    const result = await runChat('hi', {
+      sessionId: 'agent:main:main',
+      deliver: true,
+    });
+
+    expect(result).toEqual({ text: 'fallback reply', source: 'openclaw' });
+  });
+
   it('posts the final transcript as a Discord quote before running the agent', async () => {
     mockExecRoutingAgentTo(jsonAgentStdout('ok'));
 
