@@ -570,6 +570,8 @@ interface CaptionData {
   live: boolean;
 }
 
+const AI_RESPONSE_CAPTION_LABEL = 'AI · READING ALOUD';
+
 function pickCaption({
   state,
   stateColor,
@@ -595,7 +597,7 @@ function pickCaption({
     };
   }
   if (state === 'ai') {
-    return { label: 'AI · READING ALOUD', color: stateColor, text: liveText || null, live: true };
+    return { label: AI_RESPONSE_CAPTION_LABEL, color: stateColor, text: liveText || null, live: true };
   }
   if (state === 'thinking') {
     return {
@@ -673,11 +675,21 @@ function Caption({
       : null;
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const lastAiResponseTextRef = useRef<string | null>(null);
+  const isAiResponseCaption = caption.label === AI_RESPONSE_CAPTION_LABEL;
+
   useEffect(() => {
+    if (!isAiResponseCaption) {
+      lastAiResponseTextRef.current = null;
+      return;
+    }
+    const responseText = caption.text ?? '';
+    if (lastAiResponseTextRef.current === responseText) return;
+    lastAiResponseTextRef.current = responseText;
     const el = scrollRef.current;
     if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [caption.text]);
+    el.scrollTop = 0;
+  }, [isAiResponseCaption, caption.text]);
 
   return (
     <div

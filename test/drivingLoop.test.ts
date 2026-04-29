@@ -134,11 +134,13 @@ describe('driving loop thinking visualizer source selection', () => {
 });
 
 describe('driving loop hold music state gates', () => {
-  it('starts while waiting for the agent and carries through the pre-speech ai state', async () => {
+  it('starts while waiting for the agent and relies on tts.start to stop speech-time music', async () => {
     const { syncHoldMusicForDrivingState } = await import('../client/src/voice/drivingLoop');
     const holdMusic = { start: vi.fn(), stop: vi.fn() };
 
     syncHoldMusicForDrivingState('thinking', holdMusic);
+    // AI state only begins after tts.start now. The control-message gate
+    // below is responsible for stopping music at that exact audio boundary.
     syncHoldMusicForDrivingState('ai', holdMusic);
 
     expect(holdMusic.start).toHaveBeenCalledTimes(1);

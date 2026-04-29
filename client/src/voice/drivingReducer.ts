@@ -18,6 +18,8 @@ export interface DrivingContext {
   state: DrivingState;
   lastUserText: string;
   lastReplyText: string;
+  // Reply text received before audio starts. Kept hidden until tts.start.
+  pendingReplyText: string;
   // Render label source for the AI caption.
   liveReplyText: string;
   error: string | null;
@@ -51,6 +53,7 @@ export const initialContext: DrivingContext = {
   state: 'idle',
   lastUserText: '',
   lastReplyText: '',
+  pendingReplyText: '',
   liveReplyText: '',
   error: null,
 };
@@ -60,7 +63,7 @@ export function reduce(ctx: DrivingContext, event: DrivingEvent): Reduction {
     case 'idle':
       if (event.type === 'tap') {
         return {
-          next: { ...ctx, state: 'recording', error: null, liveReplyText: '' },
+          next: { ...ctx, state: 'recording', error: null, pendingReplyText: '', liveReplyText: '' },
           side: [{ kind: 'startMic' }],
         };
       }
@@ -89,13 +92,44 @@ export function reduce(ctx: DrivingContext, event: DrivingEvent): Reduction {
       }
       if (event.type === 'reply.done') {
         return {
-          next: { ...ctx, state: 'ai', lastReplyText: event.text, liveReplyText: event.text },
+          next: { ...ctx, pendingReplyText: event.text, liveReplyText: '' },
           side: [{ kind: 'armTts' }],
+        };
+      }
+      if (event.type === 'tts.start') {
+        if (!ctx.pendingReplyText) return { next: ctx, side: [] };
+        return {
+          next: {
+            ...ctx,
+            state: 'ai',
+            lastReplyText: ctx.pendingReplyText,
+            liveReplyText: ctx.pendingReplyText,
+            pendingReplyText: '',
+          },
+          side: [],
         };
       }
       if (event.type === 'reply.error' || event.type === 'stt.error') {
         return {
-          next: { ...ctx, state: 'idle', error: event.reason },
+          next: { ...ctx, state: 'idle', error: event.reason, pendingReplyText: '', liveReplyText: '' },
+          side: [],
+        };
+      }
+      if (event.type === 'tts.done') {
+        return {
+          next: { ...ctx, state: 'idle', pendingReplyText: '', liveReplyText: '' },
+          side: [],
+        };
+      }
+      if (event.type === 'tts.error') {
+        return {
+          next: {
+            ...ctx,
+            state: 'idle',
+            error: event.reason,
+            pendingReplyText: '',
+            liveReplyText: '',
+          },
           side: [],
         };
       }
@@ -106,7 +140,7 @@ export function reduce(ctx: DrivingContext, event: DrivingEvent): Reduction {
         // Double-tap from thinking bails out of the turn after the
         // authoritative STT final has arrived and the reply turn is running.
         return {
-          next: { ...ctx, state: 'idle' },
+          next: { ...ctx, state: 'idle', pendingReplyText: '', liveReplyText: '' },
           side: [{ kind: 'cancelReply' }],
         };
       }
