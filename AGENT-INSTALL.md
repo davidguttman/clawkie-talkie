@@ -231,11 +231,16 @@ If the user's OpenClaw install does not have infer audio/TTS configured or auto-
 - missing/broken audio transcription → `openclaw infer audio transcribe` fails, the phone receives `stt.error`, and the UI shows `INFER ERROR · OPENCLAW INFER STT FAILED`
 - missing/broken TTS → `openclaw infer tts convert` fails after the agent reply, the phone receives `tts.error`, and the UI shows `TTS ERROR · OPENCLAW INFER TTS FAILED`
 
-Do not report success in that state. Configure or repair OpenClaw infer first, then rerun the smoke tests below.
+Installer responsibility in that state:
 
-If no audio/TTS providers are configured, pick whichever supported provider the user already has credentials for in OpenClaw (OpenAI, Deepgram, ElevenLabs, Microsoft, etc.). Preserve any existing working provider config; only add the missing pieces. Use the provider-specific OpenClaw docs for exact `tools.media.audio` and `messages.tts` fields.
+1. Do **not** report success and do **not** leave this as a runtime problem for the user.
+2. Configure or repair the missing OpenClaw infer surface for the same OS user that will run the daemon.
+3. Prefer an already-authenticated OpenClaw provider or already-installed local CLI. Preserve any existing working provider config and only add the missing audio/TTS pieces.
+4. If multiple providers are available, choose the least invasive working option and state what was chosen in the final report.
+5. If no usable provider credentials or local CLI are available, stop with a concrete blocker: which infer command failed, which config surface is missing (`tools.media.audio` or `messages.tts`), and what safe auth/config step the user must provide. Do not ask the user to paste secrets into a public/shared chat.
+6. Rerun the smoke tests below after every config change. Only continue once both STT and TTS smoke tests pass.
 
-Use the OpenClaw config tooling rather than hand-editing when possible. For example, replace these placeholders with the provider/model the user already has configured credentials for:
+Use the provider-specific OpenClaw docs for exact `tools.media.audio` and `messages.tts` fields. Use the OpenClaw config tooling rather than hand-editing when possible. For example, replace these placeholders with the provider/model the user already has configured credentials for:
 
 ```bash
 openclaw config set tools.media.audio '{"enabled":true,"models":[{"type":"provider","provider":"<stt-provider>","model":"<stt-model>"}]}' --strict-json --merge

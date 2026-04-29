@@ -19,7 +19,7 @@ Windows native packages exist for the WebRTC dependency, but this repo does not 
 - Node.js and npm. Use a current Node release; Node 22 LTS or newer is recommended.
 - `curl` and `unzip` for downloading the source ZIP.
 - OpenClaw installed, configured, and available on `PATH` as `openclaw` for the same user that runs the daemon.
-- Working OpenClaw provider configuration for agent replies, audio transcription, and TTS. Without infer audio/TTS configured or auto-detectable, the daemon can start and print a Join URL but voice turns will fail: STT failures surface as `INFER ERROR · OPENCLAW INFER STT FAILED`; TTS failures surface as `TTS ERROR · OPENCLAW INFER TTS FAILED`.
+- Working OpenClaw provider configuration for agent replies, audio transcription, and TTS. If infer audio/TTS is missing, the installer must configure or repair it before reporting success. Otherwise the daemon can start and print a Join URL, but voice turns fail: STT failures surface as `INFER ERROR · OPENCLAW INFER STT FAILED`; TTS failures surface as `TTS ERROR · OPENCLAW INFER TTS FAILED`.
 - Outbound network access to the signaling service and any OpenClaw providers you use.
 
 The daemon uses `@roamhq/wrtc` for native WebRTC. Its package includes prebuilt native packages for common macOS/Linux architectures. If your platform cannot use a prebuild, `npm install` may need native build tools:
