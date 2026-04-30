@@ -27,6 +27,7 @@ import {
 } from './voice/tts';
 import { parseHandoffUrl, type HandoffRoute } from './voice/handoffUrl';
 import type { VoiceSettings } from './voice/protocol';
+import { computeIsNarrow } from './responsive';
 
 type ScreenId = 'driving' | 'transcript' | 'error';
 
@@ -84,16 +85,14 @@ export function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [settings, setSettingsState] = useState<Settings>(() => loadSettings());
   const [replayAvailabilityTick, setReplayAvailabilityTick] = useState(0);
-  const [isNarrow, setIsNarrow] = useState(
-    () => typeof window !== 'undefined' && window.innerWidth < 900,
-  );
+  const [isNarrow, setIsNarrow] = useState(computeIsNarrow);
 
   useEffect(() => {
     saveSettings(settings);
   }, [settings]);
 
   useEffect(() => {
-    const onResize = () => setIsNarrow(window.innerWidth < 900);
+    const onResize = () => setIsNarrow(computeIsNarrow());
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
