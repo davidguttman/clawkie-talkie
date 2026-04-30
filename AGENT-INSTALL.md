@@ -8,9 +8,21 @@ Your goals:
 2. Configure it with a stable daemon host ID.
 3. Make it persistent after login/reboot.
 4. Install the OpenClaw `clawkie-voice-handoff` skill so the user can say "switch to voice" and receive a working handoff link.
-5. Verify the daemon and skill configuration before reporting success.
+5. Configure or repair OpenClaw infer STT/TTS enough for real voice turns to work.
+6. Verify the daemon, skill, and OpenClaw infer configuration before reporting success.
 
-Do not install credentials into the browser. The browser receives only voice handoff URLs. All LLM/STT/TTS provider auth lives in OpenClaw's own configuration; the daemon does not read or hold provider API keys.
+## Nontechnical user contract
+
+Assume the user is nontechnical. Your job as the installing agent is to do every safe, automatable step yourself: inspect the machine, find paths, download the repo, install dependencies, edit local config through supported CLIs, install persistence, install the OpenClaw skill, and run verification.
+
+Do **not** hand the user a list of commands to run unless the current runtime cannot execute commands at all. When you need the user, ask only for the irreducible human input, such as:
+
+- which hosted provider they want to use when no working STT/TTS provider exists yet;
+- an API key entered locally into a terminal prompt or OpenClaw auth UI;
+- an OS password, security prompt, browser login, or physical-device permission that only they can approve;
+- confirmation before replacing a broken existing install when preserving local config is impossible.
+
+Do not ask the user to paste provider API keys into chat. Do not print keys in logs or summaries. Do not install credentials into the browser. The browser receives only voice handoff URLs. All LLM/STT/TTS provider auth lives in OpenClaw's own configuration; the daemon does not read or hold provider API keys.
 
 ## Hard prerequisite: OpenClaw 2026.4.25+
 
@@ -230,45 +242,81 @@ Do **not** improvise around missing infer support by installing random local spe
 - a working audio transcription provider; and
 - a working text-to-speech provider.
 
-If `openclaw infer audio providers --json` or `openclaw infer tts providers --json` shows no usable provider, the normal repair path is to help the user configure a hosted provider through OpenClaw first.
+If `openclaw infer audio providers --json` or `openclaw infer tts providers --json` shows no usable provider, the normal repair path is to configure a hosted provider through OpenClaw config, then run the smoke tests. Do not run `openclaw onboard` from this installer unless the installed OpenClaw version explicitly requires an interactive auth flow and config-only setup fails. Onboarding can change broader model defaults; this installer must not change the user's default LLM.
 
 Recommended choices:
 
 1. **OpenAI** — best default for most users because it supports both STT and TTS in OpenClaw.
 2. **xAI** — good alternative if the user has or prefers an xAI API key; it also supports both STT and TTS in OpenClaw.
 
-Ask the user which provider they want, then have them enter the API key through OpenClaw's onboarding/auth flow. Do not ask them to paste API keys into chat, do not print keys in logs, and do not commit or write provider credentials into this repo.
+If the user already has one of these keys, ask which provider they want. Then prompt for the key locally in the terminal with hidden input. The user supplies only the secret; you run the config commands and verification. Do not ask them to paste API keys into chat, do not print keys in logs, and do not commit or write provider credentials into this repo.
+
+These setup snippets intentionally configure only the infer/auth surfaces Clawkie Talkie needs. They do **not** edit `agents.defaults.model` and do **not** change the normal chat/agent model.
 
 #### OpenAI infer setup
 
-Use this when the user chooses OpenAI or already has an OpenAI API key available locally:
+Use this when the user chooses OpenAI or already has an OpenAI API key available locally. If the OpenAI provider already exists, preserve its current model list/defaults; otherwise this adds minimal provider metadata so OpenClaw can authenticate direct OpenAI API calls for STT.
 
 ```bash
-openclaw onboard --auth-choice openai-api-key
+read -rsp "Paste OpenAI API key for this machine, then press Enter: " OPENAI_KEY
+printf '\n'
+test -n "$OPENAI_KEY" || { echo "No key entered; cannot configure OpenAI infer" >&2; exit 1; }
 
-openclaw config set messages.tts.provider openai
-openclaw config set messages.tts.providers.openai \
-  '{"model":"gpt-4o-mini-tts","voice":"coral"}' \
-  --strict-json --merge
+# STT auth/provider metadata. This does not select or change the default agent LLM.
+if openclaw config get models.providers.openai --json >/dev/null 2>&1; then
+  openclaw config set models.providers.openai.apiKey "$OPENAI_KEY"
+else
+  openclaw config set models.providers.openai \
+    "{\"baseUrl\":\"https://api.openai.com/v1\",\"api\":\"openai-responses\",\"apiKey\":\"$OPENAI_KEY\",\"models\":[{\"id\":\"gpt-5.5\",\"name\":\"GPT-5.5\"}]}" \
+    --strict-json
+fi
+
+# STT model used by `openclaw infer audio transcribe`.
 openclaw config set tools.media.audio.models \
   '[{"type":"provider","provider":"openai","model":"gpt-4o-transcribe"}]' \
   --strict-json
+
+# TTS default + TTS auth.
+openclaw config set messages.tts.provider openai
+openclaw config set messages.tts.providers.openai.apiKey "$OPENAI_KEY"
+openclaw config set messages.tts.providers.openai.model gpt-4o-mini-tts
+openclaw config set messages.tts.providers.openai.voice coral
+openclaw config set messages.tts.providers.openai.responseFormat mp3
+
+unset OPENAI_KEY
 ```
 
 #### xAI infer setup
 
-Use this when the user chooses xAI or already has an xAI API key available locally:
+Use this when the user chooses xAI or already has an xAI API key available locally. If the xAI provider already exists, preserve its current model list/defaults; otherwise this adds minimal provider metadata so OpenClaw can authenticate xAI STT.
 
 ```bash
-openclaw onboard --auth-choice xai-api-key
+read -rsp "Paste xAI API key for this machine, then press Enter: " XAI_KEY
+printf '\n'
+test -n "$XAI_KEY" || { echo "No key entered; cannot configure xAI infer" >&2; exit 1; }
 
-openclaw config set messages.tts.provider xai
-openclaw config set messages.tts.providers.xai \
-  '{"voiceId":"eve"}' \
-  --strict-json --merge
+# STT auth/provider metadata. This does not select or change the default agent LLM.
+if openclaw config get models.providers.xai --json >/dev/null 2>&1; then
+  openclaw config set models.providers.xai.apiKey "$XAI_KEY"
+else
+  openclaw config set models.providers.xai \
+    "{\"baseUrl\":\"https://api.x.ai/v1\",\"api\":\"openai-completions\",\"apiKey\":\"$XAI_KEY\",\"models\":[{\"id\":\"grok-4-1-fast-non-reasoning\",\"name\":\"Grok 4.1 Fast Non Reasoning\"}]}" \
+    --strict-json
+fi
+
+# STT model used by `openclaw infer audio transcribe`.
 openclaw config set tools.media.audio.models \
   '[{"type":"provider","provider":"xai","model":"grok-stt"}]' \
   --strict-json
+
+# TTS default + TTS auth.
+openclaw config set messages.tts.provider xai
+openclaw config set messages.tts.providers.xai.apiKey "$XAI_KEY"
+openclaw config set messages.tts.providers.xai.voiceId eve
+openclaw config set messages.tts.providers.xai.language en
+openclaw config set messages.tts.providers.xai.responseFormat mp3
+
+unset XAI_KEY
 ```
 
 After either setup path, rerun the provider inventory and smoke tests below. Do not continue to daemon/service/skill verification until both STT and TTS pass.
