@@ -219,7 +219,7 @@ Advanced overrides (rare — leave unset for normal installs):
 Clawkie Talkie uses the installed `openclaw` CLI for speech-to-text and text-to-speech:
 
 - STT: `openclaw infer audio transcribe --file <wav> --json`
-- TTS: `openclaw infer tts convert --text <text> --output <file> --json --local`
+- TTS: `openclaw infer tts convert --text <text> --output <file> --json`
 
 Before daemon verification, make sure the user's durable OpenClaw config (`openclaw.json`) has working providers for both infer surfaces. Do not rely only on shell environment variables unless they are also available to the persistent daemon service.
 
@@ -230,7 +230,7 @@ Do **not** improvise around missing infer support by installing random local spe
 - a working audio transcription provider; and
 - a working text-to-speech provider.
 
-If `openclaw infer audio providers --json` or `openclaw infer tts providers --json --local` shows no usable provider, the normal repair path is to help the user configure a hosted provider through OpenClaw first.
+If `openclaw infer audio providers --json` or `openclaw infer tts providers --json` shows no usable provider, the normal repair path is to help the user configure a hosted provider through OpenClaw first.
 
 Recommended choices:
 
@@ -281,15 +281,15 @@ Inspect the current config and provider inventory:
 openclaw config get tools.media.audio --json || true
 openclaw config get messages.tts --json || true
 openclaw infer audio providers --json
-openclaw infer tts providers --json --local
+openclaw infer tts providers --json
 ```
 
 Requirements:
 
 - `openclaw infer audio providers --json` must show at least one transcription provider with `configured: true`, or `tools.media.audio.models` must point at a working CLI fallback.
-- `openclaw infer tts providers --json --local` must show at least one usable speech provider.
+- `openclaw infer tts providers --json` must show at least one usable speech provider.
 - `openclaw infer tts voices --provider <provider> --json` should list voices or return a provider-specific success response.
-- `openclaw infer tts convert ... --local --json` must create an output file.
+- `openclaw infer tts convert ... --json` must create an output file.
 
 If the user's OpenClaw install does not have infer audio/TTS configured or auto-detectable, Clawkie Talkie is not installed successfully yet. The daemon may still print a Join URL and accept a phone connection, but the first voice turn will fail at runtime:
 
@@ -323,8 +323,7 @@ openclaw infer tts voices --provider "$TTS_PROVIDER" --json || openclaw infer tt
 openclaw infer tts convert \
   --text "clawkie infer smoke test" \
   --output /tmp/clawkie-openclaw-infer-smoke.mp3 \
-  --json \
-  --local
+  --json
 test -s /tmp/clawkie-openclaw-infer-smoke.mp3
 openclaw infer audio transcribe --file /tmp/clawkie-openclaw-infer-smoke.mp3 --json
 ```

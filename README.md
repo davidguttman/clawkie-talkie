@@ -173,7 +173,7 @@ The daemon uses these commands at runtime:
 ```bash
 openclaw infer audio transcribe --file <wav> --json
 openclaw agent --session-id <session> ...
-openclaw infer tts convert --text <reply> --output <file> --json --local
+openclaw infer tts convert --text <reply> --output <file> --json
 ```
 
 Provider selection is per request. Clawkie Talkie should not mutate OpenClaw's global provider preferences just because a user changes the voice settings in the browser.

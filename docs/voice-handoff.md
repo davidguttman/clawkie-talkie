@@ -176,7 +176,7 @@ sequenceDiagram
 - `openclaw infer audio providers --json` — bare-array audio provider catalog
   includes at least one configured provider with a `defaultModels.audio` value.
 - `openclaw infer tts convert --text "catalog smoke" --output
-  /tmp/clawkie-tts-smoke.mp3 --json --local --model openai/gpt-4o-mini-tts
+  /tmp/clawkie-tts-smoke.mp3 --json --model openai/gpt-4o-mini-tts
   --voice nova` — explicit per-request TTS smoke returns JSON with an output
   path and does not require `openclaw infer tts set-provider`.
 - `openclaw infer audio transcribe --file <fixture.wav> --json --model
