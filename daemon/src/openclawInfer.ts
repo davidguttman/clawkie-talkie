@@ -108,7 +108,6 @@ export function buildInferTtsCommand(opts: InferTtsCommandOptions): InferTtsComm
     '--output',
     opts.outputPath,
     '--json',
-    '--local',
   ];
   if (opts.model) args.push('--model', opts.model);
   const voice = normalizeOpenClawInferTtsVoice(opts.voice);

@@ -39,7 +39,6 @@ describe('OpenClaw infer TTS voice forwarding', () => {
         '--output',
         '/tmp/reply.mp3',
         '--json',
-        '--local',
         '--model',
         'openai/gpt-4o-mini-tts',
         '--voice',
@@ -62,7 +61,6 @@ describe('OpenClaw infer TTS voice forwarding', () => {
         '--output',
         '/tmp/reply.mp3',
         '--json',
-        '--local',
       ],
     });
   });

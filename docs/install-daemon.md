@@ -296,7 +296,7 @@ After starting the daemon manually or as a service:
 6. Smoke-test TTS synthesis with an explicit provider/model/voice, replacing the
    ids if your catalog uses different values:
    ```bash
-   openclaw infer tts convert --text "catalog smoke" --output /tmp/clawkie-tts-smoke.mp3 --json --local --model openai/gpt-4o-mini-tts --voice nova
+   openclaw infer tts convert --text "catalog smoke" --output /tmp/clawkie-tts-smoke.mp3 --json --model openai/gpt-4o-mini-tts --voice nova
    ```
    A healthy response returns JSON with an output path. This smoke must not require
    `openclaw infer tts set-provider`.

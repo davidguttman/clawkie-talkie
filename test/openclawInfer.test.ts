@@ -61,7 +61,7 @@ describe('buildInferTranscribeCommand', () => {
 
 
 describe('buildInferTtsCommand', () => {
-  it('builds the default local OpenClaw infer TTS command', () => {
+  it('builds the default OpenClaw infer TTS command', () => {
     expect(buildInferTtsCommand({ text: 'hello', outputPath: '/tmp/reply.mp3' })).toEqual({
       command: 'openclaw',
       args: [
@@ -73,7 +73,6 @@ describe('buildInferTtsCommand', () => {
         '--output',
         '/tmp/reply.mp3',
         '--json',
-        '--local',
       ],
     });
   });
@@ -265,7 +264,7 @@ describe('transcribeWithOpenClawInfer', () => {
 
 
 describe('synthesizeTtsWithOpenClawInfer', () => {
-  it('calls the local OpenClaw infer TTS command and parses the result', async () => {
+  it('calls the OpenClaw infer TTS command and parses the result', async () => {
     const calls: Array<{ command: string; args: string[]; signal?: AbortSignal }> = [];
 
     await synthesizeTtsWithOpenClawInfer({
