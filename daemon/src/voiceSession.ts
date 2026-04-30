@@ -826,13 +826,8 @@ export class VoiceSession {
       const useTrack = !!this.audioSource;
       const createTts = this.opts.ttsSessionFactory ?? ((opts, cb) => new OpenClawInferTtsSession(opts, cb));
       const selection = this.ttsSelection;
-      const model = ttsModelOverride(selection);
       this.tts = createTts(
-        {
-          text,
-          ...(model ? { model } : {}),
-          ...(model && selection.voice ? { voice: selection.voice } : {}),
-        },
+        buildTtsSessionRequest(text, selection),
         {
           onOpen: () => {
             this.send(daemonToPhone.ttsStart(useTrack ? WEBRTC_SAMPLE_RATE : TTS_SAMPLE_RATE));
@@ -959,6 +954,21 @@ function ttsModelOverride(selection: TtsSelection): string | undefined {
   return selection.providerId && selection.model
     ? `${selection.providerId}/${selection.model}`
     : undefined;
+}
+
+export function buildTtsSessionRequest(
+  text: string,
+  selection: TtsSelection,
+): { text: string; model?: string; voice?: string } {
+  const model = ttsModelOverride(selection);
+  const providerId = trimmedString(selection.providerId);
+  const voice = trimmedString(selection.voice);
+  const forwardVoice = voice && (model || providerId);
+  return {
+    text,
+    ...(model ? { model } : {}),
+    ...(forwardVoice ? { voice } : {}),
+  };
 }
 
 function normalizeSttSelection(settings: VoiceSettings | null | undefined): SttSelection {

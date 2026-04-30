@@ -77,6 +77,47 @@ describe('OpenClaw infer TTS voice forwarding', () => {
       }).args,
     ).toEqual(expect.arrayContaining(['--model', 'xai/some-model', '--voice', 'eve']));
   });
+
+  it('omits --model when a voice-based provider has no model and only forwards --voice', async () => {
+    const { buildInferTtsCommand } = await import('../daemon/src/openclawInfer');
+    const command = buildInferTtsCommand({
+      text: 'hello',
+      outputPath: '/tmp/a.mp3',
+      voice: 'eve',
+    });
+
+    expect(command.args).not.toContain('--model');
+    expect(command.args).toEqual(expect.arrayContaining(['--voice', 'eve']));
+  });
+});
+
+describe('buildTtsSessionRequest', () => {
+  it('forwards provider+model+voice for traditional providers', async () => {
+    const { buildTtsSessionRequest } = await import('../daemon/src/voiceSession');
+
+    expect(
+      buildTtsSessionRequest('hello', {
+        providerId: 'openai',
+        model: 'gpt-4o-mini-tts',
+        voice: 'nova',
+      }),
+    ).toEqual({ text: 'hello', model: 'openai/gpt-4o-mini-tts', voice: 'nova' });
+  });
+
+  it('forwards provider+voice without a model for voice-based providers like xAI', async () => {
+    const { buildTtsSessionRequest } = await import('../daemon/src/voiceSession');
+
+    const request = buildTtsSessionRequest('hello', { providerId: 'xai', voice: 'eve' });
+
+    expect(request).toEqual({ text: 'hello', voice: 'eve' });
+    expect(request).not.toHaveProperty('model');
+  });
+
+  it('does not forward a legacy voice when no provider is selected', async () => {
+    const { buildTtsSessionRequest } = await import('../daemon/src/voiceSession');
+
+    expect(buildTtsSessionRequest('hello', { voice: 'rex' })).toEqual({ text: 'hello' });
+  });
 });
 
 describe('voice session voice settings', () => {

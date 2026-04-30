@@ -265,7 +265,10 @@ export function configuredTtsProviders(catalog: TtsCatalog | null): TtsProviderO
       configured: provider.configured,
       selected: provider.selected || provider.id === catalog.activeProvider,
       available: provider.available,
-      selectable: provider.configured && provider.available && provider.models.length > 0,
+      selectable:
+        provider.configured
+        && provider.available
+        && (provider.models.length > 0 || provider.voices.length > 0),
       models: [...provider.models],
       voices: provider.voices.map((voice) => ({ id: voice.id, label: voice.name || voice.id })),
     }))
@@ -413,7 +416,6 @@ export function ttsCatalogStatusText(
 ): string {
   if (isDefaultSelection) return 'OpenClaw will choose voice defaults';
   if (!catalog) return 'Connect to daemon to load voices';
-  if (provider && provider.models.length === 0) return 'Provider has no selectable models';
   if (!provider?.selectable) return 'Provider unavailable';
   return 'Loaded from daemon';
 }
@@ -443,9 +445,14 @@ function preferredSttModel(provider: SttProviderOption, selection: SttSelection)
   return provider.models[0];
 }
 
-function providerSelectLabel(provider: TtsProviderOption): string {
-  if (provider.configured && provider.available && provider.models.length === 0) {
-    return `${provider.label} (no models)`;
+export function providerSelectLabel(provider: TtsProviderOption): string {
+  if (
+    provider.configured
+    && provider.available
+    && provider.models.length === 0
+    && provider.voices.length === 0
+  ) {
+    return `${provider.label} (no voices)`;
   }
   return provider.label;
 }

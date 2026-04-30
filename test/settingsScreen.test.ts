@@ -3,6 +3,7 @@ import {
   configuredSttProviders,
   configuredTtsProviders,
   DEFAULT_PROVIDER_OPTION_ID,
+  providerSelectLabel,
   isDefaultSttSelection,
   isDefaultTtsSelection,
   nextSttSelectionAfterModelChange,
@@ -195,7 +196,7 @@ describe('SettingsScreen TTS catalog helpers', () => {
     expect(ttsCatalogStatusText(null, undefined)).toBe('Connect to daemon to load voices');
   });
 
-  it('marks configured available providers without models as not selectable and ignores provider changes', () => {
+  it('keeps voice-based providers without models selectable and writes provider+voice without model', () => {
     const providers = configuredTtsProviders(catalog({
       providers: [
         ...catalog().providers,
@@ -206,19 +207,63 @@ describe('SettingsScreen TTS catalog helpers', () => {
           selected: false,
           available: true,
           models: [],
-          voices: [{ id: 'alloy', name: 'Alloy' }],
+          voices: [
+            { id: 'eve', name: 'Eve' },
+            { id: 'rex', name: 'Rex' },
+          ],
         },
       ],
     }));
-    const modelLessProvider = providers.find((provider) => provider.id === 'xai');
-    const current: Settings['tts'] = {
+    const xai = providers.find((provider) => provider.id === 'xai');
+
+    expect(xai?.selectable).toBe(true);
+    expect(xai?.label).toBe('xAI');
+    expect(nextTtsSelectionAfterProviderChange(xai!, {
       providerId: 'openai',
       model: 'gpt-4o-mini-tts',
       voice: 'nova',
-    };
+    })).toEqual({ providerId: 'xai', voice: 'eve' });
+  });
 
-    expect(modelLessProvider?.selectable).toBe(false);
-    expect(nextTtsSelectionAfterProviderChange(modelLessProvider!, current)).toEqual(current);
+  it('marks providers with no voices and no models as unselectable and labels them', () => {
+    const providers = configuredTtsProviders(catalog({
+      providers: [
+        ...catalog().providers,
+        {
+          id: 'volcengine',
+          name: 'Volcengine',
+          configured: true,
+          selected: false,
+          available: true,
+          models: [],
+          voices: [],
+        },
+      ],
+    }));
+    const empty = providers.find((provider) => provider.id === 'volcengine');
+
+    expect(empty?.selectable).toBe(false);
+    expect(providerSelectLabel(empty!).toLowerCase()).toContain('no voices');
+  });
+
+  it('does not append a "no models" suffix to voice-based providers', () => {
+    const providers = configuredTtsProviders(catalog({
+      providers: [
+        ...catalog().providers,
+        {
+          id: 'xai',
+          name: 'xAI',
+          configured: true,
+          selected: false,
+          available: true,
+          models: [],
+          voices: [{ id: 'eve', name: 'Eve' }],
+        },
+      ],
+    }));
+    const xai = providers.find((provider) => provider.id === 'xai');
+
+    expect(providerSelectLabel(xai!)).toBe('xAI');
   });
 });
 
