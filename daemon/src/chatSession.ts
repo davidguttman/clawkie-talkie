@@ -3,7 +3,7 @@
 //
 // Two-step turn (same shape as the Rambly OpenClaw thread-linked
 // plugin):
-//   1. Post the user transcript as a quoted Discord message.
+//   1. Best-effort mirror the user transcript when the target can be derived from the session.
 //   2. Run `openclaw agent --agent main --session-id <session>
 //      --channel last --deliver -m ...`. The agent receives the full
 //      transcript in its own message payload, so reply generation does not
@@ -40,7 +40,6 @@ const RAW_STT_GUIDANCE =
   'intended meaning and actual spoken words before replying.';
 
 const WEBCHAT_BASE_SESSION_KEY = 'agent:main:webchat';
-const WEBCHAT_CONCRETE_SESSION_PREFIX = `${WEBCHAT_BASE_SESSION_KEY}:`;
 const WEBCHAT_LAST_SESSION_KEY = 'agent:main:main';
 
 // Helper: send a debug/activity notification to the Discord thread
@@ -169,9 +168,7 @@ async function runOpenClawTurn(opts: {
   signal?: AbortSignal;
 }): Promise<string> {
   const message = buildAgentTurnMessage(opts.userText);
-  const sessionId = isSessionOnlyWebchatTurn(opts.sessionId, opts.delivery)
-    ? normalizeWebchatSessionKey(opts.sessionId)
-    : await resolveOpenClawSessionId(opts);
+  const sessionId = normalizeOpenClawAgentSessionId(opts.sessionId);
   const args = [
     'agent',
     '--agent', 'main',
@@ -254,76 +251,16 @@ function extractReplyFromAgentJson(response: OpenClawAgentJsonResponse): {
   return { text: textParts.join('\n').trim(), hasMedia };
 }
 
-function isSessionOnlyWebchatTurn(sessionId: string, delivery?: DeliveryTarget): boolean {
-  if (delivery) return false;
+function normalizeOpenClawAgentSessionId(sessionId: string): string {
   const requested = sessionId.trim();
-  return (
-    requested === WEBCHAT_LAST_SESSION_KEY ||
-    requested === WEBCHAT_BASE_SESSION_KEY ||
-    requested.startsWith(WEBCHAT_CONCRETE_SESSION_PREFIX)
-  );
-}
-
-function normalizeWebchatSessionKey(sessionId: string): string {
-  return sessionId.trim() === WEBCHAT_BASE_SESSION_KEY ? WEBCHAT_LAST_SESSION_KEY : sessionId.trim();
+  if (!requested) throw new ChatError('openclaw_session_missing', 'openclaw_session_missing');
+  return requested === WEBCHAT_BASE_SESSION_KEY ? WEBCHAT_LAST_SESSION_KEY : requested;
 }
 
 export function buildAgentTurnMessage(userText: string): string {
   return `${RAW_STT_GUIDANCE}\n\n<raw-stt-transcript>\n${userText}\n</raw-stt-transcript>\n\n${VOICE_REPLY_GUIDANCE}`;
 }
 
-async function resolveOpenClawSessionId(opts: {
-  sessionId: string;
-  signal?: AbortSignal;
-}): Promise<string> {
-  const requested = opts.sessionId.trim();
-  if (!requested) throw new ChatError('openclaw_session_missing', 'openclaw_session_missing');
-  if (!requested.startsWith('agent:')) return requested;
-
-  try {
-    const { stdout } = await execAsync(
-      'openclaw "sessions" "--json" "--all-agents" "--active" "10080"',
-      { signal: opts.signal },
-    );
-    const sessions = parseOpenClawSessions(stdout);
-    const exactMatch = sessions.find((entry) => entry.key === requested);
-    if (exactMatch?.sessionId) return exactMatch.sessionId;
-
-    if (requested === WEBCHAT_BASE_SESSION_KEY) {
-      const webchatMatches = sessions.filter(
-        (entry) => entry.sessionId && entry.key.startsWith(WEBCHAT_CONCRETE_SESSION_PREFIX),
-      );
-      if (webchatMatches.length === 1) return webchatMatches[0].sessionId;
-      if (webchatMatches.length > 1) {
-        throw new ChatError(
-          `openclaw_session_ambiguous: ${requested} matched ${webchatMatches.length} active webchat sessions`,
-          'openclaw_session_ambiguous',
-        );
-      }
-    }
-
-    throw new ChatError('openclaw_session_not_found', 'openclaw_session_not_found');
-  } catch (err) {
-    if (err instanceof ChatError) throw err;
-    if (opts.signal?.aborted) throw new ChatError('aborted', 'aborted');
-    throw toOpenClawChatError(err, 'openclaw_session_lookup_failed');
-  }
-}
-
-function parseOpenClawSessions(stdout: string): Array<{ key: string; sessionId: string }> {
-  const parsed = JSON.parse(stdout) as unknown;
-  const rows = Array.isArray(parsed)
-    ? parsed
-    : parsed && typeof parsed === 'object' && Array.isArray((parsed as { sessions?: unknown }).sessions)
-      ? (parsed as { sessions: unknown[] }).sessions
-      : [];
-  return rows.flatMap((row) => {
-    if (!row || typeof row !== 'object') return [];
-    const key = (row as { key?: unknown }).key;
-    const sessionId = (row as { sessionId?: unknown }).sessionId;
-    return typeof key === 'string' && typeof sessionId === 'string' ? [{ key, sessionId }] : [];
-  });
-}
 
 export function classifyOpenClawError(err: unknown): string {
   const text = stripBenignOpenClawDiagnostics(collectOpenClawErrorText(err)).toLowerCase();

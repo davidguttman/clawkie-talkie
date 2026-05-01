@@ -531,18 +531,16 @@ test "$configured_host" = "$DAEMON_PEER_ID"
 const params = new URLSearchParams();
 params.set('host', daemonPeerId);
 params.set('session', 'agent:main:discord:channel:EXAMPLE');
-params.set('channel', 'discord');
-params.set('target', 'channel:EXAMPLE');
 console.log(`https://clawkietalkie.app/voice#${params.toString()}`);
 ```
 
-The dry-run URL must include `host`, `session`, `channel`, and `target` in the hash for external channels. For internal/webchat sessions, `target` may be omitted and `session=agent:main:main` is valid. The skill must never emit `agent:main:main` for an external channel such as Discord/Slack/WhatsApp.
+The dry-run URL must include only `host` and `session` in the hash. It must not include URL `channel` or `target`. For internal/webchat sessions, `session=agent:main:main` is valid. The skill must never emit `agent:main:main` for an external channel such as Discord/Slack/WhatsApp; external channels require the exact external session key.
 
 7. Run a real handoff-link smoke test in the current OpenClaw runtime by asking for `switch to voice` from the surface being installed for. Inspect the generated URL before trying the phone:
    - It must use `/voice#` hash args.
    - It must include the configured daemon `host`.
-   - For web chat, `session=agent%3Amain%3Amain&channel=webchat` is valid.
-   - For Discord/Slack/etc. it must include the correct external `session`, `channel`, and `target`, not `session=agent%3Amain%3Amain` or `channel=webchat`.
+   - For web chat, `session=agent%3Amain%3Amain` is valid.
+   - For Discord/Slack/etc. it must include the correct external `session`, not `session=agent%3Amain%3Amain`. It must not include URL `channel` or `target`.
 
 ## Post-install: Device approval
 
@@ -556,7 +554,7 @@ Check the daemon logs (Journal or LaunchAgent logs). Common causes:
 
 1. **Service-context gateway/auth failure** — the daemon's systemd/launchd environment cannot reach or authenticate to the OpenClaw gateway even though the installer's interactive shell can.
 2. **Scope upgrade pending approval** — the daemon's `openclaw agent --deliver --json` is treated as a new device connection requesting more permissions than currently approved.
-3. **Invalid session ID for the surface** — `agent:main:main` is valid for OpenClaw web chat, but wrong for Discord/Slack/etc.; external channels need their real channel/thread session key and target.
+3. **Invalid session ID for the surface** — `agent:main:main` is valid for OpenClaw web chat, but wrong for Discord/Slack/etc.; external channels need their exact external session key.
 
 ### Fix scope approval (device auth)
 
@@ -578,10 +576,10 @@ If the daemon logs show a pending scope approval request:
 The handoff URL must include a real session ID/key in the `session` parameter. Example of a **valid** handoff URL:
 
 ```
-https://clawkietalkie.app/voice#host=<peer-id>&session=agent%3Amain%3Adiscord%3Achannel%3A1498020851298209852&channel=discord&target=channel%3A1498020851298209852
+https://clawkietalkie.app/voice#host=<peer-id>&session=agent%3Amain%3Adiscord%3Achannel%3A1498020851298209852
 ```
 
-If the URL contains `session=agent%3Amain%3Amain` for Discord/Slack/etc., `session=agent%3Amain%3Awebchat`, `channel=webchat` for an external channel, or no target for an external channel, the `clawkie-voice-handoff` skill is not resolving the current conversation correctly. Verify:
+If the URL contains `session=agent%3Amain%3Amain` for Discord/Slack/etc., `session=agent%3Amain%3Awebchat`, or any URL `channel`/`target` parameter, the `clawkie-voice-handoff` skill is not resolving the current conversation correctly. Verify:
 
 1. The skill is installed and `INSTALLED = true`.
 2. The skill's `CLAWKIE_DAEMON_HOST_ID` matches the daemon's `DAEMON_PEER_ID`.

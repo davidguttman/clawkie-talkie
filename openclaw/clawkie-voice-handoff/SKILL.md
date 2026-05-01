@@ -28,27 +28,24 @@ I can’t create the voice link: Clawkie Talkie is not installed/configured for 
 - Do **not** call a Clawkie helper just to create the URL.
 - Do **not** call the Clawkie daemon to create or mutate handoff state.
 - Do **not** create or reference handoff IDs, opaque tokens, registries, TTLs, claims, revocations, or lookup tables.
-- Do **not** guess missing routing fields.
+- Do **not** guess the current session key/id.
+- Do **not** put `channel` or `target` in the public URL.
 - Use the configured `CLAWKIE_DAEMON_HOST_ID` exactly as installed.
 - If a required field is unavailable, say exactly which field is missing.
 
 ## URL contract
 
-Generate this URL for external delivery targets:
+Generate only this public handoff URL:
 
 ```txt
-https://clawkietalkie.app/voice#host=<host>&session=<sessionId>&channel=<channel>&target=<target>
+https://clawkietalkie.app/voice#host=<host>&session=<sessionId>
 ```
 
-For internal/webchat sessions where no external delivery target exists, omit `target`:
+For OpenClaw web chat, `session=agent:main:main` is valid. For Discord, Slack, WhatsApp, Telegram, ACP, subagent, custom, direct-message, or bound sessions, use the exact external session key/id for the current conversation. Do not add URL `channel` or `target` params.
 
-```txt
-https://clawkietalkie.app/voice#host=<host>&session=agent:main:main&channel=webchat
-```
+Use hash args so `sessionId` and UUID-like values are not sent to web servers. Query params are compatibility-only; do not generate them unless explicitly requested.
 
-Use hash args so `sessionId`, UUID-like values, and provider targets are not sent to web servers. Query params are compatibility-only; do not generate them unless explicitly requested.
-
-`/voice` is the public handoff entrypoint. The browser joins the configured daemon rendezvous room first. The daemon derives the per-session voice room deterministically from `host + session`.
+`/voice` is the public handoff entrypoint. The browser joins the configured daemon rendezvous room first. The daemon derives the per-session voice room deterministically from `host + session`, mirrors the transcript only when it can safely derive a target from the session, and runs the OpenClaw agent turn with `--channel last --deliver`.
 
 ## Required values
 
@@ -94,43 +91,6 @@ agent:main:discord:channel:1498020851298209852
 
 Do not derive ACP, subagent, custom, direct-message, or bound session keys unless the exact session key is visible.
 
-### `channel`
-
-Use the trusted inbound metadata `channel` value, e.g.:
-
-```json
-{ "channel": "discord" }
-```
-
-If absent, use the runtime channel only if explicit. Do not infer from labels.
-
-### `target` (optional for internal/webchat)
-
-Use the OpenClaw message target for mirroring transcripts back to the originating conversation when an external delivery target exists.
-
-Preferred source: `Conversation info` → `chat_id`, exactly as provided.
-
-If this is an internal/webchat session and no external delivery target exists, do **not** block; omit `target` from the URL and use `session=agent:main:main` unless a more specific trusted webchat session key/id is visible.
-
-Examples:
-
-```txt
-channel:1498020851298209852
-channel:C123
-user:U123
-123456789
-@username
-conversation:19:abc...@thread.tacv2
-room:!roomId:server
-```
-
-Do not use display labels like `#general` unless that is the provider’s actual target format.
-
-For external channels, do not guess a target. If the channel requires external delivery and no target is available, stop and say:
-
-```txt
-I can’t create the voice link: missing target.
-```
 
 ## Build the URL
 
@@ -140,8 +100,6 @@ URL-encode all hash values. Equivalent JS:
 const params = new URLSearchParams();
 params.set('host', CLAWKIE_DAEMON_HOST_ID);
 params.set('session', sessionId);
-params.set('channel', channel);
-if (target) params.set('target', target);
 const url = `https://clawkietalkie.app/voice#${params.toString()}`;
 ```
 
@@ -161,17 +119,7 @@ I can’t create the voice link: missing <field>.
 
 ## Example: Discord thread
 
-Given:
-
-```json
-// trusted inbound metadata
-{ "channel": "discord" }
-
-// conversation info
-{ "chat_id": "channel:1498020851298209852" }
-```
-
-and current session:
+Given current session:
 
 ```txt
 agent:main:discord:channel:1498020851298209852
@@ -180,7 +128,7 @@ agent:main:discord:channel:1498020851298209852
 reply:
 
 ```txt
-Switch to voice: https://clawkietalkie.app/voice#host=<configured-host>&session=agent%3Amain%3Adiscord%3Achannel%3A1498020851298209852&channel=discord&target=channel%3A1498020851298209852
+Switch to voice: https://clawkietalkie.app/voice#host=<configured-host>&session=agent%3Amain%3Adiscord%3Achannel%3A1498020851298209852
 ```
 
 Replace `<configured-host>` with `CLAWKIE_DAEMON_HOST_ID` from the installed copy of this skill.

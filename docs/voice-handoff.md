@@ -24,21 +24,21 @@ links to the same lane and stomped on each other.
 There is now exactly one durable local daemon. `host=H` is a stable
 rendezvous/control identity, not the voice lane.
 
-For each handoff the agent fills the URL with values already present in the
-turn. External deliveries include `target`; webchat/internal session-only links
-omit it:
+For each handoff the agent fills the URL with only values already present in the
+turn:
 
 ```
-https://clawkietalkie.app/voice#host=H&session=<sessionId>&channel=<channel>&target=<target>
-https://clawkietalkie.app/voice#host=H&session=agent:main:main&channel=webchat
+https://clawkietalkie.app/voice#host=H&session=<sessionId>
 ```
+
+For webchat/internal handoffs, `session=agent:main:main` is valid. For
+external channels, the session must be the exact external session key for the
+current conversation. The public URL must not include `channel` or `target`.
 
 The browser:
 
 1. Joins the rendezvous room `H`.
-2. Sends `rendezvous.join { sessionId, delivery?: { channel, target? } }` once.
-   For webchat/internal session-only links, `delivery` may be absent or may be
-   `{ channel: "webchat" }` with no `target`.
+2. Sends `rendezvous.join { sessionId }` once.
 3. Receives `rendezvous.accept { roomId }`, where
    `roomId = makeVoiceRoomId({ hostPeerId: H, sessionId })`.
 4. Reconnects to `roomId` and runs the voice turn there.
@@ -104,26 +104,25 @@ Required handoff args (accepted from hash fragment, then query string):
   `agent:main:main` when no more specific exact key is visible; the daemon runs
   `openclaw agent --agent main --session-id agent:main:main --channel last --deliver`.
   Older `agent:main:webchat` links are normalized to this webchat session-only form.
-- `channel` — source channel/surface. For external delivery this is passed later to
-  `openclaw message send --channel`.
-- `target` — optional OpenClaw delivery target. For external delivery, this is
-  required and passed later to `openclaw message send --target`. For
-  webchat/internal session-only links, omit `target`; the daemon does not call
-  `openclaw message send` and uses OpenClaw channel-last delivery for the agent turn.
+
+`channel` and `target` are not part of the public handoff URL. Transcript
+mirroring is best-effort: the daemon derives a safe Discord target from the
+session key when possible; otherwise it skips transcript posting and still runs
+the agent turn with `--channel last --deliver`.
 
 Hash wins over query when both are present. All values must be URL-encoded.
 
 Examples:
 
 ```
-https://clawkietalkie.app/voice#host=H&session=S&channel=discord&target=channel%3A123
-https://clawkietalkie.app/voice#host=H&session=S&channel=webchat
+https://clawkietalkie.app/voice#host=H&session=agent%3Amain%3Amain
+https://clawkietalkie.app/voice#host=H&session=agent%3Amain%3Adiscord%3Achannel%3A123
 ```
 
 ### Why hash-first?
 
-Hash fragments are not transmitted on HTTP requests, so `host`, `session`,
-`channel`, and `target` never reach a web server. The browser parses them
+Hash fragments are not transmitted on HTTP requests, so `host` and `session`
+never reach a web server. The browser parses them
 locally and sends them only over the encrypted WebRTC DataChannel to the
 local daemon.
 
@@ -139,15 +138,15 @@ sequenceDiagram
   participant OC as OpenClaw Session
 
   User->>Agent: switch to voice
-  Agent-->>User: /voice#host=H&session=A&channel=C&target=T
+  Agent-->>User: /voice#host=H&session=A
   User->>Phone: open link
-  Phone->>Host: rendezvous.join(session A, optional delivery C/T)
+  Phone->>Host: rendezvous.join(session A)
   Host->>Host: derive room H:A
   Host-->>Phone: rendezvous.accept(room H:A)
   Phone->>Room: WebRTC voice connection
   User->>Phone: speak
-  Room->>OC: openclaw message send --channel C --target T (external only)
-  Room->>OC: openclaw agent --session-id A
+  Room->>OC: best-effort transcript mirror from session-derived target
+  Room->>OC: openclaw agent --session-id A --channel last --deliver
   OC-->>Room: reply text
   Room-->>Phone: TTS audio
 ```
@@ -155,9 +154,6 @@ sequenceDiagram
 ## Failure states
 
 - `rendezvous.error("missing_session")` — required session field missing.
-- `rendezvous.error("invalid_delivery")` — external delivery is partial;
-  use either no delivery, webchat delivery without target, or a complete
-  external channel+target.
 - `rendezvous.error("too_many_voice_sessions")` — daemon at active-room cap
   and the requested session is not already active.
 - `rendezvous.error("unexpected_message")` — first message on the rendezvous

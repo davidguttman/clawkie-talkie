@@ -1,7 +1,7 @@
 // VoiceSession state + runtime.
 //
 // Pure state core (`createVoiceSessionState`) is the part Vitest covers
-// — it captures the room/session/optional-delivery binding for one active voice
+// — it captures the room/session binding for one active voice
 // session and tracks the in-flight-turn / closed flags.
 //
 // The runtime class (`VoiceSession`) owns the live WebRTC peer, STT,

@@ -2,7 +2,7 @@
 // daemon. Mirror of `daemon/src/protocol.ts`; the protocol test pins
 // the two copies to the same serialized shape.
 //
-// Routing (sessionId, delivery channel/target) is bound once at
+// Routing (sessionId) is bound once at
 // rendezvous when the per-session voice room is created. `stt.start`
 // no longer carries routing per turn. Voice settings (legacy voice id plus
 // canonical TTS provider/model/voice selection) flow over the voice room:

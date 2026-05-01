@@ -146,12 +146,6 @@ describe('runChat OpenClaw CLI integration', () => {
   it('posts transcripts to the Discord target derived from the session key when threadId is absent', async () => {
     execMock
       .mockResolvedValueOnce({ stdout: 'transcript posted\n', stderr: '' })
-      .mockResolvedValueOnce({
-        stdout: JSON.stringify([
-          { key: 'agent:main:discord:channel-1:thread-2', sessionId: 'stored-session-id' },
-        ]),
-        stderr: '',
-      })
       .mockResolvedValueOnce({ stdout: jsonAgentStdout('reply'), stderr: '' });
 
     await runChat('from session route', {
@@ -165,6 +159,7 @@ describe('runChat OpenClaw CLI integration', () => {
     expect(transcriptCommand).toContain(
       `"--message" ${JSON.stringify('> from session route')}`,
     );
+    expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "sessions"'))).toBe(false);
   });
 
   it('targets the Discord reply thread when threadId is provided', async () => {
@@ -362,15 +357,9 @@ describe('runChat OpenClaw CLI integration', () => {
     ).rejects.toMatchObject({ code: 'openclaw_media_reply_unavailable' });
   });
 
-  it('resolves OpenClaw session keys to stored session ids before agent runs', async () => {
+  it('passes exact OpenClaw session keys directly to the agent turn', async () => {
     execMock
       .mockResolvedValueOnce({ stdout: 'transcript posted\n', stderr: '' })
-      .mockResolvedValueOnce({
-        stdout: JSON.stringify([
-          { key: 'agent:main:discord:channel:thread-1', sessionId: 'stored-session-id' },
-        ]),
-        stderr: '',
-      })
       .mockResolvedValueOnce({ stdout: jsonAgentStdout('reply'), stderr: '' });
 
     await runChat('hello', {
@@ -378,10 +367,10 @@ describe('runChat OpenClaw CLI integration', () => {
       deliver: true,
     });
 
-    expect(execMock.mock.calls[1]?.[0]).toContain('openclaw "sessions"');
+    expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "sessions"'))).toBe(false);
     const agentCommand = findAgentCommand();
     expect(agentCommand).toContain('"--agent" "main"');
-    expect(agentCommand).toContain('"--session-id" "stored-session-id"');
+    expect(agentCommand).toContain('"--session-id" "agent:main:discord:channel:thread-1"');
     expect(agentCommand).toContain('"--channel" "last"');
     expect(agentCommand).toContain('"--deliver"');
   });
@@ -419,47 +408,19 @@ describe('runChat OpenClaw CLI integration', () => {
     expect(agentCommand).toContain('"-m"');
   });
 
-  it('keeps exact session resolution for webchat when an explicit external delivery is present', async () => {
-    execMock
-      .mockResolvedValueOnce({ stdout: 'transcript posted\n', stderr: '' })
-      .mockResolvedValueOnce({
-        stdout: JSON.stringify([
-          { key: 'agent:main:webchat', sessionId: 'base-session-id' },
-          { key: 'agent:main:webchat:browser-1', sessionId: 'concrete-session-id' },
-        ]),
-        stderr: '',
-      })
-      .mockResolvedValueOnce({ stdout: jsonAgentStdout('reply'), stderr: '' });
+  it('does not resolve or derive non-webchat base keys before agent delivery', async () => {
+    execMock.mockResolvedValueOnce({ stdout: jsonAgentStdout('reply'), stderr: '' });
 
     await runChat('hello', {
-      sessionId: 'agent:main:webchat',
-      delivery: { channel: 'discord', target: 'channel:thread-1' },
+      sessionId: 'agent:main:discord',
+      deliver: true,
     });
 
-    expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "sessions"'))).toBe(true);
+    expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "sessions"'))).toBe(false);
     const agentCommand = findAgentCommand();
-    expect(agentCommand).toContain('"--agent" "main"');
-    expect(agentCommand).toContain('"--session-id" "base-session-id"');
+    expect(agentCommand).toContain('"--session-id" "agent:main:discord"');
     expect(agentCommand).toContain('"--channel" "last"');
     expect(agentCommand).toContain('"--deliver"');
-  });
-
-  it('does not apply webchat fallback to non-webchat base keys', async () => {
-    execMock.mockResolvedValueOnce({
-      stdout: JSON.stringify([
-        { key: 'agent:main:discord:channel:thread-1', sessionId: 'discord-session-id' },
-      ]),
-      stderr: '',
-    });
-
-    await expect(
-      runChat('hello', {
-        sessionId: 'agent:main:discord',
-        deliver: true,
-      }),
-    ).rejects.toMatchObject({ code: 'openclaw_session_not_found' });
-
-    expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "agent"'))).toBe(false);
   });
 
   it('classifies missing OpenClaw CLI as unavailable', async () => {

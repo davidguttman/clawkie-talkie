@@ -2,7 +2,7 @@
 // daemon. Mirror of `client/src/voice/protocol.ts`; the protocol test
 // pins both copies to the same serialized shape.
 //
-// Routing (sessionId, delivery channel/target) is bound once at
+// Routing (sessionId) is bound once at
 // rendezvous when the per-session voice room is created. `stt.start`
 // no longer carries routing per turn. Voice settings (legacy voice id plus
 // canonical TTS provider/model/voice selection) flow over the voice room:
@@ -136,14 +136,12 @@ export type RendezvousDeliveryValidation =
   | { ok: false; message: 'invalid_delivery' };
 
 export function validateRendezvousDelivery(
-  delivery: Partial<DeliveryTarget> | null | undefined,
+  _delivery: Partial<DeliveryTarget> | null | undefined,
 ): RendezvousDeliveryValidation {
-  if (!delivery) return { ok: true };
-  const channel = delivery.channel?.trim() ?? '';
-  const target = delivery.target?.trim() ?? '';
-  if (channel === 'webchat') return { ok: true };
-  if (channel && target) return { ok: true, delivery: { channel, target } };
-  return { ok: false, message: 'invalid_delivery' };
+  // Delivery channel/target can only come from legacy URL handoff params.
+  // New handoffs are session-bound, so ignore any supplied delivery and let
+  // chatSession derive safe transcript mirroring from the session key.
+  return { ok: true };
 }
 
 export const daemonToPhone = {

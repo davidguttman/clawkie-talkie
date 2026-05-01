@@ -2,7 +2,7 @@
 // rendezvous/control room named after `opts.peerId` (`host=H` in the
 // public URL). Browsers join that room, send a single
 // `rendezvous.join` control message with the OpenClaw `sessionId` and
-// optional generic delivery `{channel,target}`, and receive back a
+// receive back a
 // `rendezvous.accept` containing a deterministic per-session
 // `roomId = makeVoiceRoomId({ host, session })`. The browser then
 // re-connects to the voice room. Actual voice/STT/TTS/OpenClaw turns
