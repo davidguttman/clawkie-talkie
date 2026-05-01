@@ -29,23 +29,23 @@ I can’t create the voice link: Clawkie Talkie is not installed/configured for 
 - Do **not** call the Clawkie daemon to create or mutate handoff state.
 - Do **not** create or reference handoff IDs, opaque tokens, registries, TTLs, claims, revocations, or lookup tables.
 - Do **not** guess the current session id/key.
-- Do **not** put `channel` or `target` in the public URL.
+- Do **not** guess routing fields. Include `channel`, `target`, and `accountId` only when they are visible in trusted runtime/session context.
 - Use the configured `CLAWKIE_DAEMON_HOST_ID` exactly as installed.
 - If a required field is unavailable, say exactly which field is missing.
 
 ## URL contract
 
-Generate only this public handoff URL:
+Generate only this public handoff URL shape:
 
 ```txt
-https://clawkietalkie.app/voice#host=<host>&session=<sessionId>
+https://clawkietalkie.app/voice#host=<host>&session=<sessionId>&sessionKey=<sessionKey>&channel=<channel>&target=<target>&accountId=<accountId>
 ```
 
-Prefer the actual OpenClaw sessionId UUID for `session` when it is visible. If it is not visible, use the exact current session key/id. For OpenClaw web chat, `session=agent:main:main` is valid only as that fallback. Do not add URL `channel` or `target` params.
+`sessionKey`, `channel`, `target`, and `accountId` are optional. Include them when they are visible in trusted runtime/session context. `session` remains the session identity passed to `openclaw agent --session-id`; `channel` + `target` are used only for transcript mirroring via `openclaw message send`; `sessionKey` is routing metadata/debug/fallback. If only a session key is visible, put that key in `session` and omit `sessionKey`. For OpenClaw web chat, `session=agent:main:main` is valid only as that fallback. If `target` is included, include `channel` too.
 
-Use hash args so `sessionId` and UUID-like values are not sent to web servers. Query params are compatibility-only; do not generate them unless explicitly requested.
+Use hash args so `sessionId`, session keys, and UUID-like values are not sent to web servers. Query params are compatibility-only; do not generate them unless explicitly requested.
 
-`/voice` is the public handoff entrypoint. The browser joins the configured daemon rendezvous room first. The daemon derives the per-session voice room deterministically from `host + session` and runs the OpenClaw agent turn with `--channel last --deliver`. UUID session ids are opaque and do not encode transcript mirror targets; any transcript mirroring is legacy best-effort only for older colon-style Discord session keys where a target can be safely extracted.
+`/voice` is the public handoff entrypoint. The browser joins the configured daemon rendezvous room first. The daemon derives the per-session voice room deterministically from `host + session` and runs the OpenClaw agent turn with `--channel last --deliver`. Transcript mirroring is daemon-side best-effort: explicit `channel` + `target` are preferred when supplied, `sessionKey` can provide provider/routing context, colon-style Discord `session` values can be used directly, and UUID session ids may still be reverse-resolved through OpenClaw's session list as a fallback for older links.
 
 ## Required values
 
@@ -61,13 +61,13 @@ I can’t create the voice link: missing Clawkie host ID.
 
 ### `session`
 
-Use the current OpenClaw agent **actual sessionId** when it is visible in trusted runtime/session context. This is the safe transcript/session id, e.g. a UUID-like value:
+Use the current OpenClaw agent **actual sessionId** for `session` when it is visible in trusted runtime/session context. This is the safe transcript/session id, e.g. a UUID-like value:
 
 ```txt
 c44d9502-ce71-46b1-9b15-5d548004544a
 ```
 
-If both a session key and an actual sessionId are visible, prefer the actual sessionId. Do not choose the colon-style key just because it is human-readable.
+If both a session key and an actual sessionId are visible, put the actual sessionId in `session` and the exact colon-style key in `sessionKey`. Do not choose the colon-style key as `session` just because it is human-readable.
 
 If the actual sessionId is not visible, use an exact current OpenClaw session key from trusted runtime/session context, e.g.:
 
@@ -108,6 +108,12 @@ URL-encode all hash values. Equivalent JS:
 const params = new URLSearchParams();
 params.set('host', CLAWKIE_DAEMON_HOST_ID);
 params.set('session', sessionId);
+if (sessionKey) params.set('sessionKey', sessionKey);
+if (channel && target) {
+  params.set('channel', channel);
+  params.set('target', target);
+}
+if (accountId) params.set('accountId', accountId);
 const url = `https://clawkietalkie.app/voice#${params.toString()}`;
 ```
 
@@ -125,7 +131,7 @@ If blocked:
 I can’t create the voice link: missing <field>.
 ```
 
-## Example: current sessionId UUID
+## Example: current sessionId UUID plus visible session key
 
 Given current actual sessionId:
 
@@ -133,10 +139,16 @@ Given current actual sessionId:
 c44d9502-ce71-46b1-9b15-5d548004544a
 ```
 
+and current session key:
+
+```txt
+agent:main:discord:channel:1498020851298209852
+```
+
 reply:
 
 ```txt
-Switch to voice: https://clawkietalkie.app/voice#host=<configured-host>&session=c44d9502-ce71-46b1-9b15-5d548004544a
+Switch to voice: https://clawkietalkie.app/voice#host=<configured-host>&session=c44d9502-ce71-46b1-9b15-5d548004544a&sessionKey=agent%3Amain%3Adiscord%3Achannel%3A1498020851298209852&channel=discord&target=channel%3A1498020851298209852
 ```
 
 Replace `<configured-host>` with `CLAWKIE_DAEMON_HOST_ID` from the installed copy of this skill.

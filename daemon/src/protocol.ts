@@ -3,7 +3,9 @@
 // pins both copies to the same serialized shape.
 //
 // Routing (sessionId) is bound once at
-// rendezvous when the per-session voice room is created. `stt.start`
+// rendezvous when the per-session voice room is created. Optional sessionKey
+// is routing metadata for transcript mirroring only; it is never used as the
+// agent session identity. `stt.start`
 // no longer carries routing per turn. Voice settings (legacy voice id plus
 // canonical TTS provider/model/voice selection) flow over the voice room:
 // an initial value is included in
@@ -13,11 +15,16 @@
 
 export interface DeliveryTarget {
   channel: string;
-  target?: string;
+  target: string;
+  accountId?: string;
 }
 
 export interface RendezvousJoinInput {
   sessionId: string;
+  sessionKey?: string;
+  channel?: string;
+  target?: string;
+  accountId?: string;
   delivery?: DeliveryTarget;
 }
 
@@ -78,6 +85,10 @@ export type PhoneToDaemon =
   | {
       t: 'rendezvous.join';
       sessionId: string;
+      sessionKey?: string;
+      channel?: string;
+      target?: string;
+      accountId?: string;
       delivery?: DeliveryTarget;
       settings?: VoiceSettings;
     }
@@ -111,6 +122,10 @@ export const phoneToDaemon = {
   rendezvousJoin: (input: RendezvousJoinInput & { settings?: VoiceSettings }): PhoneToDaemon => ({
     t: 'rendezvous.join',
     sessionId: input.sessionId,
+    ...(input.sessionKey ? { sessionKey: input.sessionKey } : {}),
+    ...(input.channel ? { channel: input.channel } : {}),
+    ...(input.target ? { target: input.target } : {}),
+    ...(input.accountId ? { accountId: input.accountId } : {}),
     ...(input.delivery ? { delivery: input.delivery } : {}),
     ...(input.settings ? { settings: input.settings } : {}),
   }),
@@ -129,6 +144,7 @@ export const phoneToDaemon = {
 export interface MirroredDeliveryTarget {
   channel: string;
   target: string;
+  accountId?: string;
 }
 
 export type RendezvousDeliveryValidation =
@@ -138,13 +154,12 @@ export type RendezvousDeliveryValidation =
 export function validateRendezvousDelivery(
   _delivery: Partial<DeliveryTarget> | null | undefined,
 ): RendezvousDeliveryValidation {
-  // Delivery channel/target can only come from legacy URL handoff params.
-  // New handoffs are session-bound and may use opaque UUID session ids, so
-  // ignore supplied delivery. The agent reply path is always
-  // `openclaw agent --session-id <session> --channel last --deliver`; any
-  // transcript mirror is legacy best-effort for key-shaped sessions only.
+  // Public handoff routing uses top-level channel/target/accountId metadata.
+  // Legacy nested delivery payloads are ignored so they cannot block the
+  // session-bound agent turn.
   return { ok: true };
 }
+
 
 export const daemonToPhone = {
   rendezvousAccept: (roomId: string): DaemonToPhone => ({ t: 'rendezvous.accept', roomId }),

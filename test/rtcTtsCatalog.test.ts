@@ -237,6 +237,35 @@ describe('RtcProvider TTS catalog and settings sync', () => {
     ]);
   });
 
+  it('includes sessionKey, channel, target, and accountId routing metadata in the initial rendezvous.join', async () => {
+    await renderRtcProvider({
+      rendezvous: {
+        sessionId: 'session-uuid',
+        sessionKey: 'agent:main:discord:channel:thread-1',
+        channel: 'discord',
+        target: 'channel:thread-1',
+        accountId: 'acct-1',
+      },
+      voiceSettings: { voice: '', tts: {}, stt: {} },
+    });
+    const rendezvousClient = rtcMock.instances[0];
+
+    await act(async () => {
+      rendezvousClient.emitStatus('open');
+    });
+
+    expect(sentOf(rendezvousClient, 'rendezvous.join')).toEqual([
+      {
+        t: 'rendezvous.join',
+        sessionId: 'session-uuid',
+        sessionKey: 'agent:main:discord:channel:thread-1',
+        channel: 'discord',
+        target: 'channel:thread-1',
+        accountId: 'acct-1',
+      },
+    ]);
+  });
+
   it('requests the TTS catalog once after the voice room opens', async () => {
     await renderRtcProvider();
     const rendezvousClient = rtcMock.instances[0];

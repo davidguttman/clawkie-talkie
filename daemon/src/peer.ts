@@ -278,6 +278,10 @@ export class DaemonPeer {
       return;
     }
     const sessionId = (msg.sessionId ?? '').trim();
+    const sessionKey = (msg.sessionKey ?? '').trim();
+    const channel = (msg.channel ?? '').trim();
+    const target = (msg.target ?? '').trim();
+    const accountId = (msg.accountId ?? '').trim();
     const deliveryValidation = validateRendezvousDelivery(msg.delivery);
     if (!sessionId) {
       this.sendRendezvous(rp, daemonToPhone.rendezvousError('missing_session'));
@@ -308,6 +312,10 @@ export class DaemonPeer {
         hostPeerId: this.opts.peerId,
         roomId,
         sessionId,
+        ...(sessionKey ? { sessionKey } : {}),
+        ...(channel ? { channel } : {}),
+        ...(target ? { target } : {}),
+        ...(accountId ? { accountId } : {}),
         delivery,
         ...(msg.settings ? { voiceSettings: msg.settings } : {}),
         onClose: (id) => {

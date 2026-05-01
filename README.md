@@ -96,15 +96,17 @@ The interface is intentionally walkie-talkie shaped: one obvious start/stop cont
 A real handoff URL looks like this:
 
 ```text
-https://clawkietalkie.app/voice#host=<daemon>&session=<openclaw-session>
+https://clawkietalkie.app/voice#host=<daemon>&session=<openclaw-session-id>&sessionKey=<openclaw-session-key>&channel=<channel>&target=<message-target>
 ```
 
 Those values are not a login token or a credential bundle. They are routing information:
 
 - `host` — the stable local daemon ID on the user's machine.
-- `session` — the OpenClaw session to continue. Prefer the actual OpenClaw sessionId UUID; fall back to the exact current session key only if the UUID is unavailable. `channel` and `target` are not URL params.
+- `session` — the OpenClaw session to continue. Prefer the actual OpenClaw sessionId UUID; fall back to the exact current session key only if the UUID is unavailable.
+- `sessionKey` — optional exact OpenClaw session key, included when `session` is the UUID and used only for transcript mirroring / provider derivation / debug.
+- `target` — optional explicit current message target, included when visible and used only for transcript mirroring.
 
-The values live in the URL hash so they are parsed by the browser locally instead of being sent to the web server as normal request parameters.
+`channel` is not a URL param. The values live in the URL hash so they are parsed by the browser locally instead of being sent to the web server as normal request parameters.
 
 ## The privacy boundary
 
@@ -219,7 +221,7 @@ Check that the daemon is running and that the `host` value in the link matches t
 
 ### The page says the session is bad
 
-The handoff link is missing routing fields or was built for the wrong context. All handoff links need `host` and `session`; prefer the actual OpenClaw sessionId UUID, use an exact session key only as fallback, and never include URL `channel`/`target`.
+The handoff link is missing routing fields or was built for the wrong context. All handoff links need `host` and `session`; prefer the actual OpenClaw sessionId UUID, include `sessionKey`, `channel`, and `target` when those exact runtime values are also visible, use an exact session key in `session` only as fallback, and include `channel`/`target` when visible for transcript mirroring.
 
 ### Voice records but no reply comes back
 
