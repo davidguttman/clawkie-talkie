@@ -61,7 +61,15 @@ I can’t create the voice link: missing Clawkie host ID.
 
 ### `session`
 
-Use the current OpenClaw agent session key/id. For external channels, use an exact session key/id from trusted runtime/session context, e.g.:
+Use the current OpenClaw agent **actual sessionId** when it is visible in trusted runtime/session context. This is the safe transcript/session id, e.g. a UUID-like value:
+
+```txt
+c44d9502-ce71-46b1-9b15-5d548004544a
+```
+
+If both a session key and an actual sessionId are visible, prefer the actual sessionId. Do not choose the colon-style key just because it is human-readable.
+
+If the actual sessionId is not visible, use an exact current OpenClaw session key from trusted runtime/session context, e.g.:
 
 ```txt
 agent:main:discord:channel:1498020851298209852
@@ -75,7 +83,7 @@ For internal web chat, the canonical main-session key is:
 agent:main:main
 ```
 
-Use `agent:main:main` only when the trusted runtime context is actually the OpenClaw web chat / internal main session. Do not use it as a fallback for Discord, Slack, WhatsApp, Telegram, ACP, subagent, custom, direct-message, or bound sessions.
+Use `agent:main:main` only when the trusted runtime context is actually the OpenClaw web chat / internal main session and no actual sessionId is visible. Do not use it as a fallback for Discord, Slack, WhatsApp, Telegram, ACP, subagent, custom, direct-message, or bound sessions.
 
 If no exact current session key/id is visible, do not invent one. For ordinary main group/channel sessions only, deriving from OpenClaw’s session-key convention is acceptable when all parts are certain:
 
