@@ -18,6 +18,9 @@
 // etc.) and never embed the agent reply text.
 
 import { exec } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { ChatOptions, ChatResult } from './types.js';
 
@@ -43,6 +46,7 @@ const RAW_STT_GUIDANCE =
 
 const WEBCHAT_BASE_SESSION_KEY = 'agent:main:webchat';
 const WEBCHAT_LAST_SESSION_KEY = 'agent:main:main';
+const SESSION_KEY_PREFIX = 'agent:';
 
 // Helper: send a debug/activity notification to the Discord thread
 async function sendDebugNotification(
@@ -170,7 +174,7 @@ async function runOpenClawTurn(opts: {
   signal?: AbortSignal;
 }): Promise<string> {
   const message = buildAgentTurnMessage(opts.userText);
-  const sessionId = normalizeOpenClawAgentSessionId(opts.sessionId);
+  const sessionId = await resolveOpenClawAgentSessionId(opts.sessionId);
   const args = [
     'agent',
     '--agent', 'main',
@@ -253,10 +257,129 @@ function extractReplyFromAgentJson(response: OpenClawAgentJsonResponse): {
   return { text: textParts.join('\n').trim(), hasMedia };
 }
 
-function normalizeOpenClawAgentSessionId(sessionId: string): string {
+export async function resolveOpenClawAgentSessionId(sessionId: string): Promise<string> {
+  const requested = normalizeOpenClawAgentSessionKey(sessionId);
+  if (isSafeOpenClawSessionId(requested)) return requested;
+  if (!requested.startsWith(SESSION_KEY_PREFIX)) {
+    throw new ChatError('openclaw_session_invalid', 'openclaw_session_invalid');
+  }
+
+  const resolved = await resolveSessionKeyFromOpenClawStore(requested);
+  if (resolved) return resolved;
+
+  throw new ChatError(
+    `OpenClaw session key not found in sessions store: ${requested}`,
+    'openclaw_session_unresolved',
+  );
+}
+
+function normalizeOpenClawAgentSessionKey(sessionId: string): string {
   const requested = sessionId.trim();
   if (!requested) throw new ChatError('openclaw_session_missing', 'openclaw_session_missing');
   return requested === WEBCHAT_BASE_SESSION_KEY ? WEBCHAT_LAST_SESSION_KEY : requested;
+}
+
+function isSafeOpenClawSessionId(sessionId: string): boolean {
+  return /^[A-Za-z0-9._-]+$/.test(sessionId) && !sessionId.includes(':');
+}
+
+async function resolveSessionKeyFromOpenClawStore(sessionKey: string): Promise<string | undefined> {
+  const agent = sessionKey.split(':')[1]?.trim();
+  if (!agent) return undefined;
+
+  const sessionsPath = join(getOpenClawStateDir(), 'agents', agent, 'sessions', 'sessions.json');
+  let raw: string;
+  try {
+    raw = await readFile(sessionsPath, 'utf8');
+  } catch (err) {
+    if (isMissingFileError(err)) return undefined;
+    throw new ChatError('openclaw_sessions_store_unreadable', 'openclaw_sessions_store_unreadable');
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new ChatError('openclaw_sessions_store_invalid', 'openclaw_sessions_store_invalid');
+  }
+
+  const record = findSessionRecord(parsed, sessionKey);
+  const storedSessionId = readStoredSessionId(record);
+  if (!storedSessionId) return undefined;
+  if (!isSafeOpenClawSessionId(storedSessionId)) {
+    throw new ChatError('openclaw_sessions_store_invalid', 'openclaw_sessions_store_invalid');
+  }
+  return storedSessionId;
+}
+
+function getOpenClawStateDir(): string {
+  const stateDir = normalizeEnvValue(process.env.OPENCLAW_STATE_DIR);
+  if (stateDir) return resolveUserPath(stateDir);
+
+  const configPath = normalizeEnvValue(process.env.OPENCLAW_CONFIG_PATH);
+  if (configPath) return dirname(resolveUserPath(configPath));
+
+  return join(getRequiredOpenClawHomeDir(), '.openclaw');
+}
+
+function resolveUserPath(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return trimmed;
+  if (trimmed.startsWith('~')) {
+    return resolve(trimmed.replace(/^~(?=$|[\\/])/, getRequiredOpenClawHomeDir()));
+  }
+  return resolve(trimmed);
+}
+
+function getRequiredOpenClawHomeDir(): string {
+  return getEffectiveOpenClawHomeDir() ?? resolve(process.cwd());
+}
+
+function getEffectiveOpenClawHomeDir(): string | undefined {
+  const explicitHome = normalizeEnvValue(process.env.OPENCLAW_HOME);
+  if (explicitHome) {
+    if (explicitHome === '~' || explicitHome.startsWith('~/') || explicitHome.startsWith('~\\')) {
+      const osHome = getEffectiveOsHomeDir();
+      return osHome ? resolve(explicitHome.replace(/^~(?=$|[\\/])/, osHome)) : undefined;
+    }
+    return resolve(explicitHome);
+  }
+  return getEffectiveOsHomeDir();
+}
+
+function getEffectiveOsHomeDir(): string | undefined {
+  const home = normalizeEnvValue(process.env.HOME) ?? normalizeEnvValue(process.env.USERPROFILE) ?? normalizeEnvValue(homedir());
+  return home ? resolve(home) : undefined;
+}
+
+function normalizeEnvValue(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed === 'undefined' || trimmed === 'null') return undefined;
+  return trimmed;
+}
+
+function findSessionRecord(store: unknown, sessionKey: string): unknown {
+  if (!store || typeof store !== 'object') return undefined;
+  if (Array.isArray(store)) {
+    return store.find((entry) => readStringProperty(entry, 'key') === sessionKey || readStringProperty(entry, 'sessionKey') === sessionKey);
+  }
+  return (store as Record<string, unknown>)[sessionKey];
+}
+
+function readStoredSessionId(record: unknown): string | undefined {
+  const value = readStringProperty(record, 'sessionId') ?? readStringProperty(record, 'id');
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
+function readStringProperty(value: unknown, key: string): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const property = (value as Record<string, unknown>)[key];
+  return typeof property === 'string' ? property : undefined;
+}
+
+function isMissingFileError(err: unknown): boolean {
+  return Boolean(err && typeof err === 'object' && (err as { code?: unknown }).code === 'ENOENT');
 }
 
 export function buildAgentTurnMessage(userText: string): string {

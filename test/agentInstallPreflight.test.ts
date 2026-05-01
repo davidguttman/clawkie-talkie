@@ -13,6 +13,13 @@ function successfulCommand(calls: Array<{ command: string; args: string[] }>) {
   return async (command: string, args: string[]) => {
     calls.push({ command, args });
     if (command === 'npm') return { exitCode: 0, stdout: '10.9.0\n', stderr: '' };
+    if (command === 'sh' && args.join(' ').includes('command -v ffmpeg')) {
+      return { exitCode: 0, stdout: '/usr/bin/ffmpeg\n', stderr: '' };
+    }
+    if (command === 'ffmpeg') {
+      await writeFile(args.at(-1) ?? '', Buffer.from([1, 2]));
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }
     if (args[0] === '--version') return { exitCode: 0, stdout: 'openclaw 2026.4.25\n', stderr: '' };
     if (args[0] === 'status') return { exitCode: 0, stdout: JSON.stringify({ ok: true, gateway: { ok: true } }), stderr: '' };
     if (args.includes('--output')) {
@@ -38,8 +45,10 @@ describe('agent install preflight', () => {
         'npm-presence',
         'openclaw-version',
         'openclaw-status',
+        'ffmpeg-presence',
         'openclaw-infer-stt',
         'openclaw-infer-tts',
+        'ffmpeg-tts-decode',
       ]);
       expect(calls.some((call) => call.args[0] === 'agent')).toBe(false);
     } finally {
@@ -119,6 +128,56 @@ describe('agent install preflight', () => {
     expect(calls.find((call) => call.args[0] === 'status')?.args).toEqual(['status', '--json']);
   });
 
+  it('fails before infer checks when ffmpeg is missing from PATH', async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const result = await runPreflight({ skipInfer: false }, {
+      runCommand: async (command: string, args: string[]) => {
+        calls.push({ command, args });
+        if (command === 'npm') return { exitCode: 0, stdout: '10.9.0\n', stderr: '' };
+        if (args[0] === '--version') return { exitCode: 0, stdout: 'openclaw 2026.4.25\n', stderr: '' };
+        if (args[0] === 'status') return { exitCode: 0, stdout: JSON.stringify({ ok: true, gateway: { ok: true } }), stderr: '' };
+        if (command === 'sh' && args.join(' ').includes('command -v ffmpeg')) {
+          return { exitCode: 127, stdout: '', stderr: 'ffmpeg: not found' };
+        }
+        return successfulCommand([])(command, args);
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.checks.at(-1)).toMatchObject({
+      name: 'ffmpeg-presence',
+      status: 'fail',
+      code: 'ffmpeg_unavailable',
+    });
+    expect(calls.some((call) => call.args[0] === 'infer')).toBe(false);
+  });
+
+  it('fails when ffmpeg cannot decode OpenClaw TTS output to daemon PCM', async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'clawkie-preflight-test-'));
+    const calls: Array<{ command: string; args: string[] }> = [];
+    try {
+      const result = await runPreflight({ skipInfer: false }, {
+        tempRoot,
+        runCommand: async (command: string, args: string[]) => {
+          calls.push({ command, args });
+          if (command === 'ffmpeg') return { exitCode: 1, stdout: '', stderr: 'Invalid data found when processing input' };
+          return successfulCommand([])(command, args);
+        },
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.checks.at(-1)).toMatchObject({
+        name: 'ffmpeg-tts-decode',
+        status: 'fail',
+        code: 'ffmpeg_tts_decode_failed',
+      });
+      const decodeCall = calls.find((call) => call.command === 'ffmpeg');
+      expect(decodeCall?.args).toEqual(expect.arrayContaining(['-f', 's16le', '-acodec', 'pcm_s16le', '-ac', '1', '-ar', '24000']));
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it('fails when a parseable openclaw --version is below 2026.4.25', async () => {
     const calls: Array<{ command: string; args: string[] }> = [];
     const result = await runPreflight({ skipInfer: true }, {
@@ -147,6 +206,11 @@ describe('agent install preflight', () => {
         tempRoot,
         runCommand: async (command: string, args: string[]) => {
           if (command === 'npm') return { exitCode: 0, stdout: '10.9.0\n', stderr: '' };
+          if (command === 'sh' && args.join(' ').includes('command -v ffmpeg')) return { exitCode: 0, stdout: '/usr/bin/ffmpeg\n', stderr: '' };
+          if (command === 'ffmpeg') {
+            await writeFile(args.at(-1) ?? '', Buffer.from([1, 2]));
+            return { exitCode: 0, stdout: '', stderr: '' };
+          }
           if (args[0] === '--version') return { exitCode: 0, stdout: 'openclaw 2026.4.25\n', stderr: '' };
           if (args[0] === 'status') return { exitCode: 0, stdout: JSON.stringify({ ok: true, gateway: { ok: true } }), stderr: '' };
           if (args.includes('--output')) {

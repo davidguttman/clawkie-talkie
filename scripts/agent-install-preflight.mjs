@@ -136,13 +136,18 @@ export async function runPreflight(options = {}, deps = {}) {
   if (status.status !== 'pass') return summarize(checks);
 
   if (!options.skipInfer) {
+    const ffmpeg = await runFfmpegPresenceCheck({ runCommand, cwd });
+    checks.push(ffmpeg);
+    if (ffmpeg.status !== 'pass') return summarize(checks);
+
     const stt = await runSttCheck({ runCommand, tempRoot, cwd, language: options.sttLanguage });
     checks.push(stt);
     if (stt.status !== 'pass') return summarize(checks);
 
-    const tts = await runTtsCheck({ runCommand, tempRoot, cwd });
-    checks.push(tts);
-    if (tts.status !== 'pass') return summarize(checks);
+    const ttsChecks = await runTtsChecks({ runCommand, tempRoot, cwd });
+    checks.push(...ttsChecks);
+    const failedTtsCheck = ttsChecks.find((check) => check.status !== 'pass');
+    if (failedTtsCheck) return summarize(checks);
   }
 
   const agentTurnRequested = Boolean(options.agentTurn || sessionId);
@@ -304,11 +309,24 @@ async function runSttCheck({ runCommand, tempRoot, cwd, language }) {
   }
 }
 
-async function runTtsCheck({ runCommand, tempRoot, cwd }) {
+async function runFfmpegPresenceCheck({ runCommand, cwd }) {
+  return await runNamedCheck('ffmpeg-presence', {
+    command: 'sh',
+    args: ['-lc', 'command -v ffmpeg'],
+    timeoutMs: 10_000,
+    cwd,
+    runCommand,
+    validate: (result) => String(result.stdout ?? '').trim() ? null : 'command -v ffmpeg succeeded but printed no path.',
+    classify: classifyFfmpegFailure,
+  });
+}
+
+async function runTtsChecks({ runCommand, tempRoot, cwd }) {
   const dir = await mkdtemp(join(tempRoot, 'clawkie-preflight-tts-'));
   try {
     const outputPath = join(dir, 'reply.mp3');
-    return await runNamedCheck('openclaw-infer-tts', {
+    const pcmPath = join(dir, 'reply.pcm');
+    const tts = await runNamedCheck('openclaw-infer-tts', {
       command: 'openclaw',
       args: [
         'infer', 'tts', 'convert',
@@ -327,6 +345,39 @@ async function runTtsCheck({ runCommand, tempRoot, cwd }) {
         return info.size > 0 ? null : 'TTS command created an empty output file.';
       },
     });
+    if (tts.status !== 'pass') return [tts];
+
+    const decode = await runNamedCheck('ffmpeg-tts-decode', {
+      command: 'ffmpeg',
+      args: [
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-i',
+        outputPath,
+        '-f',
+        's16le',
+        '-acodec',
+        'pcm_s16le',
+        '-ac',
+        '1',
+        '-ar',
+        '24000',
+        '-y',
+        pcmPath,
+      ],
+      timeoutMs: CHECK_TIMEOUT_MS,
+      cwd,
+      runCommand,
+      validate: async () => {
+        if (!existsSync(pcmPath)) return 'ffmpeg decode succeeded but did not create the PCM output file.';
+        const info = await stat(pcmPath);
+        return info.size > 0 ? null : 'ffmpeg decode created an empty PCM output file.';
+      },
+      classify: classifyFfmpegDecodeFailure,
+    });
+
+    return [tts, decode];
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -399,6 +450,22 @@ function validateInferJson(result) {
   } catch {
     return 'Infer command succeeded but stdout was not valid JSON.';
   }
+}
+
+function classifyFfmpegFailure(text) {
+  const raw = String(text ?? '');
+  if (/\b(command not found|not found|enoent)\b/i.test(raw)) {
+    return { code: 'ffmpeg_unavailable', summary: 'ffmpeg is unavailable on PATH for this user/service environment.' };
+  }
+  return { code: 'ffmpeg_failed', summary: 'ffmpeg availability check failed.' };
+}
+
+function classifyFfmpegDecodeFailure(text) {
+  const raw = String(text ?? '');
+  if (/\b(command not found|not found|enoent)\b/i.test(raw)) {
+    return { code: 'ffmpeg_unavailable', summary: 'ffmpeg is unavailable on PATH for this user/service environment.' };
+  }
+  return { code: 'ffmpeg_tts_decode_failed', summary: 'ffmpeg could not decode the OpenClaw TTS output to daemon PCM16LE audio.' };
 }
 
 export function classifyPreflightFailure(text) {

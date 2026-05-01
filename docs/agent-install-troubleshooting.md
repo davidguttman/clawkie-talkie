@@ -22,11 +22,11 @@ Check daemon logs. Common causes:
 
 1. **Service-context gateway/auth failure** — the daemon's systemd/launchd environment cannot reach or authenticate to the OpenClaw gateway even though the installer's interactive shell can.
 2. **Scope upgrade pending approval** — the daemon's `openclaw agent --json` path (and especially explicit `--deliver` checks) can be treated as a new device connection requesting more permissions than currently approved.
-3. **Invalid session ID for the surface** — prefer the actual OpenClaw sessionId UUID. `agent:main:main` is valid only as a web-chat fallback, and is wrong for Discord/Slack/etc.; external channels need the UUID or their exact external session key.
+3. **Invalid session key/id for the surface** — `agent:main:main` is valid in a handoff URL for OpenClaw web chat, but wrong for Discord/Slack/etc.; external handoff URLs need their exact external session key. Manual `openclaw agent --session-id` checks need the stored session id/UUID resolved from that key.
 
 ## Fix scope approval / device auth
 
-If daemon logs or `npm run agent-install-preflight -- --require-agent-turn --session-id "$SESSION_ID"` show `scope upgrade pending approval`, `pending device approval`, or a pending `openclaw devices approve <requestId>` command:
+If daemon logs or `npm run agent-install-preflight -- --require-agent-turn --session-id "$OPENCLAW_STORED_SESSION_ID"` show `scope upgrade pending approval`, `pending device approval`, or a pending `openclaw devices approve <requestId>` command:
 
 1. Tell the user to open their OpenClaw dashboard. The URL is typically the gateway address with port 18789, for example:
 
@@ -46,28 +46,28 @@ Then rerun the agent-turn check/preflight in [`agent-install-verification.md`](a
 
 ## Verify session ID in handoff URLs
 
-The handoff URL must include a real session ID/key in the `session` parameter.
+The handoff URL must include a real session key in the `session` parameter. This URL value may contain colons, for example `agent:main:discord:...`; the daemon resolves it to the stored OpenClaw session id/UUID before it calls `openclaw agent --session-id`. Do not pass a colon-containing URL session key directly to `openclaw agent --session-id` during manual CLI testing.
 
-Valid actual sessionId example:
+Valid external-channel example:
 
 ```text
-https://clawkietalkie.app/voice#host=<peer-id>&session=c44d9502-ce71-46b1-9b15-5d548004544a
+https://clawkietalkie.app/voice#host=<peer-id>&session=agent%3Amain%3Adiscord%3Achannel%3A1498020851298209852
 ```
 
-If the URL contains `session=agent%3Amain%3Amain` for Discord/Slack/etc., `session=agent%3Amain%3Awebchat`, or any URL `channel`/`target` parameter, the `clawkie-voice-handoff` skill is not resolving the current conversation correctly. A colon-style external session key is acceptable only when the actual OpenClaw sessionId UUID is not visible.
+If the URL contains `session=agent%3Amain%3Amain` for Discord/Slack/etc., `session=agent%3Amain%3Awebchat`, or any URL `channel`/`target` parameter, the `clawkie-voice-handoff` skill is not resolving the current conversation correctly.
 
 Verify:
 
 1. The skill is installed and `INSTALLED = true`.
 2. The skill's `CLAWKIE_DAEMON_HOST_ID` matches the daemon's `DAEMON_PEER_ID`.
-3. The current session has a valid actual sessionId UUID or fallback session key that the skill can read.
+3. The current session has a valid session key that the skill can read.
 
 ## Verify daemon service can run the agent turn
 
 Before reporting success, verify one of these:
 
 - Preferred: complete a real phone voice smoke test. Logs must show STT, `[chat] running OpenClaw turn`, successful agent reply, TTS conversion, and no fatal `openclaw_gateway_unavailable`.
-- If no phone is available: run the same `openclaw agent --agent main --session-id <exact-session> --channel last --json --timeout 60 -m <smoke-message>` command from the same OS user and environment shape that the service uses. Add `--deliver` only when intentionally testing delivery.
+- If no phone is available: resolve the handoff session key through the OpenClaw state dir (`OPENCLAW_STATE_DIR`, else `dirname(OPENCLAW_CONFIG_PATH)`, else `<OPENCLAW_HOME-or-home>/.openclaw`), then run `openclaw agent --agent main --session-id <stored-session-id-or-uuid> --channel last --json --timeout 60 -m <smoke-message>` from the same OS user and environment shape that the service uses. Add `--deliver` only when intentionally testing delivery.
 
 For systemd installs, do not assume the interactive shell environment is equivalent. Inspect the user service environment and fix missing `OPENCLAW_*`, auth, `PATH`, or gateway settings before claiming success.
 

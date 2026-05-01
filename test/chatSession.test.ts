@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const execMock = vi.hoisted(() => {
   const fn = vi.fn();
@@ -16,6 +19,7 @@ import {
   classifyOpenClawError,
   deriveDiscordMessageTarget,
   quoteTranscript,
+  resolveOpenClawAgentSessionId,
   runChat,
 } from '../daemon/src/chatSession';
 
@@ -28,6 +32,50 @@ function jsonAgentStdout(text: string, mediaUrls: string[] = []): string {
     },
   }) + '\n';
 }
+
+
+const OPENCLAW_ENV_KEYS = ['OPENCLAW_HOME', 'OPENCLAW_STATE_DIR', 'OPENCLAW_CONFIG_PATH', 'HOME', 'USERPROFILE'] as const;
+const ORIGINAL_OPENCLAW_ENV = Object.fromEntries(OPENCLAW_ENV_KEYS.map((key) => [key, process.env[key]]));
+
+async function writeOpenClawSessionStore(
+  stateDir: string,
+  agent: string,
+  sessions: Record<string, { sessionId: string }>,
+) {
+  const sessionsDir = join(stateDir, 'agents', agent, 'sessions');
+  await mkdir(sessionsDir, { recursive: true });
+  await writeFile(join(sessionsDir, 'sessions.json'), JSON.stringify(sessions, null, 2));
+}
+
+async function withOpenClawSessionStore(
+  agent: string,
+  sessions: Record<string, { sessionId: string }>,
+  fn: () => Promise<void>,
+) {
+  const root = await mkdtemp(join(tmpdir(), 'clawkie-openclaw-state-'));
+  await writeOpenClawSessionStore(root, agent, sessions);
+  process.env.OPENCLAW_STATE_DIR = root;
+  delete process.env.OPENCLAW_CONFIG_PATH;
+  delete process.env.OPENCLAW_HOME;
+  try {
+    await fn();
+  } finally {
+    restoreOpenClawEnv();
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+function restoreOpenClawEnv() {
+  for (const key of OPENCLAW_ENV_KEYS) {
+    const value = ORIGINAL_OPENCLAW_ENV[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}
+
+afterEach(() => {
+  restoreOpenClawEnv();
+});
 
 function mockExecRoutingAgentTo(stdoutForAgent: string) {
   execMock.mockImplementation((cmd) => {
@@ -63,7 +111,7 @@ describe('runChat OpenClaw CLI integration', () => {
     });
 
     const result = await runChat('hi', {
-      sessionId: 'agent:main:main',
+      sessionId: 'session-1',
       deliver: true,
     });
 
@@ -88,7 +136,7 @@ describe('runChat OpenClaw CLI integration', () => {
 
     await expect(
       runChat('hi', {
-        sessionId: 'agent:main:main',
+        sessionId: 'session-1',
         deliver: true,
       }),
     ).rejects.toMatchObject({ code: 'openclaw_reply_unparseable' });
@@ -113,7 +161,7 @@ describe('runChat OpenClaw CLI integration', () => {
     });
 
     const result = await runChat('hi', {
-      sessionId: 'agent:main:main',
+      sessionId: 'session-1',
       deliver: true,
     });
 
@@ -143,23 +191,27 @@ describe('runChat OpenClaw CLI integration', () => {
     expect(agentCallIndex).toBeGreaterThan(0);
   });
 
-  it('legacy best-effort posts transcripts to a Discord target derived from a colon-style session key when threadId is absent', async () => {
-    execMock
-      .mockResolvedValueOnce({ stdout: 'transcript posted\n', stderr: '' })
-      .mockResolvedValueOnce({ stdout: jsonAgentStdout('reply'), stderr: '' });
+  it('posts transcripts to the Discord target derived from the session key when threadId is absent', async () => {
+    await withOpenClawSessionStore('main', {
+      'agent:main:discord:channel-1:thread-2': { sessionId: '019e0000-0000-7000-8000-000000000005' },
+    }, async () => {
+      execMock
+        .mockResolvedValueOnce({ stdout: 'transcript posted\n', stderr: '' })
+        .mockResolvedValueOnce({ stdout: jsonAgentStdout('reply'), stderr: '' });
 
-    await runChat('from session route', {
-      sessionId: 'agent:main:discord:channel-1:thread-2',
-      deliver: true,
+      await runChat('from session route', {
+        sessionId: 'agent:main:discord:channel-1:thread-2',
+        deliver: true,
+      });
+
+      const transcriptCommand = String(execMock.mock.calls[0]?.[0]);
+      expect(transcriptCommand).toContain('openclaw "message" "send"');
+      expect(transcriptCommand).toContain('"--target" "channel:thread-2"');
+      expect(transcriptCommand).toContain(
+        `"--message" ${JSON.stringify('> from session route')}`,
+      );
+      expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "sessions"'))).toBe(false);
     });
-
-    const transcriptCommand = String(execMock.mock.calls[0]?.[0]);
-    expect(transcriptCommand).toContain('openclaw "message" "send"');
-    expect(transcriptCommand).toContain('"--target" "channel:thread-2"');
-    expect(transcriptCommand).toContain(
-      `"--message" ${JSON.stringify('> from session route')}`,
-    );
-    expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "sessions"'))).toBe(false);
   });
 
   it('targets the Discord reply thread when threadId is provided', async () => {
@@ -318,33 +370,21 @@ describe('runChat OpenClaw CLI integration', () => {
     }
   });
 
-  it('runs UUID session turns without deriving or requiring a transcript target', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    try {
-      mockExecRoutingAgentTo(jsonAgentStdout('plain reply'));
+  it('runs the turn even when no Discord target can be derived (no reply re-send)', async () => {
+    mockExecRoutingAgentTo(jsonAgentStdout('plain reply'));
 
-      const result = await runChat('hi', {
-        sessionId: 'c44d9502-ce71-46b1-9b15-5d548004544a',
-        deliver: true,
-      });
+    const result = await runChat('hi', {
+      sessionId: 'session-1',
+      deliver: true,
+    });
 
-      expect(result.text).toBe('plain reply');
+    expect(result.text).toBe('plain reply');
 
-      const sendCommands = execMock.mock.calls
-        .map(([cmd]) => String(cmd))
-        .filter((cmd) => cmd.includes('openclaw "message" "send"'));
-      // UUID session IDs are opaque; no transcript mirror is attempted and
-      // assistant delivery stays on `openclaw agent --channel last --deliver`.
-      expect(sendCommands).toHaveLength(0);
-      expect(errorSpy).not.toHaveBeenCalled();
-
-      const agentCommand = findAgentCommand();
-      expect(agentCommand).toContain('"--session-id" "c44d9502-ce71-46b1-9b15-5d548004544a"');
-      expect(agentCommand).toContain('"--channel" "last"');
-      expect(agentCommand).toContain('"--deliver"');
-    } finally {
-      errorSpy.mockRestore();
-    }
+    const sendCommands = execMock.mock.calls
+      .map(([cmd]) => String(cmd))
+      .filter((cmd) => cmd.includes('openclaw "message" "send"'));
+    // No transcript (no Discord target) and no explicit reply send.
+    expect(sendCommands).toHaveLength(0);
   });
 
   it('returns spoken reply text from mixed JSON payloads (text + media) without surfacing media URLs', async () => {
@@ -369,70 +409,150 @@ describe('runChat OpenClaw CLI integration', () => {
     ).rejects.toMatchObject({ code: 'openclaw_media_reply_unavailable' });
   });
 
-  it('passes exact OpenClaw session keys directly to the agent turn', async () => {
-    execMock
-      .mockResolvedValueOnce({ stdout: 'transcript posted\n', stderr: '' })
-      .mockResolvedValueOnce({ stdout: jsonAgentStdout('reply'), stderr: '' });
+  it('resolves Discord session keys to the stored OpenClaw UUID before agent delivery', async () => {
+    await withOpenClawSessionStore('main', {
+      'agent:main:discord:channel:thread-1': { sessionId: '019e0000-0000-7000-8000-000000000001' },
+    }, async () => {
+      execMock
+        .mockResolvedValueOnce({ stdout: 'transcript posted\n', stderr: '' })
+        .mockResolvedValueOnce({ stdout: jsonAgentStdout('reply'), stderr: '' });
 
-    await runChat('hello', {
-      sessionId: 'agent:main:discord:channel:thread-1',
-      deliver: true,
+      await runChat('hello', {
+        sessionId: 'agent:main:discord:channel:thread-1',
+        deliver: true,
+      });
+
+      expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "sessions"'))).toBe(false);
+      const agentCommand = findAgentCommand();
+      expect(agentCommand).toContain('"--agent" "main"');
+      expect(agentCommand).toContain('"--session-id" "019e0000-0000-7000-8000-000000000001"');
+      expect(agentCommand).not.toContain('"--session-id" "agent:main:discord:channel:thread-1"');
+      expect(agentCommand).toContain('"--channel" "last"');
+      expect(agentCommand).toContain('"--deliver"');
     });
-
-    expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "sessions"'))).toBe(false);
-    const agentCommand = findAgentCommand();
-    expect(agentCommand).toContain('"--agent" "main"');
-    expect(agentCommand).toContain('"--session-id" "agent:main:discord:channel:thread-1"');
-    expect(agentCommand).toContain('"--channel" "last"');
-    expect(agentCommand).toContain('"--deliver"');
   });
 
-  it('runs session-only webchat through OpenClaw channel last delivery', async () => {
-    execMock.mockResolvedValueOnce({ stdout: jsonAgentStdout('reply'), stderr: '' });
+  it('resolves session-only webchat keys through the OpenClaw sessions store', async () => {
+    await withOpenClawSessionStore('main', {
+      'agent:main:main': { sessionId: '019e0000-0000-7000-8000-000000000002' },
+    }, async () => {
+      execMock.mockResolvedValueOnce({ stdout: jsonAgentStdout('reply'), stderr: '' });
 
-    await runChat('hello', {
-      sessionId: 'agent:main:main',
-      deliver: true,
+      await runChat('hello', {
+        sessionId: 'agent:main:main',
+        deliver: true,
+      });
+
+      expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "sessions"'))).toBe(false);
+      expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "message" "send"'))).toBe(false);
+      const agentCommand = findAgentCommand();
+      expect(agentCommand).toContain('"--agent" "main"');
+      expect(agentCommand).toContain('"--session-id" "019e0000-0000-7000-8000-000000000002"');
+      expect(agentCommand).toContain('"--channel" "last"');
+      expect(agentCommand).toContain('"--deliver"');
+      expect(agentCommand).toContain('"-m"');
     });
-
-    expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "sessions"'))).toBe(false);
-    expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "message" "send"'))).toBe(false);
-    const agentCommand = findAgentCommand();
-    expect(agentCommand).toContain('"--agent" "main"');
-    expect(agentCommand).toContain('"--session-id" "agent:main:main"');
-    expect(agentCommand).toContain('"--channel" "last"');
-    expect(agentCommand).toContain('"--deliver"');
-    expect(agentCommand).toContain('"-m"');
   });
 
-  it('normalizes legacy webchat base links to the channel-last webchat session', async () => {
-    execMock.mockResolvedValueOnce({ stdout: jsonAgentStdout('reply'), stderr: '' });
+  it('normalizes legacy webchat base links before resolving the stored OpenClaw UUID', async () => {
+    await withOpenClawSessionStore('main', {
+      'agent:main:main': { sessionId: '019e0000-0000-7000-8000-000000000003' },
+    }, async () => {
+      execMock.mockResolvedValueOnce({ stdout: jsonAgentStdout('reply'), stderr: '' });
 
-    await runChat('hello', {
-      sessionId: 'agent:main:webchat',
-      deliver: true,
+      await runChat('hello', {
+        sessionId: 'agent:main:webchat',
+        deliver: true,
+      });
+
+      const agentCommand = findAgentCommand();
+      expect(agentCommand).toContain('"--session-id" "019e0000-0000-7000-8000-000000000003"');
+      expect(agentCommand).not.toContain('agent:main:main');
+      expect(agentCommand).toContain('"--channel" "last"');
+      expect(agentCommand).toContain('"--deliver"');
+      expect(agentCommand).toContain('"-m"');
     });
-
-    const agentCommand = findAgentCommand();
-    expect(agentCommand).toContain('"--session-id" "agent:main:main"');
-    expect(agentCommand).toContain('"--channel" "last"');
-    expect(agentCommand).toContain('"--deliver"');
-    expect(agentCommand).toContain('"-m"');
   });
 
-  it('does not resolve or derive non-webchat base keys before agent delivery', async () => {
-    execMock.mockResolvedValueOnce({ stdout: jsonAgentStdout('reply'), stderr: '' });
+  it('resolves session keys from OPENCLAW_STATE_DIR, expanding ~ against the effective home', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'clawkie-openclaw-home-'));
+    try {
+      await writeOpenClawSessionStore(join(home, 'custom-state'), 'main', {
+        'agent:main:main': { sessionId: '019e0000-0000-7000-8000-000000000006' },
+      });
+      process.env.OPENCLAW_HOME = home;
+      process.env.OPENCLAW_STATE_DIR = '~/custom-state';
+      delete process.env.OPENCLAW_CONFIG_PATH;
 
-    await runChat('hello', {
-      sessionId: 'agent:main:discord',
-      deliver: true,
+      await expect(resolveOpenClawAgentSessionId('agent:main:main')).resolves.toBe(
+        '019e0000-0000-7000-8000-000000000006',
+      );
+    } finally {
+      restoreOpenClawEnv();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves session keys from the OPENCLAW_CONFIG_PATH directory when state dir is unset', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'clawkie-openclaw-config-home-'));
+    try {
+      await writeOpenClawSessionStore(join(home, 'config-dir'), 'main', {
+        'agent:main:main': { sessionId: '019e0000-0000-7000-8000-000000000007' },
+      });
+      process.env.OPENCLAW_HOME = home;
+      delete process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_CONFIG_PATH = '~/config-dir/openclaw.json';
+
+      await expect(resolveOpenClawAgentSessionId('agent:main:main')).resolves.toBe(
+        '019e0000-0000-7000-8000-000000000007',
+      );
+    } finally {
+      restoreOpenClawEnv();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it('treats OPENCLAW_HOME as the home directory, not the state directory', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'clawkie-openclaw-effective-home-'));
+    try {
+      await writeOpenClawSessionStore(join(home, '.openclaw'), 'main', {
+        'agent:main:main': { sessionId: '019e0000-0000-7000-8000-000000000008' },
+      });
+      await writeOpenClawSessionStore(home, 'main', {
+        'agent:main:main': { sessionId: '019e0000-0000-7000-8000-000000000009' },
+      });
+      process.env.OPENCLAW_HOME = home;
+      delete process.env.OPENCLAW_STATE_DIR;
+      delete process.env.OPENCLAW_CONFIG_PATH;
+
+      await expect(resolveOpenClawAgentSessionId('agent:main:main')).resolves.toBe(
+        '019e0000-0000-7000-8000-000000000008',
+      );
+    } finally {
+      restoreOpenClawEnv();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves safe stored UUID/session-id passthrough without reading the sessions store', async () => {
+    await expect(resolveOpenClawAgentSessionId('019e0000-0000-7000-8000-000000000004')).resolves.toBe(
+      '019e0000-0000-7000-8000-000000000004',
+    );
+  });
+
+  it('fails unresolved colon-containing session keys instead of passing them to --session-id', async () => {
+    await withOpenClawSessionStore('main', {}, async () => {
+      execMock.mockResolvedValueOnce({ stdout: jsonAgentStdout('reply'), stderr: '' });
+
+      await expect(
+        runChat('hello', {
+          sessionId: 'agent:main:discord',
+          deliver: true,
+        }),
+      ).rejects.toMatchObject({ code: 'openclaw_session_unresolved' });
+
+      expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "agent"'))).toBe(false);
     });
-
-    expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "sessions"'))).toBe(false);
-    const agentCommand = findAgentCommand();
-    expect(agentCommand).toContain('"--session-id" "agent:main:discord"');
-    expect(agentCommand).toContain('"--channel" "last"');
-    expect(agentCommand).toContain('"--deliver"');
   });
 
   it('classifies missing OpenClaw CLI as unavailable', async () => {
@@ -587,7 +707,7 @@ describe('Discord transcript formatting and target derivation', () => {
     expect(quoteTranscript('one\ntwo')).toBe('> one\n> two');
   });
 
-  it('uses explicit threadId before legacy session-derived IDs', () => {
+  it('uses explicit threadId before session-derived IDs', () => {
     expect(
       deriveDiscordMessageTarget({
         threadId: 'explicit-thread',
@@ -596,7 +716,7 @@ describe('Discord transcript formatting and target derivation', () => {
     ).toBe('explicit-thread');
   });
 
-  it('derives the most specific Discord ID from legacy colon-style agent session keys', () => {
+  it('derives the most specific Discord ID from agent session keys', () => {
     expect(
       deriveDiscordMessageTarget({
         sessionId: 'agent:main:discord:channel-1:thread-2',
@@ -607,14 +727,6 @@ describe('Discord transcript formatting and target derivation', () => {
         sessionId: 'agent:main:discord:channel:1497851727846576159',
       }),
     ).toBe('1497851727846576159');
-  });
-
-  it('does not derive a Discord target from UUID session ids', () => {
-    expect(
-      deriveDiscordMessageTarget({
-        sessionId: 'c44d9502-ce71-46b1-9b15-5d548004544a',
-      }),
-    ).toBeUndefined();
   });
 });
 

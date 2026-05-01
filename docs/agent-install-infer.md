@@ -97,7 +97,8 @@ printf '\n'
 test -n "$OPENAI_KEY" || { echo "No key entered; cannot configure OpenAI infer" >&2; exit 1; }
 
 # STT/model-provider auth metadata. This does not select or change the default agent LLM.
-openclaw config set models.providers.openai '{"apiKey":"'"$OPENAI_KEY"'"}' --strict-json --merge
+# Current OpenClaw provider metadata requires baseUrl, apiKey, and model entries with id/name.
+openclaw config set models.providers.openai '{"baseUrl":"https://api.openai.com/v1","apiKey":"'"$OPENAI_KEY"'","models":[{"id":"gpt-4o-mini-transcribe","name":"gpt-4o-mini-transcribe"},{"id":"gpt-4o-mini-tts","name":"gpt-4o-mini-tts"}]}' --strict-json --merge
 
 # STT model used by `openclaw infer audio transcribe`.
 openclaw config set tools.media.audio '{"enabled":true,"models":[{"type":"provider","provider":"openai","model":"gpt-4o-mini-transcribe"}]}' --strict-json --merge
