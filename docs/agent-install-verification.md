@@ -9,12 +9,14 @@ Run from the user's shell account that will run the daemon:
 ```bash
 node -v
 npm -v
+command -v ffmpeg
+ffmpeg -version
 command -v openclaw
 openclaw --version || true
 openclaw status --json
 ```
 
-OpenClaw must be 2026.4.25 or newer. If `openclaw` is missing, older, or not configured, stop Clawkie Talkie work and repair OpenClaw first.
+OpenClaw must be 2026.4.25 or newer. If `openclaw` is missing, older, or not configured, stop Clawkie Talkie work and repair OpenClaw first. If `ffmpeg` is missing, install it before daemon verification; OpenClaw TTS can successfully generate an MP3 while the daemon still fails because it cannot decode that MP3 to PCM for WebRTC.
 
 ## Infer verification
 
@@ -26,7 +28,7 @@ From the Clawkie Talkie source directory, the Node preflight can run the status 
 npm run agent-install-preflight
 ```
 
-This checks Node/npm, `openclaw --version`, `openclaw status --json`, `openclaw infer audio transcribe`, and `openclaw infer tts convert`. Passing infer checks prove only STT/TTS readiness; they do not prove the daemon can run an agent reply.
+This checks Node/npm, `openclaw --version`, `openclaw status --json`, `openclaw infer audio transcribe`, and `openclaw infer tts convert`. Passing infer checks prove only STT/TTS readiness; they do not prove the daemon can run an agent reply or decode TTS audio. Also verify `ffmpeg` is available to the daemon service user.
 
 ## Manual daemon verification
 
@@ -149,6 +151,7 @@ Report only non-secret facts:
 - Whether `.env` exists and contains `DAEMON_PEER_ID`
 - Whether `DAEMON_PEER_ID` is stable/configured, without printing it unless the user explicitly asks
 - OpenClaw infer config present for `audio transcribe` and `tts convert`
+- `ffmpeg` installed and available to the daemon service user
 - `openclaw infer audio providers`, `tts providers`, `tts voices`, and smoke-test results
 - Persistence method installed: launchd or systemd user service
 - Service status/log evidence, including proof the persistent daemon service can run an OpenClaw agent turn without `openclaw_gateway_unavailable`
