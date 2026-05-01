@@ -26,7 +26,7 @@ Never ask the user to paste provider API keys into chat. Never print keys in log
 ## Hard boundaries
 
 - OpenClaw **2026.4.25 or newer** must work for the same OS user that will run the daemon before Clawkie Talkie install begins.
-- Do not treat an OpenClaw update/repair as optional. Stop Clawkie Talkie work until `openclaw status` works on 2026.4.25+.
+- Do not treat an OpenClaw update/repair as optional. Stop Clawkie Talkie work until `openclaw status --json` works on 2026.4.25+.
 - Do not commit `.env`, generated host IDs, LaunchAgent plists with private paths, or systemd unit files with private paths.
 - Do not paste or print provider API keys.
 - Treat `DAEMON_PEER_ID` as private-ish: not a password, but do not publish it or post it in public channels.
@@ -71,10 +71,10 @@ node -v
 npm -v
 command -v openclaw
 openclaw --version || true
-openclaw status
+openclaw status --json
 ```
 
-Use Node 22 LTS or newer when possible. Stop until OpenClaw 2026.4.25+ is installed and configured.
+Use Node 22 LTS or newer when possible. Stop until OpenClaw 2026.4.25+ is installed and configured. After the source is present, use the repo preflight script for repeatable status/infer/agent-turn checks.
 
 ### 2. Fetch and inspect source
 
@@ -169,5 +169,19 @@ Before reporting success, run every applicable check in [`docs/agent-install-ver
 - real handoff-link smoke test
 - OpenClaw agent-turn smoke test using the real session key
 - final report checklist
+
+Use the Node preflight as the repeatable gate when a real session key is available:
+
+```bash
+npm run agent-install-preflight -- --require-agent-turn --session-id "$SESSION_ID"
+```
+
+By default the preflight agent-turn smoke test does **not** deliver a reply. If you intentionally need to prove channel-last delivery too, opt in explicitly:
+
+```bash
+npm run agent-install-preflight -- --require-agent-turn --session-id "$SESSION_ID" --deliver
+```
+
+`openclaw status --json`, infer STT, and infer TTS can all pass while the daemon still cannot run agent replies because the local gateway is waiting on a scope/device approval. The `--session-id` agent-turn preflight is the relevant gate for that class of issue.
 
 If verification fails, use [`docs/agent-install-troubleshooting.md`](docs/agent-install-troubleshooting.md). Do not report success with unresolved infer, service, handoff URL, device approval, auth, gateway, or session-key failures.

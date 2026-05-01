@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit -p client && tsc --noEmit -p daemon",
     "test": "vitest run",
     "test:watch": "vitest",
-    "daemon": "tsx --env-file-if-exists=.env daemon/src/index.ts"
+    "daemon": "tsx --env-file-if-exists=.env daemon/src/index.ts",
+    "agent-install-preflight": "node scripts/agent-install-preflight.mjs"
   },
   "dependencies": {
     "@echogarden/fvad-wasm": "^0.2.0",

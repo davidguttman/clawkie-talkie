@@ -11,7 +11,7 @@ node -v
 npm -v
 command -v openclaw
 openclaw --version || true
-openclaw status
+openclaw status --json
 ```
 
 OpenClaw must be 2026.4.25 or newer. If `openclaw` is missing, older, or not configured, stop Clawkie Talkie work and repair OpenClaw first.
@@ -19,6 +19,14 @@ OpenClaw must be 2026.4.25 or newer. If `openclaw` is missing, older, or not con
 ## Infer verification
 
 Run the provider inspection and smoke tests from [`agent-install-infer.md`](agent-install-infer.md). Do not continue until both STT and TTS pass.
+
+From the Clawkie Talkie source directory, the Node preflight can run the status + infer smoke checks together:
+
+```bash
+npm run agent-install-preflight
+```
+
+This checks Node/npm, `openclaw --version`, `openclaw status --json`, `openclaw infer audio transcribe`, and `openclaw infer tts convert`. Passing infer checks prove only STT/TTS readiness; they do not prove the daemon can run an agent reply.
 
 ## Manual daemon verification
 
@@ -89,7 +97,7 @@ Inspect the generated URL before trying the phone:
 
 ## Pre-emptive OpenClaw agent-turn check
 
-`openclaw status`, STT, TTS, and daemon rendezvous registration are not enough. The install is not voice-ready until the daemon can run an OpenClaw chat turn without `openclaw_gateway_unavailable`.
+`openclaw status --json`, STT, TTS, and daemon rendezvous registration are not enough. The install is not voice-ready until the daemon can run an OpenClaw chat turn without `openclaw_gateway_unavailable`.
 
 Use the real session key for the current conversation. For OpenClaw web chat, that is normally `agent:main:main`. For external channels, do not use `agent:main:main`; use the exact external session key such as `agent:main:discord:channel:<id>`.
 
@@ -99,25 +107,36 @@ openclaw agent \
   --agent main \
   --session-id "$SESSION_ID" \
   --channel last \
-  --deliver \
   --json \
+  --timeout 60 \
   -m "Clawkie Talkie install smoke test. Reply with exactly: ok"
 ```
 
-This may deliver a small smoke-test reply to the current conversation. That is preferable to reporting a broken voice install as complete.
+Or run the equivalent repo preflight gate:
+
+```bash
+npm run agent-install-preflight -- --require-agent-turn --session-id "$SESSION_ID"
+```
+
+By default this verifies the agent-turn path without passing `--deliver`, so it should not post a smoke-test reply. To intentionally prove delivery into the current conversation, add `--deliver` to the direct command or to the repo preflight:
+
+```bash
+openclaw agent --agent main --session-id "$SESSION_ID" --channel last --deliver --json --timeout 60 -m "Clawkie Talkie install smoke test. Reply with exactly: ok"
+npm run agent-install-preflight -- --require-agent-turn --session-id "$SESSION_ID" --deliver
+```
 
 If there is no real session key available, do not fake one. Mark this verification as blocked until a real `switch to voice` handoff can be generated from a live OpenClaw session.
 
-If you see scope approval prompts in logs, record the request ID, tell the user to approve the pending device/scope request in the OpenClaw dashboard, and report the install as **blocked pending device approval**. After approval, rerun this check and restart the daemon service if needed.
+If this check fails with `scope upgrade pending approval`, `pending device approval`, or a pending `openclaw devices approve <requestId>` command, treat it as an early actionable failure even if `openclaw status --json`, STT, and TTS all passed. The agent reply path needs upgraded local gateway scopes: `operator.pairing`, `operator.read`, and `operator.write`. Record the request ID, tell the user to approve the pending device/scope request in the OpenClaw dashboard or run the shown approval command, and report the install as **blocked pending device approval**. After approval, rerun the agent-turn preflight/check and restart the daemon service if needed.
 
 If you get connection errors, auth errors, gateway errors, or session lookup errors, fix those before proceeding.
 
 ## Persistent daemon agent-turn check
 
-Do not rely only on `openclaw status`, STT, TTS, or a daemon `Waiting for phone…` log line. Verify one of these before reporting success:
+Do not rely only on `openclaw status --json`, STT, TTS, or a daemon `Waiting for phone…` log line. Verify one of these before reporting success:
 
 - Preferred: complete a real phone voice smoke test. Logs must show STT, `[chat] running OpenClaw turn`, a successful agent reply, TTS conversion, and no fatal `openclaw_gateway_unavailable`.
-- If no phone is available: run the same `openclaw agent --agent main --session-id <exact-session> --channel last --deliver --json -m <smoke-message>` command from the same OS user and environment shape that the service uses. For systemd installs, inspect the user service environment and fix missing `OPENCLAW_*`, auth, `PATH`, or gateway settings before claiming success.
+- If no phone is available: run the same `openclaw agent --agent main --session-id <exact-session> --channel last --json --timeout 60 -m <smoke-message>` command from the same OS user and environment shape that the service uses. Add `--deliver` only when intentionally testing channel-last delivery. For systemd installs, inspect the user service environment and fix missing `OPENCLAW_*`, auth, `PATH`, or gateway settings before claiming success.
 
 ## Required final report
 
