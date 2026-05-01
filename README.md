@@ -2,11 +2,11 @@
 
 Push-to-talk voice for thinking out loud into your main OpenClaw session — most often from the car.
 
-The main use case is the drive: a feature, an essay, an app idea, or a stretch of training material you have been working on at the desk, picked back up on the highway. You switch that same OpenClaw thread to voice, hold the line of thought all the way through without being interrupted, and let your main agent push the work forward with full session context. Then, hours later, you reopen the thread on the laptop and read what was said.
+The main use case is the drive: a feature, an essay, an app idea, or a stretch of training material you have been working on at the desk, picked back up on the highway. You switch that same OpenClaw thread to voice, use toggle talk mode to speak through the line of thought all the way through without being interrupted, and let your main agent push the work forward with full session context. Then, hours later, you reopen the thread on the laptop and read what was said.
 
 Clawkie Talkie is not a separate assistant and not a quick-chat app. It is a voice lane into an existing OpenClaw conversation: the same session, the same thread, the same context — built for long-form prompts and long-form replies, not short back-and-forth.
 
-You ask OpenClaw to switch to voice. It gives you a link. You open the link on your phone, press the big button, talk through the whole thought without interruption, release, and hear the agent answer back at length.
+You ask OpenClaw to switch to voice. It gives you a link. You open the link on your phone, press the big button to toggle talk mode, talk through the whole thought without interruption, and hear the agent answer back at length.
 
 The original OpenClaw/Discord thread stays canonical. Your spoken direction is transcribed into that session, the agent responds in that session, and Clawkie Talkie plays the reply back to you. Everything you say and hear in the car is still there in the thread when you sit back down.
 
@@ -60,7 +60,7 @@ Agent install/upgrade/repair flow is documented here:
 
 A lot of the most useful thinking happens away from the desk — and the most useful version of it is not a one-liner. It is a full thought, spoken straight through, while you are driving and nothing else is competing for the keyboard.
 
-Push-to-talk is the point. You hold the floor for as long as you need to: a paragraph, a few minutes, an entire framing for a feature or an essay. The agent does not interrupt, the phone does not interrupt, and you get to land the idea before anyone responds.
+Push-to-talk is the point. You use toggle talk mode to hold the floor for as long as you need to: a paragraph, a few minutes, an entire framing for a feature or an essay. The agent does not interrupt, the phone does not interrupt, and you get to land the idea before anyone responds.
 
 Typical sessions look like:
 
@@ -82,7 +82,7 @@ Clawkie Talkie is for that mode of work. It is not a quick voice chat. It is a v
 2. OpenClaw replies with a Clawkie Talkie link for that exact session.
 3. Open the link in a browser, usually on your phone.
 4. Tap the main button to record.
-5. Talk through the whole thought — a long prompt, a paragraph of direction, a full framing for a feature or essay. Push-to-talk means the floor stays yours until you release it.
+5. Talk through the whole thought — a long prompt, a paragraph of direction, a full framing for a feature or essay. Push-to-talk means the floor stays yours until you tap again.
 6. Watch the live transcript while talking.
 7. Tap stop. The transcript is sent immediately.
 8. OpenClaw answers in the original session, at length, with the session's full context.
