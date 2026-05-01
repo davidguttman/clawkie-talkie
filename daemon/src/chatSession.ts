@@ -3,7 +3,9 @@
 //
 // Two-step turn (same shape as the Rambly OpenClaw thread-linked
 // plugin):
-//   1. Best-effort mirror the user transcript when the target can be derived from the session.
+//   1. Best-effort mirror the user transcript only when an explicit delivery
+//      target is present or a legacy colon-style Discord session key exposes
+//      a safe target. UUID session ids are opaque and do not encode a target.
 //   2. Run `openclaw agent --agent main --session-id <session>
 //      --channel last --deliver -m ...`. The agent receives the full
 //      transcript in its own message payload, so reply generation does not
@@ -77,7 +79,6 @@ async function sendTranscriptMessage(
   }
   const target = deriveDiscordMessageTarget(opts);
   if (!target) {
-    console.error('[openclaw] transcript_post_skipped: missing_discord_target');
     return;
   }
   await sendDiscordMessage(target, quoteTranscript(transcript), signal, 'openclaw_transcript_post_failed');
@@ -158,8 +159,9 @@ export function deriveDiscordMessageTarget(opts: {
 
 // Helper: get assistant reply text. The agent receives the full raw-STT
 // transcript in its own `-m` payload and uses OpenClaw's channel-last
-// delivery path for the assistant reply. Transcript posting is a separate
-// fire-and-observe side effect, not a prerequisite for reply generation.
+// delivery path for the assistant reply. Legacy transcript posting is a
+// separate fire-and-observe side effect, not a prerequisite for reply
+// generation.
 async function runOpenClawTurn(opts: {
   sessionId: string;
   threadId?: string;

@@ -21,7 +21,7 @@ Check daemon logs. Common causes:
 
 1. **Service-context gateway/auth failure** — the daemon's systemd/launchd environment cannot reach or authenticate to the OpenClaw gateway even though the installer's interactive shell can.
 2. **Scope upgrade pending approval** — the daemon's `openclaw agent --json` path (and especially explicit `--deliver` checks) can be treated as a new device connection requesting more permissions than currently approved.
-3. **Invalid session ID for the surface** — `agent:main:main` is valid for OpenClaw web chat, but wrong for Discord/Slack/etc.; external channels need their exact external session key.
+3. **Invalid session ID for the surface** — prefer the actual OpenClaw sessionId UUID. `agent:main:main` is valid only as a web-chat fallback, and is wrong for Discord/Slack/etc.; external channels need the UUID or their exact external session key.
 
 ## Fix scope approval / device auth
 
@@ -47,19 +47,19 @@ Then rerun the agent-turn check/preflight in [`agent-install-verification.md`](a
 
 The handoff URL must include a real session ID/key in the `session` parameter.
 
-Valid external-channel example:
+Valid actual sessionId example:
 
 ```text
-https://clawkietalkie.app/voice#host=<peer-id>&session=agent%3Amain%3Adiscord%3Achannel%3A1498020851298209852
+https://clawkietalkie.app/voice#host=<peer-id>&session=c44d9502-ce71-46b1-9b15-5d548004544a
 ```
 
-If the URL contains `session=agent%3Amain%3Amain` for Discord/Slack/etc., `session=agent%3Amain%3Awebchat`, or any URL `channel`/`target` parameter, the `clawkie-voice-handoff` skill is not resolving the current conversation correctly.
+If the URL contains `session=agent%3Amain%3Amain` for Discord/Slack/etc., `session=agent%3Amain%3Awebchat`, or any URL `channel`/`target` parameter, the `clawkie-voice-handoff` skill is not resolving the current conversation correctly. A colon-style external session key is acceptable only when the actual OpenClaw sessionId UUID is not visible.
 
 Verify:
 
 1. The skill is installed and `INSTALLED = true`.
 2. The skill's `CLAWKIE_DAEMON_HOST_ID` matches the daemon's `DAEMON_PEER_ID`.
-3. The current session has a valid session key that the skill can read.
+3. The current session has a valid actual sessionId UUID or fallback session key that the skill can read.
 
 ## Verify daemon service can run the agent turn
 

@@ -98,7 +98,7 @@ global provider.
 Advanced overrides (rare — leave unset for normal installs):
 
 - `CT_STT_LANGUAGE` — optional language hint passed to `openclaw infer audio transcribe`. Default lets the transcription model auto-detect.
-- `CT_THREAD_ID` — fallback Discord thread ID for transcript/debug posts when the daemon is invoked without a session that derives one. Unrelated to OpenClaw infer/provider configuration.
+- `CT_THREAD_ID` — fallback Discord thread ID for debug posts in local development. Transcript posting is not on the critical path; UUID session ids are opaque and do not encode mirror targets. Unrelated to OpenClaw infer/provider configuration.
 - `CT_CLIENT_ORIGIN` — override the client origin printed in the Join URL. Installed daemons default to `https://clawkietalkie.app`. Unrelated to OpenClaw infer/provider configuration.
 
 Generate the stable daemon ID with Node:

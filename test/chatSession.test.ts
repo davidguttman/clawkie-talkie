@@ -143,7 +143,7 @@ describe('runChat OpenClaw CLI integration', () => {
     expect(agentCallIndex).toBeGreaterThan(0);
   });
 
-  it('posts transcripts to the Discord target derived from the session key when threadId is absent', async () => {
+  it('legacy best-effort posts transcripts to a Discord target derived from a colon-style session key when threadId is absent', async () => {
     execMock
       .mockResolvedValueOnce({ stdout: 'transcript posted\n', stderr: '' })
       .mockResolvedValueOnce({ stdout: jsonAgentStdout('reply'), stderr: '' });
@@ -318,21 +318,33 @@ describe('runChat OpenClaw CLI integration', () => {
     }
   });
 
-  it('runs the turn even when no Discord target can be derived (no reply re-send)', async () => {
-    mockExecRoutingAgentTo(jsonAgentStdout('plain reply'));
+  it('runs UUID session turns without deriving or requiring a transcript target', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      mockExecRoutingAgentTo(jsonAgentStdout('plain reply'));
 
-    const result = await runChat('hi', {
-      sessionId: 'session-1',
-      deliver: true,
-    });
+      const result = await runChat('hi', {
+        sessionId: 'c44d9502-ce71-46b1-9b15-5d548004544a',
+        deliver: true,
+      });
 
-    expect(result.text).toBe('plain reply');
+      expect(result.text).toBe('plain reply');
 
-    const sendCommands = execMock.mock.calls
-      .map(([cmd]) => String(cmd))
-      .filter((cmd) => cmd.includes('openclaw "message" "send"'));
-    // No transcript (no Discord target) and no explicit reply send.
-    expect(sendCommands).toHaveLength(0);
+      const sendCommands = execMock.mock.calls
+        .map(([cmd]) => String(cmd))
+        .filter((cmd) => cmd.includes('openclaw "message" "send"'));
+      // UUID session IDs are opaque; no transcript mirror is attempted and
+      // assistant delivery stays on `openclaw agent --channel last --deliver`.
+      expect(sendCommands).toHaveLength(0);
+      expect(errorSpy).not.toHaveBeenCalled();
+
+      const agentCommand = findAgentCommand();
+      expect(agentCommand).toContain('"--session-id" "c44d9502-ce71-46b1-9b15-5d548004544a"');
+      expect(agentCommand).toContain('"--channel" "last"');
+      expect(agentCommand).toContain('"--deliver"');
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it('returns spoken reply text from mixed JSON payloads (text + media) without surfacing media URLs', async () => {
@@ -575,7 +587,7 @@ describe('Discord transcript formatting and target derivation', () => {
     expect(quoteTranscript('one\ntwo')).toBe('> one\n> two');
   });
 
-  it('uses explicit threadId before session-derived IDs', () => {
+  it('uses explicit threadId before legacy session-derived IDs', () => {
     expect(
       deriveDiscordMessageTarget({
         threadId: 'explicit-thread',
@@ -584,7 +596,7 @@ describe('Discord transcript formatting and target derivation', () => {
     ).toBe('explicit-thread');
   });
 
-  it('derives the most specific Discord ID from agent session keys', () => {
+  it('derives the most specific Discord ID from legacy colon-style agent session keys', () => {
     expect(
       deriveDiscordMessageTarget({
         sessionId: 'agent:main:discord:channel-1:thread-2',
@@ -595,6 +607,14 @@ describe('Discord transcript formatting and target derivation', () => {
         sessionId: 'agent:main:discord:channel:1497851727846576159',
       }),
     ).toBe('1497851727846576159');
+  });
+
+  it('does not derive a Discord target from UUID session ids', () => {
+    expect(
+      deriveDiscordMessageTarget({
+        sessionId: 'c44d9502-ce71-46b1-9b15-5d548004544a',
+      }),
+    ).toBeUndefined();
   });
 });
 

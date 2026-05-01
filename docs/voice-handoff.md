@@ -8,9 +8,9 @@
    current OpenClaw turn — no helper script, no daemon API call, no
    pre-created link record.
 4. User opens the link.
-5. User speaks. Clawkie transcribes, optionally mirrors the transcript into
-   the originating external conversation, runs the OpenClaw session, and speaks
-   the reply back.
+5. User speaks. Clawkie transcribes, runs the OpenClaw session, and speaks
+   the reply back. Transcript mirroring, if any, is legacy best-effort and
+   not part of the critical reply path.
 
 ## Old singleton architecture
 
@@ -31,9 +31,11 @@ turn:
 https://clawkietalkie.app/voice#host=H&session=<sessionId>
 ```
 
-For webchat/internal handoffs, `session=agent:main:main` is valid. For
-external channels, the session must be the exact external session key for the
-current conversation. The public URL must not include `channel` or `target`.
+Prefer the actual OpenClaw `sessionId` UUID for `session` when it is visible.
+If the actual sessionId is unavailable, fall back to the exact current
+OpenClaw session key. For webchat/internal handoffs, `session=agent:main:main`
+is valid only as that fallback. The public URL must not include `channel` or
+`target`.
 
 The browser:
 
@@ -99,24 +101,27 @@ disable that provider instead of falling back to global provider mutation.
 Required handoff args (accepted from hash fragment, then query string):
 
 - `host` — daemon rendezvous/control room id
-- `session` — OpenClaw session key/id, passed later to
-  `openclaw agent --session-id`. For webchat-only handoffs, use
-  `agent:main:main` when no more specific exact key is visible; the daemon runs
-  `openclaw agent --agent main --session-id agent:main:main --channel last --deliver`.
+- `session` — OpenClaw session id/key, passed later to
+  `openclaw agent --session-id`. Prefer the actual OpenClaw sessionId UUID
+  when available; use a session key only when the actual sessionId is not
+  visible. For webchat-only fallback handoffs, use `agent:main:main`; the daemon
+  runs `openclaw agent --agent main --session-id agent:main:main --channel last --deliver`.
   Older `agent:main:webchat` links are normalized to this webchat session-only form.
 
-`channel` and `target` are not part of the public handoff URL. Transcript
-mirroring is best-effort: the daemon derives a safe Discord target from the
-session key when possible; otherwise it skips transcript posting and still runs
-the agent turn with `--channel last --deliver`.
+`channel` and `target` are not part of the public handoff URL. UUID session ids
+are opaque and do not encode Discord/channel targets. The daemon must not
+depend on deriving a transcript mirror target from `session`; it simply runs
+the agent turn with `--channel last --deliver`. Legacy transcript mirroring is
+best-effort only for older colon-style Discord session keys where a target can
+be safely extracted.
 
 Hash wins over query when both are present. All values must be URL-encoded.
 
 Examples:
 
 ```
+https://clawkietalkie.app/voice#host=H&session=c44d9502-ce71-46b1-9b15-5d548004544a
 https://clawkietalkie.app/voice#host=H&session=agent%3Amain%3Amain
-https://clawkietalkie.app/voice#host=H&session=agent%3Amain%3Adiscord%3Achannel%3A123
 ```
 
 ### Why hash-first?
@@ -145,7 +150,7 @@ sequenceDiagram
   Host-->>Phone: rendezvous.accept(room H:A)
   Phone->>Room: WebRTC voice connection
   User->>Phone: speak
-  Room->>OC: best-effort transcript mirror from session-derived target
+  Room->>OC: optional legacy best-effort transcript mirror when A is a key-shaped Discord session
   Room->>OC: openclaw agent --session-id A --channel last --deliver
   OC-->>Room: reply text
   Room-->>Phone: TTS audio

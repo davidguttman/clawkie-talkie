@@ -139,8 +139,10 @@ export function validateRendezvousDelivery(
   _delivery: Partial<DeliveryTarget> | null | undefined,
 ): RendezvousDeliveryValidation {
   // Delivery channel/target can only come from legacy URL handoff params.
-  // New handoffs are session-bound, so ignore any supplied delivery and let
-  // chatSession derive safe transcript mirroring from the session key.
+  // New handoffs are session-bound and may use opaque UUID session ids, so
+  // ignore supplied delivery. The agent reply path is always
+  // `openclaw agent --session-id <session> --channel last --deliver`; any
+  // transcript mirror is legacy best-effort for key-shaped sessions only.
   return { ok: true };
 }
 

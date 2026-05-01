@@ -6,15 +6,16 @@ For end-user Mac/Linux installation, credentials, persistence, verification, and
 
 The daemon subscribes to a rambly-style signaling server (SSE subscribe + HTTP
 POST signal) on a stable UUID room — the `host=H` rendezvous/control room. A
-browser landing on a `/voice#host=H&session=S&channel=C&target=T` link joins
-that rendezvous room first, sends a single `rendezvous.join` message, and is
-told which deterministic per-session voice room (`H:<safeSession>`) to move to.
+browser landing on a `/voice#host=H&session=S` link joins that rendezvous
+room first, sends a single `rendezvous.join` message, and is told which
+deterministic per-session voice room (`H:<safeSession>`) to move to.
 Actual WebRTC voice/STT/TTS/OpenClaw turns happen on the per-session room, so
 multiple OpenClaw sessions on the same daemon do not share a voice lane.
 
 There is no pre-created link table, no random join id, no TTL, no claim or
-revocation step. The agent constructs the URL directly from values already in
-the OpenClaw turn.
+revocation step. The agent constructs the URL directly from values already in the OpenClaw
+turn. `session` should be the actual OpenClaw sessionId UUID when available;
+only fall back to a session key when the UUID is unavailable.
 
 ## One-time install
 
@@ -98,11 +99,12 @@ On startup the daemon prints:
 
 The agent constructs the URL directly:
 
-    https://clawkietalkie.app/voice#host=H&session=<sessionId>&channel=<channel>&target=<target>
+    https://clawkietalkie.app/voice#host=H&session=<sessionId>
 
-Hash args are preferred (so `host`, `session`, `channel`, and `target` are
-never sent to web servers); query params are accepted for compatibility. If a
-key appears in both, the hash wins. All values must be URL-encoded.
+Hash args are preferred (so `host` and `session` are never sent to web
+servers); query params are accepted for compatibility. If a key appears in
+both, the hash wins. All values must be URL-encoded. `channel` and `target`
+are legacy-only and are ignored when supplied in a handoff URL.
 
 ## Signaling
 
@@ -115,12 +117,12 @@ and daemon.
 
 Phone → daemon (rendezvous lane on host room `H`):
 
-- `{"t":"rendezvous.join","sessionId":"…","delivery":{"channel":"…","target":"…"}}`
+- `{"t":"rendezvous.join","sessionId":"…"}`
 
 Daemon → phone (rendezvous lane on host room `H`):
 
 - `{"t":"rendezvous.accept","roomId":"H:<safeSession>"}`
-- `{"t":"rendezvous.error","message":"…"}` — e.g. `missing_session_or_delivery`,
+- `{"t":"rendezvous.error","message":"…"}` — e.g. `missing_session`,
   `too_many_voice_sessions`, `unexpected_message`.
 
 Phone → daemon (voice lane on `H:<safeSession>`):

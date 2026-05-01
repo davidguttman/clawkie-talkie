@@ -28,7 +28,7 @@ I can’t create the voice link: Clawkie Talkie is not installed/configured for 
 - Do **not** call a Clawkie helper just to create the URL.
 - Do **not** call the Clawkie daemon to create or mutate handoff state.
 - Do **not** create or reference handoff IDs, opaque tokens, registries, TTLs, claims, revocations, or lookup tables.
-- Do **not** guess the current session key/id.
+- Do **not** guess the current session id/key.
 - Do **not** put `channel` or `target` in the public URL.
 - Use the configured `CLAWKIE_DAEMON_HOST_ID` exactly as installed.
 - If a required field is unavailable, say exactly which field is missing.
@@ -41,11 +41,11 @@ Generate only this public handoff URL:
 https://clawkietalkie.app/voice#host=<host>&session=<sessionId>
 ```
 
-For OpenClaw web chat, `session=agent:main:main` is valid. For Discord, Slack, WhatsApp, Telegram, ACP, subagent, custom, direct-message, or bound sessions, use the exact external session key/id for the current conversation. Do not add URL `channel` or `target` params.
+Prefer the actual OpenClaw sessionId UUID for `session` when it is visible. If it is not visible, use the exact current session key/id. For OpenClaw web chat, `session=agent:main:main` is valid only as that fallback. Do not add URL `channel` or `target` params.
 
 Use hash args so `sessionId` and UUID-like values are not sent to web servers. Query params are compatibility-only; do not generate them unless explicitly requested.
 
-`/voice` is the public handoff entrypoint. The browser joins the configured daemon rendezvous room first. The daemon derives the per-session voice room deterministically from `host + session`, mirrors the transcript only when it can safely derive a target from the session, and runs the OpenClaw agent turn with `--channel last --deliver`.
+`/voice` is the public handoff entrypoint. The browser joins the configured daemon rendezvous room first. The daemon derives the per-session voice room deterministically from `host + session` and runs the OpenClaw agent turn with `--channel last --deliver`. UUID session ids are opaque and do not encode transcript mirror targets; any transcript mirroring is legacy best-effort only for older colon-style Discord session keys where a target can be safely extracted.
 
 ## Required values
 
@@ -85,7 +85,7 @@ agent:main:main
 
 Use `agent:main:main` only when the trusted runtime context is actually the OpenClaw web chat / internal main session and no actual sessionId is visible. Do not use it as a fallback for Discord, Slack, WhatsApp, Telegram, ACP, subagent, custom, direct-message, or bound sessions.
 
-If no exact current session key/id is visible, do not invent one. For ordinary main group/channel sessions only, deriving from OpenClaw’s session-key convention is acceptable when all parts are certain:
+If no exact current session id/key is visible, do not invent one. For ordinary main group/channel sessions only, deriving a session-key fallback from OpenClaw’s session-key convention is acceptable when all parts are certain:
 
 ```txt
 agent:<agentId>:<channel>:<chat_id>
@@ -125,18 +125,18 @@ If blocked:
 I can’t create the voice link: missing <field>.
 ```
 
-## Example: Discord thread
+## Example: current sessionId UUID
 
-Given current session:
+Given current actual sessionId:
 
 ```txt
-agent:main:discord:channel:1498020851298209852
+c44d9502-ce71-46b1-9b15-5d548004544a
 ```
 
 reply:
 
 ```txt
-Switch to voice: https://clawkietalkie.app/voice#host=<configured-host>&session=agent%3Amain%3Adiscord%3Achannel%3A1498020851298209852
+Switch to voice: https://clawkietalkie.app/voice#host=<configured-host>&session=c44d9502-ce71-46b1-9b15-5d548004544a
 ```
 
 Replace `<configured-host>` with `CLAWKIE_DAEMON_HOST_ID` from the installed copy of this skill.

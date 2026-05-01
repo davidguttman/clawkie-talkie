@@ -167,10 +167,10 @@ Before reporting success, run every applicable check in [`docs/agent-install-ver
 - OpenClaw infer smoke tests
 - installed skill config check
 - real handoff-link smoke test
-- OpenClaw agent-turn smoke test using the real session key
+- OpenClaw agent-turn smoke test using the real session id/key
 - final report checklist
 
-Use the Node preflight as the repeatable gate when a real session key is available:
+Use the Node preflight as the repeatable gate when a real session id/key is available:
 
 ```bash
 npm run agent-install-preflight -- --require-agent-turn --session-id "$SESSION_ID"

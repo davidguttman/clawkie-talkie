@@ -77,11 +77,11 @@ Construct a dry-run handoff URL using the same algorithm as the skill:
 ```js
 const params = new URLSearchParams();
 params.set('host', daemonPeerId);
-params.set('session', 'agent:main:discord:channel:EXAMPLE');
+params.set('session', 'c44d9502-ce71-46b1-9b15-5d548004544a');
 console.log(`https://clawkietalkie.app/voice#${params.toString()}`);
 ```
 
-The dry-run URL must include only `host` and `session` in the hash. It must not include URL `channel` or `target`. For internal/webchat sessions, `session=agent:main:main` is valid. The skill must never emit `agent:main:main` for external channels such as Discord, Slack, or WhatsApp; external channels require the exact external session key.
+The dry-run URL must include only `host` and `session` in the hash. It must not include URL `channel` or `target`. The skill should prefer the actual OpenClaw sessionId UUID when visible. For internal/webchat sessions, `session=agent:main:main` is valid only as a fallback when no actual sessionId is visible. The skill must never emit `agent:main:main` for external channels such as Discord, Slack, or WhatsApp; if no UUID is visible, external channels require the exact external session key.
 
 ## Real handoff-link smoke test
 
@@ -91,15 +91,16 @@ Inspect the generated URL before trying the phone:
 
 - It must use `/voice#` hash args.
 - It must include the configured daemon `host`.
-- For web chat, `session=agent%3Amain%3Amain` is valid.
-- For Discord/Slack/etc., it must include the correct external `session`, not `session=agent%3Amain%3Amain`.
+- Prefer an actual OpenClaw sessionId UUID in `session` when visible.
+- For web chat, `session=agent%3Amain%3Amain` is valid only as fallback when no UUID is visible.
+- For Discord/Slack/etc., it must include the actual UUID or the correct external session key, not `session=agent%3Amain%3Amain`.
 - It must not include URL `channel` or `target`.
 
 ## Pre-emptive OpenClaw agent-turn check
 
 `openclaw status --json`, STT, TTS, and daemon rendezvous registration are not enough. The install is not voice-ready until the daemon can run an OpenClaw chat turn without `openclaw_gateway_unavailable`.
 
-Use the real session key for the current conversation. For OpenClaw web chat, that is normally `agent:main:main`. For external channels, do not use `agent:main:main`; use the exact external session key such as `agent:main:discord:channel:<id>`.
+Use the real session id for the current conversation. Prefer the actual OpenClaw sessionId UUID. If that is unavailable, use the exact session key; for OpenClaw web chat that is normally `agent:main:main`, and for external channels do not use `agent:main:main`—use the exact external session key such as `agent:main:discord:channel:<id>`.
 
 ```bash
 SESSION_ID="<exact-current-session-id-or-key>"
@@ -125,7 +126,7 @@ openclaw agent --agent main --session-id "$SESSION_ID" --channel last --deliver 
 npm run agent-install-preflight -- --require-agent-turn --session-id "$SESSION_ID" --deliver
 ```
 
-If there is no real session key available, do not fake one. Mark this verification as blocked until a real `switch to voice` handoff can be generated from a live OpenClaw session.
+If there is no real session id/key available, do not fake one. Mark this verification as blocked until a real `switch to voice` handoff can be generated from a live OpenClaw session.
 
 If this check fails with `scope upgrade pending approval`, `pending device approval`, or a pending `openclaw devices approve <requestId>` command, treat it as an early actionable failure even if `openclaw status --json`, STT, and TTS all passed. The agent reply path needs upgraded local gateway scopes: `operator.pairing`, `operator.read`, and `operator.write`. Record the request ID, tell the user to approve the pending device/scope request in the OpenClaw dashboard or run the shown approval command, and report the install as **blocked pending device approval**. After approval, rerun the agent-turn preflight/check and restart the daemon service if needed.
 

@@ -102,7 +102,7 @@ https://clawkietalkie.app/voice#host=<daemon>&session=<openclaw-session>
 Those values are not a login token or a credential bundle. They are routing information:
 
 - `host` — the stable local daemon ID on the user's machine.
-- `session` — the OpenClaw session to continue. For external channels, this must be the exact external session key; `channel` and `target` are not URL params.
+- `session` — the OpenClaw session to continue. Prefer the actual OpenClaw sessionId UUID; fall back to the exact current session key only if the UUID is unavailable. `channel` and `target` are not URL params.
 
 The values live in the URL hash so they are parsed by the browser locally instead of being sent to the web server as normal request parameters.
 
@@ -153,7 +153,7 @@ voice room = daemon host + OpenClaw session
 
 That means the same daemon can support multiple OpenClaw sessions without mixing them together. A Discord thread, a webchat session, and another channel can all produce different voice rooms through the same local daemon.
 
-The agent does not call a daemon API to mint a link. It builds the URL directly from already-known OpenClaw context: daemon host ID and session ID.
+The agent does not call a daemon API to mint a link. It builds the URL directly from already-known OpenClaw context: daemon host ID and session ID. The session ID is preferably the actual OpenClaw UUID; colon-style session keys are fallback/legacy inputs and cannot be assumed to exist for every surface.
 
 ## What must already work
 
@@ -219,7 +219,7 @@ Check that the daemon is running and that the `host` value in the link matches t
 
 ### The page says the session is bad
 
-The handoff link is missing routing fields or was built for the wrong context. All handoff links need `host` and `session`; external channels need the exact external session key and no URL `channel`/`target`.
+The handoff link is missing routing fields or was built for the wrong context. All handoff links need `host` and `session`; prefer the actual OpenClaw sessionId UUID, use an exact session key only as fallback, and never include URL `channel`/`target`.
 
 ### Voice records but no reply comes back
 
