@@ -256,6 +256,35 @@ Clawkie Talkie uses the installed `openclaw` CLI for speech-to-text and text-to-
 
 Before daemon verification, make sure the user's durable OpenClaw config (`openclaw.json`) has working providers for both infer surfaces. Do not rely only on shell environment variables unless they are also available to the persistent daemon service.
 
+### Hard boundary: never change the user's agent LLM
+
+This installer is only allowed to configure speech-to-text and text-to-speech. It must never change the user's normal chat/agent LLM selection. In particular:
+
+- Do **not** run `openclaw onboard` as part of this installer. Onboarding can rewrite broader model defaults. Stop and ask the user instead if config-only infer setup is impossible.
+- Do **not** edit, set, merge, remove, or "repair" any of these paths:
+  - `agents.defaults.model`
+  - `agents.defaults.models`
+  - `agents.*.model`
+  - `models.default` or any equivalent default-chat-model field
+- Do **not** switch the main/default agent to OpenAI, xAI, Grok, GPT, Claude, or any other provider while installing Clawkie Talkie. Provider keys used for STT/TTS are not permission to change the agent model.
+- Before making OpenClaw config changes, snapshot the current agent model defaults and verify they are identical afterward. If they changed, revert them before continuing and report the attempted mutation as a failure.
+
+Recommended guardrail commands:
+
+```bash
+openclaw config get agents.defaults --json > /tmp/clawkie-agents-defaults-before.json 2>/dev/null || true
+openclaw config get agents --json > /tmp/clawkie-agents-before.json 2>/dev/null || true
+
+# ...perform only the infer/STT/TTS config commands in this section...
+
+openclaw config get agents.defaults --json > /tmp/clawkie-agents-defaults-after.json 2>/dev/null || true
+openclaw config get agents --json > /tmp/clawkie-agents-after.json 2>/dev/null || true
+diff -u /tmp/clawkie-agents-defaults-before.json /tmp/clawkie-agents-defaults-after.json
+diff -u /tmp/clawkie-agents-before.json /tmp/clawkie-agents-after.json
+```
+
+Those diffs must be empty or explain only unrelated pre-existing timestamp/order noise. Any substantive agent model/default change means the installer failed and must be reverted.
+
 ### If infer is not already working
 
 Do **not** improvise around missing infer support by installing random local speech packages, building `whisper-cpp`, editing protected OpenClaw config files directly, or relying on a no-key TTS provider by itself. Clawkie Talkie needs **both**:
@@ -263,7 +292,7 @@ Do **not** improvise around missing infer support by installing random local spe
 - a working audio transcription provider; and
 - a working text-to-speech provider.
 
-If `openclaw infer audio providers --json` or `openclaw infer tts providers --json` shows no usable provider, the normal repair path is to configure a hosted provider through OpenClaw config, then run the smoke tests. Do not run `openclaw onboard` from this installer unless the installed OpenClaw version explicitly requires an interactive auth flow and config-only setup fails. Onboarding can change broader model defaults; this installer must not change the user's default LLM.
+If `openclaw infer audio providers --json` or `openclaw infer tts providers --json` shows no usable provider, the normal repair path is to configure a hosted provider through OpenClaw config, then run the smoke tests. Do not run `openclaw onboard` from this installer. Onboarding can change broader model defaults, and this installer is not allowed to mutate the user's default LLM. If config-only setup fails and an interactive auth flow appears necessary, stop and ask the user before doing anything that could affect model defaults.
 
 Recommended choices:
 
@@ -272,7 +301,7 @@ Recommended choices:
 
 If the user already has one of these keys, ask which provider they want. Then prompt for the key locally in the terminal with hidden input. The user supplies only the secret; you run the config commands and verification. Do not ask them to paste API keys into chat, do not print keys in logs, and do not commit or write provider credentials into this repo.
 
-These setup snippets intentionally configure only the infer/auth surfaces Clawkie Talkie needs. They do **not** edit `agents.defaults.model` and do **not** change the normal chat/agent model.
+These setup snippets intentionally configure only the infer/auth surfaces Clawkie Talkie needs. They do **not** edit any `agents.*` model/default path and do **not** change the normal chat/agent model.
 
 Important: OpenClaw has separate xAI config surfaces. Do not collapse them into one provider block.
 
@@ -563,6 +592,7 @@ Report only non-secret facts:
 - Skill destination path
 - Skill configured: yes/no
 - Verification commands run
+- Confirmation that agent/default model config was snapshotted before infer config and unchanged afterward
 - Any blockers
 
 Avoid posting the daemon host ID into public/shared chat unless necessary.
