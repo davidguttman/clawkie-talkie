@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   classifyPreflightFailure,
   parseArgs,
   REQUIRED_AGENT_SCOPES,
+  STT_SMOKE_FIXTURE_PATH,
   runPreflight,
 } from '../scripts/agent-install-preflight.mjs';
 
@@ -24,6 +25,9 @@ function successfulCommand(calls: Array<{ command: string; args: string[] }>) {
     if (args[0] === 'status') return { exitCode: 0, stdout: JSON.stringify({ ok: true, gateway: { ok: true } }), stderr: '' };
     if (args.includes('--output')) {
       await writeFile(args[args.indexOf('--output') + 1], Buffer.from([1]));
+    }
+    if (args.includes('transcribe')) {
+      return { exitCode: 0, stdout: JSON.stringify({ ok: true, outputs: [{ text: 'Hi!' }] }), stderr: '' };
     }
     return { exitCode: 0, stdout: JSON.stringify({ ok: true, outputs: [{ text: '' }] }), stderr: '' };
   };
@@ -152,6 +156,111 @@ describe('agent install preflight', () => {
     expect(calls.some((call) => call.args[0] === 'infer')).toBe(false);
   });
 
+  it('transcribes the repo real speech fixture during the STT smoke check regardless of command cwd', async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'clawkie-preflight-test-'));
+    const commandCwd = await mkdtemp(join(tmpdir(), 'clawkie-preflight-cwd-'));
+    const calls: Array<{ command: string; args: string[] }> = [];
+    try {
+      const result = await runPreflight({ skipInfer: false }, {
+        tempRoot,
+        cwd: commandCwd,
+        runCommand: successfulCommand(calls),
+      });
+
+      expect(result.ok).toBe(true);
+      const fixtureInfo = await stat(STT_SMOKE_FIXTURE_PATH);
+      expect(fixtureInfo.isFile()).toBe(true);
+      const sttCall = calls.find((call) => call.args.includes('transcribe'));
+      expect(sttCall?.args).toEqual([
+        'infer',
+        'audio',
+        'transcribe',
+        '--file',
+        STT_SMOKE_FIXTURE_PATH,
+        '--json',
+      ]);
+      expect(sttCall?.args.join(' ')).not.toContain(commandCwd);
+      expect(sttCall?.args.join(' ')).not.toContain('smoke.wav');
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+      await rm(commandCwd, { recursive: true, force: true });
+    }
+  });
+
+  it('fails the STT smoke check when infer returns an empty transcript', async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'clawkie-preflight-test-'));
+    try {
+      const result = await runPreflight({ skipInfer: false }, {
+        tempRoot,
+        runCommand: async (command: string, args: string[]) => {
+          if (args.includes('transcribe')) {
+            return { exitCode: 0, stdout: JSON.stringify({ ok: true, outputs: [{ text: '' }] }), stderr: '' };
+          }
+          return successfulCommand([])(command, args);
+        },
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.checks.at(-1)).toMatchObject({
+        name: 'openclaw-infer-stt',
+        status: 'fail',
+        code: 'invalid_success_output',
+      });
+      expect(result.checks.at(-1)?.summary).toContain('non-empty transcript');
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('fails the STT smoke check when infer returns the wrong non-empty transcript', async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'clawkie-preflight-test-'));
+    try {
+      const result = await runPreflight({ skipInfer: false }, {
+        tempRoot,
+        runCommand: async (command: string, args: string[]) => {
+          if (args.includes('transcribe')) {
+            return { exitCode: 0, stdout: JSON.stringify({ ok: true, outputs: [{ text: 'hello there' }] }), stderr: '' };
+          }
+          return successfulCommand([])(command, args);
+        },
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.checks.at(-1)).toMatchObject({
+        name: 'openclaw-infer-stt',
+        status: 'fail',
+        code: 'invalid_success_output',
+      });
+      expect(result.checks.at(-1)?.summary).toContain('expected fixture text');
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('passes the STT smoke check when any transcript output is a normalized Hi variant', async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'clawkie-preflight-test-'));
+    try {
+      const result = await runPreflight({ skipInfer: false }, {
+        tempRoot,
+        runCommand: async (command: string, args: string[]) => {
+          if (args.includes('transcribe')) {
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify({ ok: true, outputs: [{ text: '' }, { text: ' hi! ' }] }),
+              stderr: '',
+            };
+          }
+          return successfulCommand([])(command, args);
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.checks.find((check) => check.name === 'openclaw-infer-stt')).toMatchObject({ status: 'pass' });
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it('fails when ffmpeg cannot decode OpenClaw TTS output to daemon PCM', async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), 'clawkie-preflight-test-'));
     const calls: Array<{ command: string; args: string[] }> = [];
@@ -222,6 +331,9 @@ describe('agent install preflight', () => {
               stdout: '',
               stderr: `scope upgrade pending approval for scopes operator.pairing operator.read operator.write\nRun: openclaw devices approve ${requestId}`,
             };
+          }
+          if (args.includes('transcribe')) {
+            return { exitCode: 0, stdout: JSON.stringify({ ok: true, outputs: [{ text: 'Hi!' }] }), stderr: '' };
           }
           return { exitCode: 0, stdout: JSON.stringify({ ok: true, outputs: [{ text: '' }] }), stderr: '' };
         },
