@@ -35,6 +35,10 @@ import {
 export interface VoiceSessionConfig {
   roomId: string;
   sessionId: string;
+  sessionKey?: string;
+  channel?: string;
+  target?: string;
+  accountId?: string;
   delivery?: ChatDeliveryTarget;
 }
 
@@ -45,7 +49,7 @@ export interface VoiceSessionState {
   close(): void;
   readonly turnInFlight: boolean;
   readonly closed: boolean;
-  chatTarget(): { sessionId: string; delivery?: ChatDeliveryTarget };
+  chatTarget(): { sessionId: string; sessionKey?: string; channel?: string; target?: string; accountId?: string; delivery?: ChatDeliveryTarget };
 }
 
 export function createVoiceSessionState(config: VoiceSessionConfig): VoiceSessionState {
@@ -70,7 +74,14 @@ export function createVoiceSessionState(config: VoiceSessionConfig): VoiceSessio
       return closed;
     },
     chatTarget() {
-      return { sessionId: config.sessionId, delivery: config.delivery };
+      return {
+        sessionId: config.sessionId,
+        ...(config.sessionKey ? { sessionKey: config.sessionKey } : {}),
+        ...(config.channel ? { channel: config.channel } : {}),
+        ...(config.target ? { target: config.target } : {}),
+        ...(config.accountId ? { accountId: config.accountId } : {}),
+        delivery: config.delivery,
+      };
     },
   };
 }
@@ -144,6 +155,10 @@ export interface VoiceSessionRuntimeOptions {
   hostPeerId: string;
   roomId: string;
   sessionId: string;
+  sessionKey?: string;
+  channel?: string;
+  target?: string;
+  accountId?: string;
   delivery?: ChatDeliveryTarget;
   voiceSettings?: VoiceSettings;
   sttSessionFactory?: SttSessionFactory;
@@ -190,6 +205,10 @@ export class VoiceSession {
     this.state = createVoiceSessionState({
       roomId: opts.roomId,
       sessionId: opts.sessionId,
+      ...(opts.sessionKey ? { sessionKey: opts.sessionKey } : {}),
+      ...(opts.channel ? { channel: opts.channel } : {}),
+      ...(opts.target ? { target: opts.target } : {}),
+      ...(opts.accountId ? { accountId: opts.accountId } : {}),
       delivery: opts.delivery,
     });
 
@@ -772,6 +791,10 @@ export class VoiceSession {
       const result = await runChat(trimmed, {
         signal: this.chatAbort.signal,
         sessionId: target.sessionId,
+        ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
+        ...(target.channel ? { channel: target.channel } : {}),
+        ...(target.target ? { target: target.target } : {}),
+        ...(target.accountId ? { accountId: target.accountId } : {}),
         delivery: target.delivery,
         deliver: true,
       });
@@ -807,6 +830,10 @@ export class VoiceSession {
     const fields = [
       `[voice ${this.roomId}] reply failed`,
       `session=${sanitizeReplyFailureLogText(target.sessionId)}`,
+      target.sessionKey ? `sessionKey=${sanitizeReplyFailureLogText(target.sessionKey)}` : undefined,
+      target.channel ? `channel=${sanitizeReplyFailureLogText(target.channel)}` : undefined,
+      target.target ? `target=${sanitizeReplyFailureLogText(target.target)}` : undefined,
+      target.accountId ? `accountId=${sanitizeReplyFailureLogText(target.accountId)}` : undefined,
       `delivery=${sanitizeReplyFailureLogText(delivery)}`,
       `code=${sanitizeReplyFailureLogText(code)}`,
       exitCode ? `exit=${sanitizeReplyFailureLogText(exitCode)}` : undefined,

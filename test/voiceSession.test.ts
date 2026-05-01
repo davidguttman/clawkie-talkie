@@ -97,6 +97,10 @@ import {
 } from '../daemon/src/voiceSession';
 
 function makeVoiceSession(overrides: {
+  sessionKey?: string;
+  channel?: string;
+  target?: string;
+  accountId?: string;
   createSpeechDetector?: SpeechDetectorFactory;
   ttsCatalogProvider?: () => Promise<TtsCatalog>;
   sttCatalogProvider?: () => Promise<SttCatalog>;
@@ -114,6 +118,10 @@ function makeVoiceSession(overrides: {
     hostPeerId: 'host-1',
     roomId: 'host-1:session-1',
     sessionId: 'session-1',
+    ...(overrides.sessionKey ? { sessionKey: overrides.sessionKey } : {}),
+    ...(overrides.channel ? { channel: overrides.channel } : {}),
+    ...(overrides.target ? { target: overrides.target } : {}),
+    ...(overrides.accountId ? { accountId: overrides.accountId } : {}),
     delivery: { channel: 'discord', target: 'channel:thread-1' },
     createSpeechDetector,
     ...(overrides.ttsCatalogProvider ? { ttsCatalogProvider: overrides.ttsCatalogProvider } : {}),
@@ -152,15 +160,23 @@ function sentBinary(peer: { send: ReturnType<typeof vi.fn> }): Buffer[] {
 }
 
 describe('voice session state', () => {
-  it('binds one room to one session and delivery target for its lifetime', () => {
+  it('binds one room to one session, sessionKey, and delivery target for its lifetime', () => {
     const s = createVoiceSessionState({
       roomId: 'host-1:session-1',
       sessionId: 'session-1',
+      sessionKey: 'agent:main:discord:channel:thread-1',
+      channel: 'discord',
+      target: 'channel:thread-1',
+      accountId: 'acct-1',
       delivery: { channel: 'discord', target: 'channel:thread-1' },
     });
 
     expect(s.chatTarget()).toEqual({
       sessionId: 'session-1',
+      sessionKey: 'agent:main:discord:channel:thread-1',
+      channel: 'discord',
+      target: 'channel:thread-1',
+      accountId: 'acct-1',
       delivery: { channel: 'discord', target: 'channel:thread-1' },
     });
     expect(s.roomId).toBe('host-1:session-1');
@@ -519,7 +535,12 @@ describe('voice session OpenClaw infer STT runtime', () => {
   });
 
   it('sends stt.done, then starts the reply turn when STT finishes', async () => {
-    const { session, peer } = makeVoiceSession();
+    const { session, peer } = makeVoiceSession({
+      sessionKey: 'agent:main:discord:channel:thread-1',
+      channel: 'discord',
+      target: 'channel:thread-1',
+      accountId: 'acct-1',
+    });
 
     sendControl(session, { t: 'stt.start' });
     await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
@@ -535,6 +556,10 @@ describe('voice session OpenClaw infer STT runtime', () => {
       'hello',
       expect.objectContaining({
         sessionId: 'session-1',
+        sessionKey: 'agent:main:discord:channel:thread-1',
+        channel: 'discord',
+        target: 'channel:thread-1',
+        accountId: 'acct-1',
         delivery: { channel: 'discord', target: 'channel:thread-1' },
         deliver: true,
       }),

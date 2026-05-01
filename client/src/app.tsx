@@ -240,6 +240,10 @@ export function App() {
         initial.handoff
           ? {
               sessionId: initial.handoff.sessionId,
+              ...(initial.handoff.sessionKey ? { sessionKey: initial.handoff.sessionKey } : {}),
+              ...(initial.handoff.channel ? { channel: initial.handoff.channel } : {}),
+              ...(initial.handoff.target ? { target: initial.handoff.target } : {}),
+              ...(initial.handoff.accountId ? { accountId: initial.handoff.accountId } : {}),
             }
           : null
       }

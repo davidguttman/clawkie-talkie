@@ -45,12 +45,27 @@ describe('parseHandoffUrl', () => {
     });
   });
 
-  it('ignores legacy channel/target handoff args when present', () => {
+  it('parses optional sessionKey, channel, target, and accountId routing metadata from handoff args', () => {
+    expect(
+      parseHandoffUrl('/voice#host=host-1&session=session-uuid&sessionKey=agent%3Amain%3Adiscord%3Achannel%3Athread-1&channel=discord&target=channel%3Athread-1&accountId=acct-1'),
+    ).toEqual({
+      hostPeerId: 'host-1',
+      sessionId: 'session-uuid',
+      sessionKey: 'agent:main:discord:channel:thread-1',
+      channel: 'discord',
+      target: 'channel:thread-1',
+      accountId: 'acct-1',
+    });
+  });
+
+  it('preserves explicit channel and target handoff args when present', () => {
     expect(
       parseHandoffUrl('/voice#host=host-1&session=session-1&channel=discord&target=channel%3Athread-1'),
     ).toEqual({
       hostPeerId: 'host-1',
       sessionId: 'session-1',
+      channel: 'discord',
+      target: 'channel:thread-1',
     });
   });
 
@@ -86,7 +101,7 @@ describe('initial handoff routing', () => {
     expect(
       parseInitialLocation({
         search: '',
-        hash: '#host=host-1&session=session-1',
+        hash: '#host=host-1&session=session-1&sessionKey=agent%3Amain%3Adiscord%3Achannel%3Athread-1&channel=discord&target=channel%3Athread-1&accountId=acct-1',
       }),
     ).toMatchObject({
       screen: 'driving',
@@ -94,6 +109,10 @@ describe('initial handoff routing', () => {
       sessionId: 'session-1',
       handoff: {
         sessionId: 'session-1',
+        sessionKey: 'agent:main:discord:channel:thread-1',
+        channel: 'discord',
+        target: 'channel:thread-1',
+        accountId: 'acct-1',
       },
     });
   });

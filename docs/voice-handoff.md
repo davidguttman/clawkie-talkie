@@ -8,9 +8,9 @@
    current OpenClaw turn — no helper script, no daemon API call, no
    pre-created link record.
 4. User opens the link.
-5. User speaks. Clawkie transcribes, runs the OpenClaw session, and speaks
-   the reply back. Transcript mirroring, if any, is legacy best-effort and
-   not part of the critical reply path.
+5. User speaks. Clawkie transcribes, best-effort mirrors the transcript when
+   it can resolve a Discord target, runs the OpenClaw session, and speaks the
+   reply back. Transcript mirroring is not part of the critical reply path.
 
 ## Old singleton architecture
 
@@ -24,23 +24,27 @@ links to the same lane and stomped on each other.
 There is now exactly one durable local daemon. `host=H` is a stable
 rendezvous/control identity, not the voice lane.
 
-For each handoff the agent fills the URL with only values already present in the
+For each handoff the agent fills the URL with values already present in the
 turn:
 
 ```
-https://clawkietalkie.app/voice#host=H&session=<sessionId>
+https://clawkietalkie.app/voice#host=H&session=<sessionId>&sessionKey=<sessionKey>&channel=<channel>&target=<target>&accountId=<accountId>
 ```
 
 Prefer the actual OpenClaw `sessionId` UUID for `session` when it is visible.
-If the actual sessionId is unavailable, fall back to the exact current
-OpenClaw session key. For webchat/internal handoffs, `session=agent:main:main`
-is valid only as that fallback. The public URL must not include `channel` or
-`target`.
+When both the actual sessionId and exact current OpenClaw session key are
+visible, include the key as optional `sessionKey` routing metadata. If an
+explicit current delivery channel/target is visible, include `channel` and
+`target` so the daemon can mirror the transcript with `openclaw message send`.
+If the actual sessionId is unavailable, fall back to the exact current OpenClaw
+session key in `session` and omit `sessionKey`. For webchat/internal handoffs,
+`session=agent:main:main` is valid only as that fallback. `accountId` is optional
+and should be included only when the current runtime exposes it.
 
 The browser:
 
 1. Joins the rendezvous room `H`.
-2. Sends `rendezvous.join { sessionId }` once.
+2. Sends `rendezvous.join { sessionId, sessionKey?, delivery? }` once.
 3. Receives `rendezvous.accept { roomId }`, where
    `roomId = makeVoiceRoomId({ hostPeerId: H, sessionId })`.
 4. Reconnects to `roomId` and runs the voice turn there.
@@ -100,34 +104,44 @@ disable that provider instead of falling back to global provider mutation.
 
 Required handoff args (accepted from hash fragment, then query string):
 
-- `host` — daemon rendezvous/control room id
+- `host` — daemon rendezvous/control room id.
 - `session` — OpenClaw session id/key, passed later to
   `openclaw agent --session-id`. Prefer the actual OpenClaw sessionId UUID
   when available; use a session key only when the actual sessionId is not
   visible. For webchat-only fallback handoffs, use `agent:main:main`; the daemon
   runs `openclaw agent --agent main --session-id agent:main:main --channel last --deliver`.
   Older `agent:main:webchat` links are normalized to this webchat session-only form.
+- `sessionKey` — optional exact OpenClaw session key. Use it only when `session`
+  is the actual sessionId UUID and the current session key is also visible in
+  trusted runtime context. The daemon uses it only for transcript mirroring /
+  provider derivation/debug, never as the agent session identity.
+- `channel` + `target` — optional explicit current message delivery route, such
+  as `channel=discord` and `target=channel:1498020851298209852`. Include both
+  when visible. The daemon uses them only for transcript mirroring via
+  `openclaw message send`, never for the agent reply.
+- `accountId` — optional channel account id, forwarded to `openclaw message send
+  --account` when transcript mirroring uses explicit `channel` + `target`.
 
-`channel` and `target` are not part of the public handoff URL. UUID session ids
-are opaque and do not encode Discord/channel targets. The daemon must not
-depend on deriving a transcript mirror target from `session`; it simply runs
-the agent turn with `--channel last --deliver`. Legacy transcript mirroring is
-best-effort only for older colon-style Discord session keys where a target can
-be safely extracted.
+Transcript mirroring is best-effort: the daemon first uses explicit `channel` +
+`target`, then `sessionKey`, then colon-style Discord `session` values, and for
+older UUID-only links it may reverse-resolve the key with `openclaw sessions
+--json --all-agents --active 10080`. If no message target can be derived, the
+mirror is skipped without failing the voice turn. The agent turn always runs
+with `--channel last --deliver`.
 
 Hash wins over query when both are present. All values must be URL-encoded.
 
 Examples:
 
 ```
-https://clawkietalkie.app/voice#host=H&session=c44d9502-ce71-46b1-9b15-5d548004544a
+https://clawkietalkie.app/voice#host=H&session=c44d9502-ce71-46b1-9b15-5d548004544a&sessionKey=agent%3Amain%3Adiscord%3Achannel%3A1498020851298209852&channel=discord&target=channel%3A1498020851298209852
 https://clawkietalkie.app/voice#host=H&session=agent%3Amain%3Amain
 ```
 
 ### Why hash-first?
 
-Hash fragments are not transmitted on HTTP requests, so `host` and `session`
-never reach a web server. The browser parses them
+Hash fragments are not transmitted on HTTP requests, so `host`, `session`,
+`sessionKey`, `channel`, `target`, and `accountId` never reach a web server. The browser parses them
 locally and sends them only over the encrypted WebRTC DataChannel to the
 local daemon.
 
@@ -150,7 +164,7 @@ sequenceDiagram
   Host-->>Phone: rendezvous.accept(room H:A)
   Phone->>Room: WebRTC voice connection
   User->>Phone: speak
-  Room->>OC: optional legacy best-effort transcript mirror when A is a key-shaped Discord session
+  Room->>OC: optional best-effort transcript mirror via target, sessionKey, session key, or UUID session lookup
   Room->>OC: openclaw agent --session-id A --channel last --deliver
   OC-->>Room: reply text
   Room-->>Phone: TTS audio

@@ -214,6 +214,158 @@ describe('runChat OpenClaw CLI integration', () => {
     });
   });
 
+  it('best-effort posts transcripts to explicit handoff channel/target/accountId without changing agent session identity', async () => {
+    const sessionId = 'c44d9502-ce71-46b1-9b15-5d548004544a';
+    execMock.mockImplementation((cmd) => {
+      const command = String(cmd);
+      if (command.includes('openclaw "message" "send"')) {
+        return Promise.resolve({ stdout: 'transcript posted\n', stderr: '' });
+      }
+      if (command.includes('openclaw "agent"')) {
+        return Promise.resolve({ stdout: jsonAgentStdout('reply'), stderr: '' });
+      }
+      return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+    });
+
+    await runChat('from explicit target', {
+      sessionId,
+      sessionKey: 'agent:main:discord:channel:thread-from-session-key',
+      channel: 'discord',
+      target: 'channel:explicit-thread',
+      accountId: 'acct-1',
+      deliver: true,
+    });
+
+    expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "sessions"'))).toBe(false);
+
+    const transcriptCommand = String(
+      execMock.mock.calls.find(([cmd]) => String(cmd).includes('openclaw "message" "send"'))?.[0],
+    );
+    expect(transcriptCommand).toContain('"--channel" "discord"');
+    expect(transcriptCommand).toContain('"--target" "channel:explicit-thread"');
+    expect(transcriptCommand).toContain('"--account" "acct-1"');
+    expect(transcriptCommand).toContain(`"--message" ${JSON.stringify('> from explicit target')}`);
+
+    const agentCommand = findAgentCommand();
+    expect(agentCommand).toContain(`"--session-id" "${sessionId}"`);
+  });
+
+  it('best-effort posts transcripts from sessionKey while keeping UUID as the agent session identity', async () => {
+    const sessionId = 'c44d9502-ce71-46b1-9b15-5d548004544a';
+    execMock.mockImplementation((cmd) => {
+      const command = String(cmd);
+      if (command.includes('openclaw "message" "send"')) {
+        return Promise.resolve({ stdout: 'transcript posted\n', stderr: '' });
+      }
+      if (command.includes('openclaw "agent"')) {
+        return Promise.resolve({ stdout: jsonAgentStdout('reply'), stderr: '' });
+      }
+      return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+    });
+
+    await runChat('from session key route', {
+      sessionId,
+      sessionKey: 'agent:main:discord:channel:thread-from-session-key',
+      deliver: true,
+    });
+
+    expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "sessions"'))).toBe(false);
+
+    const transcriptCommand = String(
+      execMock.mock.calls.find(([cmd]) => String(cmd).includes('openclaw "message" "send"'))?.[0],
+    );
+    expect(transcriptCommand).toContain('"--target" "channel:thread-from-session-key"');
+    expect(transcriptCommand).toContain(`"--message" ${JSON.stringify('> from session key route')}`);
+
+    const agentCommand = findAgentCommand();
+    expect(agentCommand).toContain(`"--session-id" "${sessionId}"`);
+    expect(agentCommand).toContain('"--channel" "last"');
+    expect(agentCommand).toContain('"--deliver"');
+  });
+
+  it('best-effort posts transcripts for UUID session ids by reverse-resolving the OpenClaw session key when sessionKey is missing', async () => {
+    const sessionId = 'c44d9502-ce71-46b1-9b15-5d548004544a';
+    execMock.mockImplementation((cmd) => {
+      const command = String(cmd);
+      if (command.includes('openclaw "sessions"')) {
+        return Promise.resolve({
+          stdout: JSON.stringify({
+            sessions: [
+              {
+                sessionId,
+                key: 'agent:main:discord:channel:thread-from-session-list',
+              },
+            ],
+          }),
+          stderr: '',
+        });
+      }
+      if (command.includes('openclaw "message" "send"')) {
+        return Promise.resolve({ stdout: 'transcript posted\n', stderr: '' });
+      }
+      if (command.includes('openclaw "agent"')) {
+        return Promise.resolve({ stdout: jsonAgentStdout('reply'), stderr: '' });
+      }
+      return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+    });
+
+    await runChat('from uuid route', {
+      sessionId,
+      deliver: true,
+    });
+
+    await vi.waitFor(() =>
+      expect(
+        execMock.mock.calls.some(([cmd]) =>
+          String(cmd).includes('openclaw "message" "send"') &&
+          String(cmd).includes('"--target" "channel:thread-from-session-list"'),
+        ),
+      ).toBe(true),
+    );
+
+    const sessionsCommand = String(execMock.mock.calls.find(([cmd]) => String(cmd).includes('openclaw "sessions"'))?.[0]);
+    expect(sessionsCommand).toContain('openclaw "sessions" "--json" "--all-agents" "--active" "10080"');
+
+    const transcriptCommand = String(
+      execMock.mock.calls.find(([cmd]) => String(cmd).includes('openclaw "message" "send"'))?.[0],
+    );
+    expect(transcriptCommand).toContain(`"--message" ${JSON.stringify('> from uuid route')}`);
+
+    const agentCommand = findAgentCommand();
+    expect(agentCommand).toContain(`"--session-id" "${sessionId}"`);
+    expect(agentCommand).toContain('"--channel" "last"');
+    expect(agentCommand).toContain('"--deliver"');
+  });
+
+  it('does not fail or error-log when UUID transcript target lookup fails', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      execMock.mockImplementation((cmd) => {
+        const command = String(cmd);
+        if (command.includes('openclaw "sessions"')) {
+          return Promise.reject(new Error('sessions unavailable'));
+        }
+        if (command.includes('openclaw "agent"')) {
+          return Promise.resolve({ stdout: jsonAgentStdout('reply despite lookup failure'), stderr: '' });
+        }
+        return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+      });
+
+      await expect(
+        runChat('hi', {
+          sessionId: 'c44d9502-ce71-46b1-9b15-5d548004544a',
+          deliver: true,
+        }),
+      ).resolves.toEqual({ text: 'reply despite lookup failure', source: 'openclaw' });
+
+      expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "message" "send"'))).toBe(false);
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(findAgentCommand()).toContain('"--channel" "last"');
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it('targets the Discord reply thread when threadId is provided', async () => {
     mockExecRoutingAgentTo(jsonAgentStdout('ok'));
 
@@ -370,22 +522,34 @@ describe('runChat OpenClaw CLI integration', () => {
     }
   });
 
-  it('runs the turn even when no Discord target can be derived (no reply re-send)', async () => {
-    mockExecRoutingAgentTo(jsonAgentStdout('plain reply'));
+  it('runs UUID session turns without requiring a transcript target when lookup finds no match', async () => {
+    const sessionId = 'c44d9502-ce71-46b1-9b15-5d548004544a';
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      mockExecRoutingAgentTo(jsonAgentStdout('plain reply'));
 
-    const result = await runChat('hi', {
-      sessionId: 'session-1',
-      deliver: true,
-    });
+      const result = await runChat('hi', {
+        sessionId,
+        deliver: true,
+      });
 
-    expect(result.text).toBe('plain reply');
+      expect(result.text).toBe('plain reply');
 
-    const sendCommands = execMock.mock.calls
-      .map(([cmd]) => String(cmd))
-      .filter((cmd) => cmd.includes('openclaw "message" "send"'));
-    // No transcript (no Discord target) and no explicit reply send.
-    expect(sendCommands).toHaveLength(0);
+      const sendCommands = execMock.mock.calls
+        .map(([cmd]) => String(cmd))
+        .filter((cmd) => cmd.includes('openclaw "message" "send"'));
+      expect(sendCommands).toHaveLength(0);
+      expect(errorSpy).not.toHaveBeenCalled();
+
+      const agentCommand = findAgentCommand();
+      expect(agentCommand).toContain(`"--session-id" "${sessionId}"`);
+      expect(agentCommand).toContain('"--channel" "last"');
+      expect(agentCommand).toContain('"--deliver"');
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
+
 
   it('returns spoken reply text from mixed JSON payloads (text + media) without surfacing media URLs', async () => {
     mockExecRoutingAgentTo(jsonAgentStdout('spoken reply', ['/tmp/openclaw/tts-test/voice.opus']));

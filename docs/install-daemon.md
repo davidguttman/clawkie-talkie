@@ -115,7 +115,7 @@ global provider.
 Advanced overrides (rare — leave unset for normal installs):
 
 - `CT_STT_LANGUAGE` — optional language hint passed to `openclaw infer audio transcribe`. Default lets the transcription model auto-detect.
-- `CT_THREAD_ID` — fallback Discord thread ID for debug posts in local development. Transcript posting is not on the critical path; UUID session ids are opaque and do not encode mirror targets. Unrelated to OpenClaw infer/provider configuration.
+- `CT_THREAD_ID` — fallback Discord thread ID for debug posts in local development. Transcript posting is not on the critical path; the daemon best-effort derives mirror targets from `target`, `sessionKey`, colon-style Discord session values, or UUID session lookup. Unrelated to OpenClaw infer/provider configuration.
 - `CT_CLIENT_ORIGIN` — override the client origin printed in the Join URL. Installed daemons default to `https://clawkietalkie.app`. Unrelated to OpenClaw infer/provider configuration.
 
 Generate the stable daemon ID with Node:
@@ -153,10 +153,10 @@ Waiting for phone…
 
 Leave this terminal running for the first manual test. Press `Ctrl-C` to stop it.
 
-The printed `Join URL` proves the daemon has a host ID and client origin. Real voice handoff links are usually created by OpenClaw and include only the current session, for example:
+The printed `Join URL` proves the daemon has a host ID and client origin. Real voice handoff links are usually created by OpenClaw and include the current session id plus optional session key and target routing metadata, for example:
 
 ```text
-https://clawkietalkie.app/voice#host=<host>&session=<session>
+https://clawkietalkie.app/voice#host=<host>&session=<sessionId>&sessionKey=<sessionKey>&target=<target>
 ```
 
 ## Keep it running on macOS with launchd

@@ -32,6 +32,42 @@ describe('phone → daemon factories', () => {
     );
   });
 
+  it('includes sessionKey, channel, target, and accountId routing metadata in rendezvous join without changing session identity', () => {
+    expect(
+      phoneClient.rendezvousJoin({
+        sessionId: 'session-uuid',
+        sessionKey: 'agent:main:discord:channel:thread-1',
+        channel: 'discord',
+        target: 'channel:thread-1',
+        accountId: 'acct-1',
+      }),
+    ).toEqual({
+      t: 'rendezvous.join',
+      sessionId: 'session-uuid',
+      sessionKey: 'agent:main:discord:channel:thread-1',
+      channel: 'discord',
+      target: 'channel:thread-1',
+      accountId: 'acct-1',
+    });
+    expect(
+      phoneClient.rendezvousJoin({
+        sessionId: 'session-uuid',
+        sessionKey: 'agent:main:discord:channel:thread-1',
+        channel: 'discord',
+        target: 'channel:thread-1',
+        accountId: 'acct-1',
+      }),
+    ).toEqual(
+      phoneDaemon.rendezvousJoin({
+        sessionId: 'session-uuid',
+        sessionKey: 'agent:main:discord:channel:thread-1',
+        channel: 'discord',
+        target: 'channel:thread-1',
+        accountId: 'acct-1',
+      }),
+    );
+  });
+
   it('includes voice settings in rendezvous join when provided', () => {
     expect(
       phoneClient.rendezvousJoin({
@@ -108,13 +144,14 @@ describe('rendezvous delivery validation', () => {
     expect(validateRendezvousDelivery(undefined)).toEqual({ ok: true });
   });
 
-  it('ignores legacy delivery values instead of using URL channel/target', () => {
+  it('ignores legacy nested delivery values instead of blocking the session-bound agent turn', () => {
+    expect(validateRendezvousDelivery({ channel: ' discord ', target: ' channel:t ', accountId: ' acct ' })).toEqual({ ok: true });
     expect(validateRendezvousDelivery({ channel: 'webchat' })).toEqual({ ok: true });
-    expect(validateRendezvousDelivery({ channel: ' discord ', target: ' channel:t ' })).toEqual({ ok: true });
     expect(validateRendezvousDelivery({ channel: 'discord' })).toEqual({ ok: true });
     expect(validateRendezvousDelivery({ target: 'channel:t' })).toEqual({ ok: true });
   });
 });
+
 
 describe('daemon → phone factories', () => {
   it('emits stable `t` tags + payloads', () => {

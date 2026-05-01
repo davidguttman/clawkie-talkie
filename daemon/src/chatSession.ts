@@ -3,9 +3,11 @@
 //
 // Two-step turn (same shape as the Rambly OpenClaw thread-linked
 // plugin):
-//   1. Best-effort mirror the user transcript only when an explicit delivery
-//      target is present or a legacy colon-style Discord session key exposes
-//      a safe target. UUID session ids are opaque and do not encode a target.
+//   1. Best-effort mirror the user transcript when an explicit delivery
+//      target is present, explicit handoff target + sessionKey expose a
+//      provider target, sessionKey or a legacy colon-style Discord session
+//      key exposes a safe target, or an actual OpenClaw sessionId can be
+//      reverse-resolved to a Discord session key.
 //   2. Run `openclaw agent --agent main --session-id <session>
 //      --channel last --deliver -m ...`. The agent receives the full
 //      transcript in its own message payload, so reply generation does not
@@ -68,7 +70,15 @@ async function sendDebugNotification(
 }
 
 async function sendTranscriptMessage(
-  opts: { threadId?: string; sessionId: string; delivery?: DeliveryTarget },
+  opts: {
+    threadId?: string;
+    sessionId: string;
+    sessionKey?: string;
+    channel?: string;
+    target?: string;
+    accountId?: string;
+    delivery?: DeliveryTarget;
+  },
   transcript: string,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -81,8 +91,20 @@ async function sendTranscriptMessage(
     );
     return;
   }
-  const target = deriveDiscordMessageTarget(opts);
+  const explicitTarget = deriveMessageTargetFromHandoff(opts);
+  if (explicitTarget) {
+    await sendGenericMessage(explicitTarget, quoteTranscript(transcript), signal, 'openclaw_transcript_post_failed');
+    return;
+  }
+
+  const target = deriveDiscordMessageTarget({
+    threadId: opts.threadId,
+    sessionId: opts.sessionKey || opts.sessionId,
+  });
   if (!target) {
+    const resolvedTarget = await resolveDiscordMessageTargetFromSessionLookup(opts.sessionId, signal);
+    if (!resolvedTarget) return;
+    await sendDiscordMessage(resolvedTarget, quoteTranscript(transcript), signal, 'openclaw_transcript_post_failed');
     return;
   }
   await sendDiscordMessage(target, quoteTranscript(transcript), signal, 'openclaw_transcript_post_failed');
@@ -98,6 +120,7 @@ async function sendGenericMessage(
     'message', 'send',
     '--channel', delivery.channel,
     '--target', delivery.target,
+    ...(delivery.accountId ? ['--account', delivery.accountId] : []),
     '--message', message,
   ];
   try {
@@ -142,6 +165,31 @@ export function quoteTranscript(transcript: string): string {
     .join('\n');
 }
 
+function deriveMessageTargetFromHandoff(opts: {
+  channel?: string;
+  target?: string;
+  accountId?: string;
+  sessionKey?: string;
+  sessionId: string;
+}): DeliveryTarget | undefined {
+  const target = opts.target?.trim();
+  if (!target) return undefined;
+
+  const channel = opts.channel?.trim() || deriveChannelFromSessionKey(opts.sessionKey || opts.sessionId);
+  if (!channel) return undefined;
+  const accountId = opts.accountId?.trim();
+  return { channel, target, ...(accountId ? { accountId } : {}) };
+}
+
+function deriveChannelFromSessionKey(sessionKey: string | undefined): string | undefined {
+  const key = sessionKey?.trim();
+  if (!key?.startsWith('agent:')) return undefined;
+
+  const parts = key.split(':').map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 3) return undefined;
+  return parts[2];
+}
+
 export function deriveDiscordMessageTarget(opts: {
   threadId?: string;
   sessionId: string;
@@ -161,6 +209,65 @@ export function deriveDiscordMessageTarget(opts: {
   return ids.at(-1);
 }
 
+async function resolveDiscordMessageTargetFromSessionLookup(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  const requested = sessionId.trim();
+  if (!isUuidLikeSessionId(requested)) return undefined;
+
+  const key = await lookupOpenClawSessionKey(requested, signal);
+  if (!key) return undefined;
+  return deriveDiscordMessageTarget({ sessionId: key });
+}
+
+function isUuidLikeSessionId(sessionId: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId);
+}
+
+async function lookupOpenClawSessionKey(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  const args = ['sessions', '--json', '--all-agents', '--active', '10080'];
+  try {
+    const { stdout } = await execAsync(
+      `openclaw ${args.map(a => JSON.stringify(a)).join(' ')}`,
+      { signal },
+    );
+    return findSessionKeyForSessionId(stdout, sessionId);
+  } catch {
+    // Transcript mirroring is best-effort. A missing/old OpenClaw CLI, gateway
+    // problem, or session-list parse issue must not fail or noisy-log the
+    // actual voice turn; `openclaw agent --channel last --deliver` remains the
+    // authoritative reply path.
+    return undefined;
+  }
+}
+
+function findSessionKeyForSessionId(stdout: string, sessionId: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return undefined;
+  }
+
+  const rows = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === 'object' && Array.isArray((parsed as { sessions?: unknown }).sessions)
+      ? (parsed as { sessions: unknown[] }).sessions
+      : [];
+
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const candidate = row as { sessionId?: unknown; key?: unknown };
+    if (candidate.sessionId !== sessionId) continue;
+    if (typeof candidate.key === 'string' && candidate.key.trim()) return candidate.key.trim();
+  }
+  return undefined;
+}
+
 // Helper: get assistant reply text. The agent receives the full raw-STT
 // transcript in its own `-m` payload and uses OpenClaw's channel-last
 // delivery path for the assistant reply. Legacy transcript posting is a
@@ -170,6 +277,7 @@ async function runOpenClawTurn(opts: {
   sessionId: string;
   threadId?: string;
   userText: string;
+  sessionKey?: string;
   delivery?: DeliveryTarget;
   signal?: AbortSignal;
 }): Promise<string> {
@@ -451,11 +559,16 @@ function sanitizeOpenClawLogText(text: string): string {
 export interface DeliveryTarget {
   channel: string;
   target: string;
+  accountId?: string;
 }
 
 export interface ChatOptionsWithSession extends ChatOptions {
   sessionId: string;
   threadId?: string;
+  sessionKey?: string;
+  channel?: string;
+  target?: string;
+  accountId?: string;
   delivery?: DeliveryTarget;
 }
 
@@ -465,7 +578,15 @@ export async function runChat(userText: string, opts: ChatOptionsWithSession): P
 
   observeTranscriptPost(
     sendTranscriptMessage(
-      { threadId: opts.threadId, sessionId: opts.sessionId, delivery: opts.delivery },
+      {
+        threadId: opts.threadId,
+        sessionId: opts.sessionId,
+        sessionKey: opts.sessionKey,
+        channel: opts.channel,
+        target: opts.target,
+        accountId: opts.accountId,
+        delivery: opts.delivery,
+      },
       trimmed,
       opts.signal,
     ),
@@ -476,6 +597,7 @@ export async function runChat(userText: string, opts: ChatOptionsWithSession): P
       sessionId: opts.sessionId,
       threadId: opts.threadId,
       userText: trimmed,
+      sessionKey: opts.sessionKey,
       delivery: opts.delivery,
       signal: opts.signal,
     });
