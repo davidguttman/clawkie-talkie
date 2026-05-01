@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm, writeFile, stat } from 'node:fs/promises';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
 export const REQUIRED_AGENT_SCOPES = ['operator.pairing', 'operator.read', 'operator.write'];
 
@@ -14,6 +15,7 @@ const DEFAULT_TIMEOUT_SECONDS = 60;
 const MIN_NODE_MAJOR = 22;
 const MIN_OPENCLAW_VERSION = { year: 2026, month: 4, patch: 25 };
 const MIN_OPENCLAW_VERSION_TEXT = '2026.4.25';
+export const STT_SMOKE_FIXTURE_PATH = fileURLToPath(new URL('../client/public/fixtures/stt-check-hi.wav', import.meta.url));
 
 export function parseArgs(argv) {
   const opts = {
@@ -140,7 +142,7 @@ export async function runPreflight(options = {}, deps = {}) {
     checks.push(ffmpeg);
     if (ffmpeg.status !== 'pass') return summarize(checks);
 
-    const stt = await runSttCheck({ runCommand, tempRoot, cwd, language: options.sttLanguage });
+    const stt = await runSttCheck({ runCommand, cwd, language: options.sttLanguage });
     checks.push(stt);
     if (stt.status !== 'pass') return summarize(checks);
 
@@ -289,24 +291,17 @@ function formatOpenClawVersion(version) {
   return `${version.year}.${version.month}.${version.patch}`;
 }
 
-async function runSttCheck({ runCommand, tempRoot, cwd, language }) {
-  const dir = await mkdtemp(join(tempRoot, 'clawkie-preflight-stt-'));
-  try {
-    const wavPath = join(dir, 'smoke.wav');
-    await writeFile(wavPath, makeSmokeWav());
-    const args = ['infer', 'audio', 'transcribe', '--file', wavPath, '--json'];
-    if (language) args.push('--language', language);
-    return await runNamedCheck('openclaw-infer-stt', {
-      command: 'openclaw',
-      args,
-      timeoutMs: CHECK_TIMEOUT_MS,
-      cwd,
-      runCommand,
-      validate: validateInferJson,
-    });
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
+async function runSttCheck({ runCommand, cwd, language }) {
+  const args = ['infer', 'audio', 'transcribe', '--file', STT_SMOKE_FIXTURE_PATH, '--json'];
+  if (language) args.push('--language', language);
+  return await runNamedCheck('openclaw-infer-stt', {
+    command: 'openclaw',
+    args,
+    timeoutMs: CHECK_TIMEOUT_MS,
+    cwd,
+    runCommand,
+    validate: validateInferSttJson,
+  });
 }
 
 async function runFfmpegPresenceCheck({ runCommand, cwd }) {
@@ -452,6 +447,31 @@ function validateInferJson(result) {
   }
 }
 
+function validateInferSttJson(result) {
+  const jsonValidation = validateInferJson(result);
+  if (jsonValidation) return jsonValidation;
+  const parsed = JSON.parse(String(result.stdout ?? '').trim());
+  const transcripts = Array.isArray(parsed?.outputs)
+    ? parsed.outputs
+      .map((output) => output?.text)
+      .filter((text) => typeof text === 'string')
+    : [];
+  const nonEmptyTranscripts = transcripts.filter((text) => text.trim());
+  if (nonEmptyTranscripts.length === 0) {
+    return 'STT command succeeded but did not return a non-empty transcript.';
+  }
+  if (nonEmptyTranscripts.some((text) => normalizeTranscriptText(text) === 'hi')) return null;
+  return 'STT command succeeded but did not transcribe the expected fixture text: Hi!';
+}
+
+function normalizeTranscriptText(text) {
+  return String(text)
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
 function classifyFfmpegFailure(text) {
   const raw = String(text ?? '');
   if (/\b(command not found|not found|enoent)\b/i.test(raw)) {
@@ -571,33 +591,6 @@ function trimForReport(text) {
 
 function shellCommand(command, args) {
   return [command, ...args].map((part) => JSON.stringify(part)).join(' ');
-}
-
-function makeSmokeWav() {
-  const sampleRate = 16_000;
-  const seconds = 0.35;
-  const samples = Math.floor(sampleRate * seconds);
-  const pcmBytes = samples * 2;
-  const buffer = Buffer.alloc(44 + pcmBytes);
-  buffer.write('RIFF', 0);
-  buffer.writeUInt32LE(36 + pcmBytes, 4);
-  buffer.write('WAVE', 8);
-  buffer.write('fmt ', 12);
-  buffer.writeUInt32LE(16, 16);
-  buffer.writeUInt16LE(1, 20);
-  buffer.writeUInt16LE(1, 22);
-  buffer.writeUInt32LE(sampleRate, 24);
-  buffer.writeUInt32LE(sampleRate * 2, 28);
-  buffer.writeUInt16LE(2, 32);
-  buffer.writeUInt16LE(16, 34);
-  buffer.write('data', 36);
-  buffer.writeUInt32LE(pcmBytes, 40);
-  for (let i = 0; i < samples; i += 1) {
-    const envelope = Math.sin(Math.PI * i / samples);
-    const sample = Math.round(Math.sin(2 * Math.PI * 440 * i / sampleRate) * 0x3fff * envelope);
-    buffer.writeInt16LE(sample, 44 + i * 2);
-  }
-  return buffer;
 }
 
 function printHuman(result) {
