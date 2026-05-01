@@ -101,16 +101,15 @@ On startup the daemon prints:
 
 The agent constructs the URL directly:
 
-    https://clawkietalkie.app/voice#host=H&session=<sessionId>&sessionKey=<sessionKey>&target=<target>
+    https://clawkietalkie.app/voice#host=H&session=<sessionId>&sessionKey=<sessionKey>&channel=<channel>&target=<target>&accountId=<accountId>
 
-Hash args are preferred (so `host`, `session`, `sessionKey`, and `target` are
-never sent to web servers); query params are accepted for compatibility. If a
-key appears in both, the hash wins. All values must be URL-encoded. `sessionKey`
-and `target` are optional routing metadata used only for transcript mirroring
-when `session` is an actual OpenClaw sessionId UUID. `channel` is not part of
-public handoff URLs and is ignored when supplied there. Transcript mirroring is
-best-effort inside the daemon: explicit `target` wins when supplied and a
-provider can be derived from `sessionKey`/`session`, colon-style Discord
+Hash args are preferred (so `host`, `session`, `sessionKey`, `channel`, `target`,
+and `accountId` are never sent to web servers); query params are accepted for
+compatibility. If a key appears in both, the hash wins. All values must be
+URL-encoded. `sessionKey`, `channel`, `target`, and `accountId` are optional
+routing metadata used only for transcript mirroring when `session` is an actual
+OpenClaw sessionId UUID. Transcript mirroring is best-effort inside the daemon:
+explicit `channel` + `target` wins when supplied, colon-style Discord
 `sessionKey`/`session` values can be used directly, and UUID-only links may be
 reverse-resolved through `openclaw sessions --json --all-agents --active 10080`.
 

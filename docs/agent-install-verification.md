@@ -79,11 +79,14 @@ Construct a dry-run handoff URL using the same algorithm as the skill:
 ```js
 const params = new URLSearchParams();
 params.set('host', daemonPeerId);
-params.set('session', 'agent:main:discord:channel:EXAMPLE');
+params.set('session', '<actual-openclaw-session-id-uuid>');
+params.set('sessionKey', 'agent:main:discord:channel:EXAMPLE');
+params.set('channel', 'discord');
+params.set('target', 'channel:EXAMPLE');
 console.log(`https://clawkietalkie.app/voice#${params.toString()}`);
 ```
 
-The dry-run URL must include only `host` and `session` in the hash. It must not include URL `channel` or `target`. For internal/webchat sessions, `session=agent:main:main` is valid. The skill must never emit `agent:main:main` for external channels such as Discord, Slack, or WhatsApp; external channels require the exact external session key.
+The dry-run URL must include `host` and `session`. Prefer the actual OpenClaw sessionId UUID for `session`; use a session key only as fallback when the UUID is not visible. When visible, include `sessionKey`, `channel`, `target`, and optional `accountId` so transcript mirroring can use `openclaw message send`. For internal/webchat sessions, `session=agent:main:main` is valid only as fallback. The skill must never emit `agent:main:main` for external channels such as Discord, Slack, or WhatsApp.
 
 ## Real handoff-link smoke test
 
@@ -93,9 +96,9 @@ Inspect the generated URL before trying the phone:
 
 - It must use `/voice#` hash args.
 - It must include the configured daemon `host`.
-- For web chat, `session=agent%3Amain%3Amain` is valid.
-- For Discord/Slack/etc., it must include the correct external `session`, not `session=agent%3Amain%3Amain`.
-- It must not include URL `channel` or `target`.
+- For web chat, `session=agent%3Amain%3Amain` is valid only when no actual sessionId UUID is visible.
+- For Discord/Slack/etc., prefer the actual sessionId UUID in `session`; if the UUID is not visible, use the correct external session key, not `session=agent%3Amain%3Amain`.
+- If trusted runtime context exposes `sessionKey`, `channel`, `target`, or `accountId`, the URL should preserve them for transcript mirroring.
 
 ## Pre-emptive OpenClaw agent-turn check
 

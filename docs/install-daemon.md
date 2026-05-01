@@ -156,7 +156,7 @@ Leave this terminal running for the first manual test. Press `Ctrl-C` to stop it
 The printed `Join URL` proves the daemon has a host ID and client origin. Real voice handoff links are usually created by OpenClaw and include the current session id plus optional session key and target routing metadata, for example:
 
 ```text
-https://clawkietalkie.app/voice#host=<host>&session=<sessionId>&sessionKey=<sessionKey>&target=<target>
+https://clawkietalkie.app/voice#host=<host>&session=<sessionId>&sessionKey=<sessionKey>&channel=<channel>&target=<target>&accountId=<accountId>
 ```
 
 ## Keep it running on macOS with launchd
