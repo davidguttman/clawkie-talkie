@@ -2,199 +2,69 @@
 
 These instructions are for an agent installing, reinstalling, or upgrading Clawkie Talkie on a user's Mac or Linux machine.
 
-Your goals:
+Keep this file as the control-plane install path. Use linked docs for repair, provider setup, deep verification, and troubleshooting.
 
-1. Install or upgrade the Clawkie Talkie daemon from this repo.
-2. Configure it with a stable daemon host ID.
-3. Make it persistent after login/reboot.
-4. Install the OpenClaw `clawkie-voice-handoff` skill so the user can say "switch to voice" and receive a working handoff link.
-5. Configure or repair OpenClaw infer STT/TTS enough for real voice turns to work.
-6. Verify the daemon, skill, and OpenClaw infer configuration before reporting success.
+## Success criteria
+
+Before reporting success, verify all of this:
+
+1. Clawkie Talkie source is installed or upgraded from `davidguttman/clawkie-talkie`.
+2. The daemon has a stable `DAEMON_PEER_ID` in repo-root `.env`.
+3. The daemon is persistent after login/reboot through launchd or `systemd --user`.
+4. The OpenClaw `clawkie-voice-handoff` skill is installed and points at the same daemon host ID.
+5. OpenClaw infer STT and TTS work for the same OS user that runs the daemon.
+6. The daemon, skill, infer config, persistence, and OpenClaw agent-turn path are verified. See [`docs/agent-install-verification.md`](docs/agent-install-verification.md).
 
 ## Nontechnical user contract
 
-Assume the user is nontechnical. Your job as the installing agent is to do every safe, automatable step yourself: inspect the machine, find paths, download the repo, install dependencies, edit local config through supported CLIs, install persistence, install the OpenClaw skill, and run verification.
+Assume the user is nontechnical. Do every safe, automatable step yourself: inspect paths, download source, install dependencies, edit supported config through CLIs, install persistence, install the skill, and run verification.
 
-Do **not** hand the user a list of commands to run unless the current runtime cannot execute commands at all. When you need the user, ask only for the irreducible human input, such as:
+Ask the user only for irreducible human input, such as provider choice, an API key entered locally into a hidden prompt or OpenClaw auth UI, OS/security approval, browser login, physical-device permission, or confirmation before replacing a broken install when preserving local config is impossible.
 
-- which hosted provider they want to use when no working STT/TTS provider exists yet;
-- an API key entered locally into a terminal prompt or OpenClaw auth UI;
-- an OS password, security prompt, browser login, or physical-device permission that only they can approve;
-- confirmation before replacing a broken existing install when preserving local config is impossible.
+Never ask the user to paste provider API keys into chat. Never print keys in logs or summaries. The daemon does not hold provider API keys; STT/TTS/LLM auth lives in OpenClaw config.
 
-Do not ask the user to paste provider API keys into chat. Do not print keys in logs or summaries. Do not install credentials into the browser. The browser receives only voice handoff URLs. All LLM/STT/TTS provider auth lives in OpenClaw's own configuration; the daemon does not read or hold provider API keys.
+## Hard boundaries
 
-## Hard prerequisite: OpenClaw 2026.4.25+
-
-Clawkie Talkie requires OpenClaw **2026.4.25 or newer** for the same OS user that will run the daemon.
-
-Before installing, reinstalling, or upgrading Clawkie Talkie:
-
-1. Check the user's OpenClaw version.
-2. If OpenClaw is missing, unconfigured, or older than `2026.4.25`, stop the Clawkie Talkie install.
-3. Help the user update or repair OpenClaw first.
-4. Resume Clawkie Talkie only after `openclaw status` works for OpenClaw 2026.4.25+.
-
-Do not treat an OpenClaw update as optional and do not leave it as a task for the user to figure out manually.
-
-## Safety rules
-
+- OpenClaw **2026.4.25 or newer** must work for the same OS user that will run the daemon before Clawkie Talkie install begins.
+- Do not treat an OpenClaw update/repair as optional. Stop Clawkie Talkie work until `openclaw status` works on 2026.4.25+.
 - Do not commit `.env`, generated host IDs, LaunchAgent plists with private paths, or systemd unit files with private paths.
-- Do not paste or print provider API keys (OpenClaw config) in chat/log summaries.
+- Do not paste or print provider API keys.
 - Treat `DAEMON_PEER_ID` as private-ish: not a password, but do not publish it or post it in public channels.
-- Use the public Clawkie Talkie client origin and the persistent daemon path; do not use local development shortcuts for an end-user install.
-- Do not start/stop unrelated services.
+- Use the public client origin: `https://clawkietalkie.app`.
+- Do not use local development shortcuts for an end-user install.
+- Do not start/stop unrelated OpenClaw, browser, Docker, or system services.
+- Do not change the user's default/chat agent LLM while configuring infer. See [`docs/agent-install-infer.md`](docs/agent-install-infer.md).
 
 ## Source
 
 Public GitHub repo: `davidguttman/clawkie-talkie`
 
-## Choose install mode first
+## Required variables
 
-Before fetching or replacing files, decide which mode applies:
-
-- **Fresh install:** no existing Clawkie Talkie source directory, daemon `.env`, persistence service, or installed OpenClaw handoff skill exists.
-- **Upgrade:** Clawkie Talkie is already installed and should keep the same `.env`, `DAEMON_PEER_ID`, persistence method, and installed skill configuration while code/docs are refreshed.
-- **Reinstall/repair:** an install exists but source files or dependencies are broken. Treat it like an upgrade: preserve secrets and IDs first, then replace code.
-
-For upgrades/reinstalls, do **not** delete the existing source directory until you have preserved and verified:
-
-- repo-root `.env`
-- the existing `DAEMON_PEER_ID`
-- the installed OpenClaw skill's `CLAWKIE_DAEMON_HOST_ID`
-- the active persistence mechanism (`launchd` or `systemd --user`)
-
-The preserved daemon `DAEMON_PEER_ID` and installed skill `CLAWKIE_DAEMON_HOST_ID` must stay identical after the upgrade.
-
-## Fetch and inspect
-
-1. Identify the installing agent's own OpenClaw workspace directory from the current runtime/session context. Do **not** invent a separate home-directory workspace and do **not** copy any path from this repository author's machine. If the active OpenClaw workspace cannot be determined, stop and ask the user.
-
-   For a fresh install, download the GitHub source ZIP into that workspace, for example under `<OPENCLAW_WORKSPACE>/external/clawkie-talkie`. Refuse to overwrite an existing target in this mode:
-
-   ```bash
-   OPENCLAW_WORKSPACE="/absolute/path/to/this-openclaw-workspace"
-   CLAWKIE_SOURCE_DIR="$OPENCLAW_WORKSPACE/external/clawkie-talkie"
-
-   if [ -e "$CLAWKIE_SOURCE_DIR" ]; then
-     echo "$CLAWKIE_SOURCE_DIR already exists; use the upgrade/reinstall flow instead of overwriting it" >&2
-     exit 1
-   fi
-
-   workdir=$(mktemp -d)
-   trap 'rm -rf "$workdir"' EXIT
-   cd "$workdir"
-   curl -L -o clawkie-talkie.zip \
-     https://github.com/davidguttman/clawkie-talkie/archive/HEAD.zip
-   unzip -q clawkie-talkie.zip
-   extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkie-talkie-*' | head -n 1)
-   mkdir -p "$(dirname "$CLAWKIE_SOURCE_DIR")"
-   mv "$extracted_dir" "$CLAWKIE_SOURCE_DIR"
-   cd "$CLAWKIE_SOURCE_DIR"
-   ```
-2. Inspect the repo before installing. Expected items include:
-   - Node/npm project files
-   - TypeScript daemon under `daemon/src/`
-   - browser client under `client/`
-   - OpenClaw skill under `openclaw/clawkie-voice-handoff/SKILL.md`
-   - docs under `docs/`
-3. Suspicious items to stop on:
-   - unexpected credential collection in `.env` (it should only carry `DAEMON_PEER_ID` and optional non-secret toggles)
-   - unexpected remote shell execution
-   - install-time scripts that mutate global state without user consent
-   - code that exfiltrates `.env`, OpenClaw config, browser cookies, or arbitrary files
-
-## Upgrade or reinstall/repair an existing install
-
-Use this flow when `CLAWKIE_SOURCE_DIR` already exists, the daemon has run before, or the OpenClaw handoff skill is already installed.
-
-1. Locate the current source directory. Prefer the configured service command/path if it exists; otherwise use the known install path under the OpenClaw workspace.
-2. Preserve current local configuration before touching source files:
-
-   ```bash
-   : "${CLAWKIE_SOURCE_DIR:?set to existing Clawkie Talkie source directory}"
-   cd "$CLAWKIE_SOURCE_DIR"
-
-   test -f .env || { echo "missing .env; stop and ask before reinstalling" >&2; exit 1; }
-   chmod 600 .env
-   DAEMON_PEER_ID=$(awk -F= '/^DAEMON_PEER_ID=/{print $2; exit}' .env)
-   test -n "$DAEMON_PEER_ID" || { echo "missing DAEMON_PEER_ID in .env; stop before changing files" >&2; exit 1; }
-   ```
-
-   Do not generate a new daemon peer ID unless the user explicitly asks to create a new identity.
-
-3. Stop only the Clawkie Talkie user service while replacing files:
-
-   - macOS: unload/stop the `app.clawkietalkie.daemon` LaunchAgent for the current user.
-   - Linux: `systemctl --user stop clawkie-talkie.service`.
-
-   Do not stop unrelated OpenClaw, browser, Docker, or system services.
-
-4. Refresh the source safely:
-
-   - If the source directory is a git checkout and has no relevant local changes, use `git fetch --prune` followed by a fast-forward update to the desired branch/revision.
-   - If the source came from a ZIP or the git state is unclear, download a fresh ZIP into a temporary directory and copy it over the existing source while preserving local runtime files:
-
-   ```bash
-   : "${CLAWKIE_SOURCE_DIR:?set to existing Clawkie Talkie source directory}"
-   workdir=$(mktemp -d)
-   trap 'rm -rf "$workdir"' EXIT
-   cd "$workdir"
-
-   curl -L -o clawkie-talkie.zip \
-     https://github.com/davidguttman/clawkie-talkie/archive/HEAD.zip
-   unzip -q clawkie-talkie.zip
-   extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkie-talkie-*' | head -n 1)
-
-   rsync -a --delete \
-     --exclude '.env' \
-     --exclude 'node_modules' \
-     --exclude '.git' \
-     "$extracted_dir"/ "$CLAWKIE_SOURCE_DIR"/
-
-   cd "$CLAWKIE_SOURCE_DIR"
-   ```
-
-5. Run dependency install again from the source directory:
-
-   ```bash
-   npm install
-   ```
-
-6. Reinstall/update the OpenClaw skill from the refreshed source, then patch the installed copy using the preserved `DAEMON_PEER_ID`. Never leave the installed skill with `<CONFIGURE_DAEMON_PEER_ID>` after an upgrade.
-7. Restart only the Clawkie Talkie user service and run the same daemon, service, and skill verification checks listed below.
-8. If verification fails, keep the preserved `.env` and report the failing command/output. Do not keep retrying with a new host ID.
-
-## Pre-emptive OpenClaw agent-turn check
-
-**Before reporting success**, test the same OpenClaw agent-turn path the daemon will use after STT. `openclaw status`, STT, TTS, and daemon rendezvous registration are not enough; the install is not voice-ready until the daemon can run an OpenClaw chat turn without `openclaw_gateway_unavailable`.
-
-Use the real session key for the current conversation. For OpenClaw web chat, that is normally `agent:main:main`. For external channels, do not use `agent:main:main`; use the exact external session key such as `agent:main:discord:channel:<id>`:
+Discover these from the active runtime and user's machine; do not copy maintainer-specific paths.
 
 ```bash
-SESSION_ID="<exact-current-session-id-or-key>"
-openclaw agent \
-  --agent main \
-  --session-id "$SESSION_ID" \
-  --channel last \
-  --deliver \
-  --json \
-  -m "Clawkie Talkie install smoke test. Reply with exactly: ok"
+OPENCLAW_WORKSPACE="/absolute/path/to/this-openclaw-workspace"
+CLAWKIE_SOURCE_DIR="$OPENCLAW_WORKSPACE/external/clawkie-talkie"
+OPENCLAW_SKILLS_DIR="${OPENCLAW_SKILLS_DIR:-$OPENCLAW_WORKSPACE/skills}"
+CLAWKIE_SKILL_DIR="$OPENCLAW_SKILLS_DIR/clawkie-voice-handoff"
 ```
 
-This may deliver a small smoke-test reply to the current conversation; that is preferable to reporting a broken voice install as complete. If there is no real session key available yet, do not fake one. Mark this verification as blocked until a real `switch to voice` handoff can be generated from a live OpenClaw session.
+If the active OpenClaw workspace or skills directory cannot be determined, stop and ask the user.
 
-If you see scope approval prompts in the logs:
-1. Note the request ID (format like `a8b414c2-0d4b-4266-85b8-ab94662dce18`).
-2. Tell the user to approve the pending device/scope request in the OpenClaw dashboard.
-3. Report the install as **blocked pending device approval**, not complete.
-4. After approval, rerun this agent-turn check and restart the daemon service if needed.
+## Choose install mode first
 
-If you get connection errors, auth errors, gateway errors, or session lookup errors, fix those before proceeding. Do not classify the install as complete.
+- **Fresh install:** no existing source directory, daemon `.env`, persistence service, or installed handoff skill exists.
+- **Upgrade:** Clawkie Talkie already exists and should keep the same `.env`, `DAEMON_PEER_ID`, persistence method, and installed skill configuration.
+- **Reinstall/repair:** source files or dependencies are broken. Preserve secrets and IDs first, then replace code.
 
-## Prerequisites to verify
+For upgrade or reinstall/repair, do not continue here. Use [`docs/agent-install-upgrade-repair.md`](docs/agent-install-upgrade-repair.md).
 
-From the user's shell account that will run the daemon:
+## Fresh install flow
+
+### 1. Verify prerequisites
+
+Run as the OS user that will run the daemon:
 
 ```bash
 node -v
@@ -204,413 +74,100 @@ openclaw --version || true
 openclaw status
 ```
 
-Use Node 22 LTS or newer when possible. OpenClaw must be 2026.4.25 or newer. If `openclaw` is missing, older than 2026.4.25, or not configured, stop the Clawkie Talkie install and help the user update/configure OpenClaw first. Do not continue until the same OS user that will run the daemon has a working OpenClaw 2026.4.25+ install.
+Use Node 22 LTS or newer when possible. Stop until OpenClaw 2026.4.25+ is installed and configured.
 
-## Install dependencies
+### 2. Fetch and inspect source
 
-From the repo root:
+Refuse to overwrite an existing target in fresh-install mode:
+
+```bash
+if [ -e "$CLAWKIE_SOURCE_DIR" ]; then
+  echo "$CLAWKIE_SOURCE_DIR already exists; use upgrade/repair" >&2
+  exit 1
+fi
+
+workdir=$(mktemp -d)
+trap 'rm -rf "$workdir"' EXIT
+cd "$workdir"
+curl -L -o clawkie-talkie.zip https://github.com/davidguttman/clawkie-talkie/archive/HEAD.zip
+unzip -q clawkie-talkie.zip
+extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkie-talkie-*' | head -n 1)
+mkdir -p "$(dirname "$CLAWKIE_SOURCE_DIR")"
+mv "$extracted_dir" "$CLAWKIE_SOURCE_DIR"
+cd "$CLAWKIE_SOURCE_DIR"
+```
+
+Expected items:
+
+- Node/npm project files
+- TypeScript daemon under `daemon/src/`
+- browser client under `client/`
+- OpenClaw skill under `openclaw/clawkie-voice-handoff/SKILL.md`
+- docs under `docs/`
+
+Stop on unexpected credential collection, remote shell execution, install-time global mutation without consent, or code that exfiltrates `.env`, OpenClaw config, browser cookies, or arbitrary files.
+
+### 3. Install dependencies
 
 ```bash
 npm install
 ```
 
-`@roamhq/wrtc` normally installs a prebuilt native package for supported macOS/Linux architectures. If it fails, install platform build tools and retry. See `docs/install-daemon.md` for platform-specific notes.
+If `@roamhq/wrtc` fails, install platform build tools and retry. See [`docs/install-daemon.md`](docs/install-daemon.md).
 
-## Configure `.env`
-
-For a fresh install, create the repo-root `.env` file from the example. For an upgrade/reinstall, preserve the existing `.env` and skip this copy step unless the file is missing and the user approved recreating it:
+### 4. Configure `.env`
 
 ```bash
-if [ ! -f .env ]; then
-  cp .env.example .env
-fi
+cp .env.example .env
 chmod 600 .env
+DAEMON_PEER_ID=$(node -e "console.log(require('node:crypto').randomUUID())")
+printf 'DAEMON_PEER_ID=%s\n' "$DAEMON_PEER_ID" > .env
 ```
 
-You — the installer — generate one stable daemon host UUID for this machine. The same UUID goes into the daemon's `.env` as `DAEMON_PEER_ID` and into the runtime-installed handoff skill as `CLAWKIE_DAEMON_HOST_ID`. This works the same way LobsterLink stores its discovered Chrome extension ID into the LobsterLink skill: a value generated/discovered at install time, written into the runtime skill, and used directly thereafter. The user does not need to know or configure this UUID.
+The same UUID must be written into the installed handoff skill as `CLAWKIE_DAEMON_HOST_ID`. Do not regenerate it on later updates, dependency repairs, or service repairs.
 
-Generate it once:
+A normal install only needs `DAEMON_PEER_ID`. Leave advanced overrides unset unless the user explicitly asks: `CT_STT_LANGUAGE`, `CT_THREAD_ID`, `CT_CLIENT_ORIGIN`.
 
-```bash
-node -e "console.log(require('node:crypto').randomUUID())"
-```
+### 5. Configure and verify OpenClaw infer
 
-Set this value in `.env`:
-
-```env
-DAEMON_PEER_ID=<installer-generated-uuid>
-```
-
-The daemon does not require any provider API key in `.env`. All LLM/STT/TTS auth is read by `openclaw` itself from its own configuration and auth profiles when the daemon shells out to the CLI.
-
-Do not regenerate the UUID on later updates, reinstalls, dependency repairs, or service repairs — keep it stable so existing handoff links and the installed skill remain valid.
-
-A normal install only needs `DAEMON_PEER_ID` in `.env`. Do not add other variables unless the user explicitly asks for an override.
-
-Advanced overrides (rare — leave unset for normal installs):
-
-- `CT_STT_LANGUAGE` — optional language hint forwarded to `openclaw infer audio transcribe`. Default lets the transcription model auto-detect.
-- `CT_THREAD_ID` — fallback Discord thread ID for transcript/debug posts when the daemon is invoked without a session that derives one. Not part of OpenClaw infer/provider setup.
-- `CT_CLIENT_ORIGIN` — override the client origin printed in the Join URL. Installed daemons already default to `https://clawkietalkie.app`. Not part of OpenClaw infer/provider setup. The signaling server is non-configurable for end-user installs.
-
-## Configure OpenClaw infer support
-
-Clawkie Talkie uses the installed `openclaw` CLI for speech-to-text and text-to-speech:
+Clawkie Talkie needs both:
 
 - STT: `openclaw infer audio transcribe --file <wav> --json`
 - TTS: `openclaw infer tts convert --text <text> --output <file> --json`
 
-Before daemon verification, make sure the user's durable OpenClaw config (`openclaw.json`) has working providers for both infer surfaces. Do not rely only on shell environment variables unless they are also available to the persistent daemon service.
+Use [`docs/agent-install-infer.md`](docs/agent-install-infer.md). Do not continue until infer smoke tests pass.
 
-### Hard boundary: never change the user's agent LLM
+### 6. Install persistence
 
-This installer is only allowed to configure speech-to-text and text-to-speech. It must never change the user's normal chat/agent LLM selection. In particular:
+Use [`docs/install-daemon.md`](docs/install-daemon.md) for launchd/systemd examples.
 
-- Do **not** run `openclaw onboard` as part of this installer. Onboarding can rewrite broader model defaults. Stop and ask the user instead if config-only infer setup is impossible.
-- Do **not** edit, set, merge, remove, or "repair" any of these paths:
-  - `agents.defaults.model`
-  - `agents.defaults.models`
-  - `agents.*.model`
-  - `models.default` or any equivalent default-chat-model field
-- Do **not** switch the main/default agent to OpenAI, xAI, Grok, GPT, Claude, or any other provider while installing Clawkie Talkie. Provider keys used for STT/TTS are not permission to change the agent model.
-- Before making OpenClaw config changes, snapshot the current agent model defaults and verify they are identical afterward. If they changed, revert them before continuing and report the attempted mutation as a failure.
+After installing persistence, verify with [`docs/agent-install-verification.md`](docs/agent-install-verification.md): service status, logs, matching peer ID, clean restart, and daemon agent-turn path.
 
-Recommended guardrail commands:
+### 7. Install the OpenClaw skill
 
 ```bash
-openclaw config get agents.defaults --json > /tmp/clawkie-agents-defaults-before.json 2>/dev/null || true
-openclaw config get agents --json > /tmp/clawkie-agents-before.json 2>/dev/null || true
-
-# ...perform only the infer/STT/TTS config commands in this section...
-
-openclaw config get agents.defaults --json > /tmp/clawkie-agents-defaults-after.json 2>/dev/null || true
-openclaw config get agents --json > /tmp/clawkie-agents-after.json 2>/dev/null || true
-diff -u /tmp/clawkie-agents-defaults-before.json /tmp/clawkie-agents-defaults-after.json
-diff -u /tmp/clawkie-agents-before.json /tmp/clawkie-agents-after.json
-```
-
-Those diffs must be empty or explain only unrelated pre-existing timestamp/order noise. Any substantive agent model/default change means the installer failed and must be reverted.
-
-### If infer is not already working
-
-Do **not** improvise around missing infer support by installing random local speech packages, building `whisper-cpp`, editing protected OpenClaw config files directly, or relying on a no-key TTS provider by itself. Clawkie Talkie needs **both**:
-
-- a working audio transcription provider; and
-- a working text-to-speech provider.
-
-If `openclaw infer audio providers --json` or `openclaw infer tts providers --json` shows no usable provider, the normal repair path is to configure a hosted provider through OpenClaw config, then run the smoke tests. Do not run `openclaw onboard` from this installer. Onboarding can change broader model defaults, and this installer is not allowed to mutate the user's default LLM. If config-only setup fails and an interactive auth flow appears necessary, stop and ask the user before doing anything that could affect model defaults.
-
-Recommended choices:
-
-1. **OpenAI** — best default for most users because it supports both STT and TTS in OpenClaw.
-2. **xAI** — good alternative if the user has or prefers an xAI API key; it also supports both STT and TTS in OpenClaw.
-
-If the user already has one of these keys, ask which provider they want. Then prompt for the key locally in the terminal with hidden input. The user supplies only the secret; you run the config commands and verification. Do not ask them to paste API keys into chat, do not print keys in logs, and do not commit or write provider credentials into this repo.
-
-These setup snippets intentionally configure only the infer/auth surfaces Clawkie Talkie needs. They do **not** edit any `agents.*` model/default path and do **not** change the normal chat/agent model.
-
-Important: OpenClaw has separate xAI config surfaces. Do not collapse them into one provider block.
-
-- `models.providers.xai` is model-provider metadata/auth used by the media-understanding STT path and other xAI model surfaces.
-- `tools.media.audio.models` selects the STT provider/model for `openclaw infer audio transcribe`.
-- `messages.tts.provider` and `messages.tts.providers.xai` configure xAI TTS for `openclaw infer tts convert`.
-- xAI TTS does **not** become configured by adding `grok-tts` to `models.providers.xai.models`. Do not add `grok-tts` there.
-- `openclaw infer tts providers --json` showing xAI with `models: []` is normal. The xAI TTS provider is voice-based (`voiceId`, default `eve`), not model-list based.
-- If TTS conversion reports `not_configured` or falls back to Microsoft/another provider, fix `messages.tts.provider` and `messages.tts.providers.xai.apiKey` for the same process/user running the command. Do not keep editing `models.providers.xai` for a TTS failure.
-- The TTS CLI `--model` override, if used, must be a provider/model ref such as `openai/gpt-4o-mini-tts`; `--model xai` is invalid. Prefer setting `messages.tts.provider` and smoke-testing without a model override.
-
-#### OpenAI infer setup
-
-Use this when the user chooses OpenAI or already has an OpenAI API key available locally. If the OpenAI provider already exists, preserve its current model list/defaults; otherwise this adds minimal provider metadata so OpenClaw can authenticate direct OpenAI API calls for STT.
-
-```bash
-read -rsp "Paste OpenAI API key for this machine, then press Enter: " OPENAI_KEY
-printf '\n'
-test -n "$OPENAI_KEY" || { echo "No key entered; cannot configure OpenAI infer" >&2; exit 1; }
-
-# STT/model-provider auth metadata. This does not select or change the default agent LLM.
-# This is separate from messages.tts.* below.
-if openclaw config get models.providers.openai --json >/dev/null 2>&1; then
-  openclaw config set models.providers.openai.apiKey "$OPENAI_KEY"
-else
-  openclaw config set models.providers.openai \
-    "{\"baseUrl\":\"https://api.openai.com/v1\",\"api\":\"openai-responses\",\"apiKey\":\"$OPENAI_KEY\",\"models\":[{\"id\":\"gpt-5.5\",\"name\":\"GPT-5.5\"}]}" \
-    --strict-json
-fi
-
-# STT model used by `openclaw infer audio transcribe`.
-openclaw config set tools.media.audio.models \
-  '[{"type":"provider","provider":"openai","model":"gpt-4o-transcribe"}]' \
-  --strict-json
-
-# TTS default + TTS auth. This is the config surface used by `openclaw infer tts convert`.
-openclaw config set messages.tts.provider openai
-openclaw config set messages.tts.providers.openai.apiKey "$OPENAI_KEY"
-openclaw config set messages.tts.providers.openai.model gpt-4o-mini-tts
-openclaw config set messages.tts.providers.openai.voice coral
-openclaw config set messages.tts.providers.openai.responseFormat mp3
-
-unset OPENAI_KEY
-```
-
-#### xAI infer setup
-
-Use this when the user chooses xAI or already has an xAI API key available locally. If the xAI provider already exists, preserve its current model list/defaults; otherwise this adds minimal provider metadata so OpenClaw can authenticate xAI STT.
-
-```bash
-read -rsp "Paste xAI API key for this machine, then press Enter: " XAI_KEY
-printf '\n'
-test -n "$XAI_KEY" || { echo "No key entered; cannot configure xAI infer" >&2; exit 1; }
-
-# STT/model-provider auth metadata. This does not select or change the default agent LLM.
-# This is not the TTS config surface.
-if openclaw config get models.providers.xai --json >/dev/null 2>&1; then
-  openclaw config set models.providers.xai.apiKey "$XAI_KEY"
-else
-  openclaw config set models.providers.xai \
-    "{\"baseUrl\":\"https://api.x.ai/v1\",\"api\":\"openai-completions\",\"apiKey\":\"$XAI_KEY\",\"models\":[{\"id\":\"grok-4-1-fast-non-reasoning\",\"name\":\"Grok 4.1 Fast Non Reasoning\"}]}" \
-    --strict-json
-fi
-
-# STT model used by `openclaw infer audio transcribe`.
-openclaw config set tools.media.audio.models \
-  '[{"type":"provider","provider":"xai","model":"grok-stt"}]' \
-  --strict-json
-
-# TTS default + TTS auth. This is the config surface used by `openclaw infer tts convert`.
-# Do not try to configure xAI TTS by adding `grok-tts` under models.providers.xai.
-openclaw config set messages.tts.provider xai
-openclaw config set messages.tts.providers.xai.apiKey "$XAI_KEY"
-openclaw config set messages.tts.providers.xai.voiceId eve
-openclaw config set messages.tts.providers.xai.language en
-openclaw config set messages.tts.providers.xai.responseFormat mp3
-
-unset XAI_KEY
-```
-
-After either setup path, rerun the provider inventory and smoke tests below. Do not continue to daemon/service/skill verification until both STT and TTS pass.
-
-Microsoft or other no-key TTS providers may be used only if audio transcription is also working and the smoke tests pass. A working TTS provider alone is not a Clawkie Talkie install.
-
-Inspect the current config and provider inventory:
-
-```bash
-openclaw config get tools.media.audio --json || true
-openclaw config get messages.tts --json || true
-openclaw infer audio providers --json
-openclaw infer tts providers --json
-```
-
-Requirements:
-
-- `openclaw infer audio providers --json` must show at least one transcription provider with `configured: true`, or `tools.media.audio.models` must point at a working CLI fallback.
-- `openclaw infer tts providers --json` must show at least one usable speech provider.
-- `openclaw infer tts voices --provider <provider> --json` should list voices or return a provider-specific success response.
-- `openclaw infer tts convert ... --json` must create an output file.
-
-If the user's OpenClaw install does not have infer audio/TTS configured or auto-detectable, Clawkie Talkie is not installed successfully yet. The daemon may still print a Join URL and accept a phone connection, but the first voice turn will fail at runtime:
-
-- missing/broken audio transcription → `openclaw infer audio transcribe` fails, the phone receives `stt.error`, and the UI shows `INFER ERROR · OPENCLAW INFER STT FAILED`
-- missing/broken TTS → `openclaw infer tts convert` fails after the agent reply, the phone receives `tts.error`, and the UI shows `TTS ERROR · OPENCLAW INFER TTS FAILED`
-
-Installer responsibility in that state:
-
-1. Do **not** report success and do **not** leave this as a runtime problem for the user.
-2. Configure or repair the missing OpenClaw infer surface for the same OS user that will run the daemon.
-3. Prefer an already-authenticated OpenClaw provider or already-installed local CLI. Preserve any existing working provider config and only add the missing audio/TTS pieces.
-4. If multiple providers are available, choose the least invasive working option and state what was chosen in the final report.
-5. If no usable provider credentials or local CLI are available, stop with a concrete blocker: which infer command failed, which config surface is missing (`tools.media.audio` or `messages.tts`), and what safe auth/config step the user must provide. Do not ask the user to paste secrets into a public/shared chat.
-6. Rerun the smoke tests below after every config change. Only continue once both STT and TTS smoke tests pass.
-
-Use the provider-specific OpenClaw docs for exact `tools.media.audio` and `messages.tts` fields. Use the OpenClaw config tooling rather than hand-editing when possible. For example, replace these placeholders with the provider/model the user already has configured credentials for:
-
-```bash
-openclaw config set tools.media.audio '{"enabled":true,"models":[{"type":"provider","provider":"<stt-provider>","model":"<stt-model>"}]}' --strict-json --merge
-openclaw config set messages.tts '{"provider":"<tts-provider>","providers":{"<tts-provider>":{}}}' --strict-json --merge
-```
-
-If the user already has OpenAI, Deepgram, ElevenLabs, Microsoft, or another supported provider configured and the smoke tests pass, keep it. If a provider uses SecretRefs, verify they resolve for the daemon's user account before reporting success.
-
-Run infer smoke tests:
-
-```bash
-TTS_PROVIDER=<configured-tts-provider>
-rm -f /tmp/clawkie-openclaw-infer-smoke.mp3
-openclaw infer tts voices --provider "$TTS_PROVIDER" --json || openclaw infer tts voices --json
-openclaw infer tts convert \
-  --text "clawkie infer smoke test" \
-  --output /tmp/clawkie-openclaw-infer-smoke.mp3 \
-  --json
-test -s /tmp/clawkie-openclaw-infer-smoke.mp3
-openclaw infer audio transcribe --file /tmp/clawkie-openclaw-infer-smoke.mp3 --json
-```
-
-If the TTS smoke passes but audio transcription fails, fix `tools.media.audio` before continuing. If audio transcription passes but TTS fails, fix `messages.tts` before continuing.
-
-## Manual daemon verification
-
-Run once from the repo root:
-
-```bash
-npm run daemon
-```
-
-Success looks like:
-
-```text
-Peer ID:  <DAEMON_PEER_ID>
-Join URL: https://clawkietalkie.app/?host=<DAEMON_PEER_ID>
-Waiting for phone…
-```
-
-Verify the printed `Peer ID` matches `.env` exactly. Stop the manual run with `Ctrl-C` before installing the persistent service.
-
-## Install persistence
-
-Use `docs/install-daemon.md` for the exact launchd/systemd examples.
-
-Required verification after persistence is installed:
-
-- macOS: `launchctl print gui/$(id -u)/app.clawkietalkie.daemon`
-- Linux: `systemctl --user status clawkie-talkie.service`
-- Logs include `Peer ID: <DAEMON_PEER_ID>` or `subscribed to rendezvous room as <DAEMON_PEER_ID>`
-- The service restarts cleanly after a manual restart command.
-
-## Install the OpenClaw skill
-
-The skill source is:
-
-```text
-openclaw/clawkie-voice-handoff/SKILL.md
-```
-
-Install it into the runtime skills directory for **this OpenClaw install's workspace**. Use the workspace path from the current runtime/session context; do not hardcode the maintainer's workspace path or any other user-specific path.
-
-If the runtime exposes a specific skills directory, use it. Otherwise use `<OPENCLAW_WORKSPACE>/skills`. If you cannot determine the active workspace or skills directory, stop and report that blocker.
-
-Create the destination directory and copy the skill:
-
-```bash
-: "${OPENCLAW_WORKSPACE:?set this to the installing agent's OpenClaw workspace directory}"
-OPENCLAW_SKILLS_DIR="${OPENCLAW_SKILLS_DIR:-$OPENCLAW_WORKSPACE/skills}"
-CLAWKIE_SKILL_DIR="$OPENCLAW_SKILLS_DIR/clawkie-voice-handoff"
-
 mkdir -p "$CLAWKIE_SKILL_DIR"
 cp openclaw/clawkie-voice-handoff/SKILL.md "$CLAWKIE_SKILL_DIR/SKILL.md"
 ```
 
-Then patch the installed copy only (mirroring how the LobsterLink installer writes its discovered extension ID into the LobsterLink runtime skill):
+Patch the installed copy only:
 
 - `INSTALLED = false` → `INSTALLED = true`
 - `Install date:` → today's date in `YYYY-MM-DD` format
-- `CLAWKIE_DAEMON_HOST_ID = `<CONFIGURE_DAEMON_PEER_ID>`` → the exact `DAEMON_PEER_ID` from `.env`
+- `CLAWKIE_DAEMON_HOST_ID = <CONFIGURE_DAEMON_PEER_ID>` → the exact `DAEMON_PEER_ID` from `.env`
 
-Do not patch the source copy in the repo with the real host ID.
+Do not patch the source copy with the real host ID. The daemon `.env` `DAEMON_PEER_ID` must equal the installed skill's `CLAWKIE_DAEMON_HOST_ID`.
 
-Invariant: the daemon `.env` `DAEMON_PEER_ID` must equal the installed skill's `CLAWKIE_DAEMON_HOST_ID`. If they ever diverge, the skill emits handoff links that point at the wrong rendezvous room.
+## Required verification gate
 
-## Verify the skill install
+Before reporting success, run every applicable check in [`docs/agent-install-verification.md`](docs/agent-install-verification.md), including:
 
-Before claiming success:
+- manual daemon check
+- persistent service check
+- OpenClaw infer smoke tests
+- installed skill config check
+- real handoff-link smoke test
+- OpenClaw agent-turn smoke test using the real session key
+- final report checklist
 
-A robust check should parse the configured host line instead of grepping the entire file for placeholder words. For example:
-
-```bash
-configured_host=$(awk -F'= ' '/^- CLAWKIE_DAEMON_HOST_ID = / {gsub(/`/, "", $2); print $2; exit}' "$CLAWKIE_SKILL_DIR/SKILL.md")
-test "$configured_host" = "$DAEMON_PEER_ID"
-```
-
-1. Confirm the installed skill exists at the runtime path.
-2. Confirm the installed skill says `INSTALLED = true`.
-3. Confirm the installed skill's **configuration bullet** for `CLAWKIE_DAEMON_HOST_ID` was patched from the repo placeholder to the daemon `.env` `DAEMON_PEER_ID`. Do not fail the install just because explanatory prose elsewhere mentions placeholders.
-4. Confirm no active config line remains exactly `CLAWKIE_DAEMON_HOST_ID = `<CONFIGURE_DAEMON_PEER_ID>``.
-5. Confirm the installed skill's `CLAWKIE_DAEMON_HOST_ID` matches the daemon `.env` `DAEMON_PEER_ID`.
-6. Construct a dry-run handoff URL using the same algorithm as the skill:
-
-```js
-const params = new URLSearchParams();
-params.set('host', daemonPeerId);
-params.set('session', 'agent:main:discord:channel:EXAMPLE');
-console.log(`https://clawkietalkie.app/voice#${params.toString()}`);
-```
-
-The dry-run URL must include only `host` and `session` in the hash. It must not include URL `channel` or `target`. For internal/webchat sessions, `session=agent:main:main` is valid. The skill must never emit `agent:main:main` for an external channel such as Discord/Slack/WhatsApp; external channels require the exact external session key.
-
-7. Run a real handoff-link smoke test in the current OpenClaw runtime by asking for `switch to voice` from the surface being installed for. Inspect the generated URL before trying the phone:
-   - It must use `/voice#` hash args.
-   - It must include the configured daemon `host`.
-   - For web chat, `session=agent%3Amain%3Amain` is valid.
-   - For Discord/Slack/etc. it must include the correct external `session`, not `session=agent%3Amain%3Amain`. It must not include URL `channel` or `target`.
-
-## Post-install: Device approval
-
-After the install completes and the user first tries "switch to voice", they may see:
-
-```
-VOICE ERROR · openclaw_gateway_unavailable
-```
-
-Check the daemon logs (Journal or LaunchAgent logs). Common causes:
-
-1. **Service-context gateway/auth failure** — the daemon's systemd/launchd environment cannot reach or authenticate to the OpenClaw gateway even though the installer's interactive shell can.
-2. **Scope upgrade pending approval** — the daemon's `openclaw agent --deliver --json` is treated as a new device connection requesting more permissions than currently approved.
-3. **Invalid session ID for the surface** — `agent:main:main` is valid for OpenClaw web chat, but wrong for Discord/Slack/etc.; external channels need their exact external session key.
-
-### Fix scope approval (device auth)
-
-If the daemon logs show a pending scope approval request:
-
-1. Tell the user to open their OpenClaw dashboard. The URL is typically the gateway address with port 18789, for example:
-   ```
-   http://<gateway-ip>:18789/
-   ```
-2. In the dashboard, look for a **pending pairing/scope approval request**.
-3. The request ID will appear in the daemon logs (example: `requestId a8b414c2-0d4b-4266-85b8-ab94662dce18`).
-4. Approve the request so the daemon can connect to the gateway for agent turns.
-5. After approval, restart the daemon service:
-   - macOS: `launchctl kickstart -k gui/$(id -u)/app.clawkietalkie.daemon`
-   - Linux: `systemctl --user restart clawkie-talkie.service`
-
-### Verify session ID in handoff URLs
-
-The handoff URL must include a real session ID/key in the `session` parameter. Example of a **valid** handoff URL:
-
-```
-https://clawkietalkie.app/voice#host=<peer-id>&session=agent%3Amain%3Adiscord%3Achannel%3A1498020851298209852
-```
-
-If the URL contains `session=agent%3Amain%3Amain` for Discord/Slack/etc., `session=agent%3Amain%3Awebchat`, or any URL `channel`/`target` parameter, the `clawkie-voice-handoff` skill is not resolving the current conversation correctly. Verify:
-
-1. The skill is installed and `INSTALLED = true`.
-2. The skill's `CLAWKIE_DAEMON_HOST_ID` matches the daemon's `DAEMON_PEER_ID`.
-3. The current session has a valid session key that the skill can read.
-
-### Verify the daemon service can run the agent turn
-
-Do not rely only on `openclaw status`, STT, TTS, or a daemon "Waiting for phone…" log line. Those do not prove that the persistent daemon can run the OpenClaw chat turn. Before reporting success, verify one of these:
-
-- Preferred: complete a real phone voice smoke test. Logs must show STT, `[chat] running OpenClaw turn`, a successful agent reply, TTS conversion, and no fatal `openclaw_gateway_unavailable`.
-- If no phone is available: run the same `openclaw agent --agent main --session-id <exact-session> --channel last --deliver --json -m <smoke-message>` command from the same OS user and environment shape that the service uses. For systemd installs, do not assume the interactive shell environment is equivalent; inspect the user service environment and fix missing `OPENCLAW_*`, auth, PATH, or gateway settings before claiming success.
-
-Tell the user: after approving the device request, confirming the handoff URL format, and verifying the daemon service can run an OpenClaw agent turn, "switch to voice" should work without `openclaw_gateway_unavailable`.
-
-## Required final report
-
-Report only non-secret facts:
-
-- Install mode: fresh install, upgrade, or reinstall/repair
-- Daemon source path
-- Whether dependencies installed
-- Whether `.env` exists and contains `DAEMON_PEER_ID`
-- Whether `DAEMON_PEER_ID` is stable/configured, without printing it unless the user explicitly asks
-- OpenClaw infer config present for `audio transcribe` and `tts convert`
-- `openclaw infer audio providers`, `tts providers`, `tts voices`, and smoke-test results
-- Persistence method installed: launchd or systemd user service
-- Service status/log evidence, including proof the persistent daemon service can run an OpenClaw agent turn without `openclaw_gateway_unavailable`
-- Skill destination path
-- Skill configured: yes/no
-- Verification commands run
-- Confirmation that agent/default model config was snapshotted before infer config and unchanged afterward
-- Any blockers
-
-Avoid posting the daemon host ID into public/shared chat unless necessary.
+If verification fails, use [`docs/agent-install-troubleshooting.md`](docs/agent-install-troubleshooting.md). Do not report success with unresolved infer, service, handoff URL, device approval, auth, gateway, or session-key failures.
