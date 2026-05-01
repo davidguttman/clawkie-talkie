@@ -165,6 +165,27 @@ Use this flow when `CLAWKIE_SOURCE_DIR` already exists, the daemon has run befor
 7. Restart only the Clawkie Talkie user service and run the same daemon, service, and skill verification checks listed below.
 8. If verification fails, keep the preserved `.env` and report the failing command/output. Do not keep retrying with a new host ID.
 
+## Pre-emptive device auth check
+
+**Before reporting success**, test that the daemon can connect to OpenClaw for agent turns. This prevents the `openclaw_gateway_unavailable` error:
+
+```bash
+# Test device auth and agent connection
+openclaw agent --deliver --json
+```
+
+Expected successful output:
+```json
+{"ok":true,"message":"device registered"}
+```
+
+If you see scope approval prompts in the logs:
+1. Note the request ID (format like `a8b414c2-0d4b-4266-85b8-ab94662dce18`)
+2. Tell the user: "Your install is complete, but you'll need to approve a device auth request in your OpenClaw dashboard before using voice. Dashboard: http://<gateway-ip>:18789/"
+3. Mark the install as complete with this caveat
+
+If you get connection errors (not scope approval), fix OpenClaw network/auth issues before proceeding.
+
 ## Prerequisites to verify
 
 From the user's shell account that will run the daemon:
@@ -253,6 +274,16 @@ If the user already has one of these keys, ask which provider they want. Then pr
 
 These setup snippets intentionally configure only the infer/auth surfaces Clawkie Talkie needs. They do **not** edit `agents.defaults.model` and do **not** change the normal chat/agent model.
 
+Important: OpenClaw has separate xAI config surfaces. Do not collapse them into one provider block.
+
+- `models.providers.xai` is model-provider metadata/auth used by the media-understanding STT path and other xAI model surfaces.
+- `tools.media.audio.models` selects the STT provider/model for `openclaw infer audio transcribe`.
+- `messages.tts.provider` and `messages.tts.providers.xai` configure xAI TTS for `openclaw infer tts convert`.
+- xAI TTS does **not** become configured by adding `grok-tts` to `models.providers.xai.models`. Do not add `grok-tts` there.
+- `openclaw infer tts providers --json` showing xAI with `models: []` is normal. The xAI TTS provider is voice-based (`voiceId`, default `eve`), not model-list based.
+- If TTS conversion reports `not_configured` or falls back to Microsoft/another provider, fix `messages.tts.provider` and `messages.tts.providers.xai.apiKey` for the same process/user running the command. Do not keep editing `models.providers.xai` for a TTS failure.
+- The TTS CLI `--model` override, if used, must be a provider/model ref such as `openai/gpt-4o-mini-tts`; `--model xai` is invalid. Prefer setting `messages.tts.provider` and smoke-testing without a model override.
+
 #### OpenAI infer setup
 
 Use this when the user chooses OpenAI or already has an OpenAI API key available locally. If the OpenAI provider already exists, preserve its current model list/defaults; otherwise this adds minimal provider metadata so OpenClaw can authenticate direct OpenAI API calls for STT.
@@ -262,7 +293,8 @@ read -rsp "Paste OpenAI API key for this machine, then press Enter: " OPENAI_KEY
 printf '\n'
 test -n "$OPENAI_KEY" || { echo "No key entered; cannot configure OpenAI infer" >&2; exit 1; }
 
-# STT auth/provider metadata. This does not select or change the default agent LLM.
+# STT/model-provider auth metadata. This does not select or change the default agent LLM.
+# This is separate from messages.tts.* below.
 if openclaw config get models.providers.openai --json >/dev/null 2>&1; then
   openclaw config set models.providers.openai.apiKey "$OPENAI_KEY"
 else
@@ -276,7 +308,7 @@ openclaw config set tools.media.audio.models \
   '[{"type":"provider","provider":"openai","model":"gpt-4o-transcribe"}]' \
   --strict-json
 
-# TTS default + TTS auth.
+# TTS default + TTS auth. This is the config surface used by `openclaw infer tts convert`.
 openclaw config set messages.tts.provider openai
 openclaw config set messages.tts.providers.openai.apiKey "$OPENAI_KEY"
 openclaw config set messages.tts.providers.openai.model gpt-4o-mini-tts
@@ -295,7 +327,8 @@ read -rsp "Paste xAI API key for this machine, then press Enter: " XAI_KEY
 printf '\n'
 test -n "$XAI_KEY" || { echo "No key entered; cannot configure xAI infer" >&2; exit 1; }
 
-# STT auth/provider metadata. This does not select or change the default agent LLM.
+# STT/model-provider auth metadata. This does not select or change the default agent LLM.
+# This is not the TTS config surface.
 if openclaw config get models.providers.xai --json >/dev/null 2>&1; then
   openclaw config set models.providers.xai.apiKey "$XAI_KEY"
 else
@@ -309,7 +342,8 @@ openclaw config set tools.media.audio.models \
   '[{"type":"provider","provider":"xai","model":"grok-stt"}]' \
   --strict-json
 
-# TTS default + TTS auth.
+# TTS default + TTS auth. This is the config surface used by `openclaw infer tts convert`.
+# Do not try to configure xAI TTS by adding `grok-tts` under models.providers.xai.
 openclaw config set messages.tts.provider xai
 openclaw config set messages.tts.providers.xai.apiKey "$XAI_KEY"
 openclaw config set messages.tts.providers.xai.voiceId eve
@@ -468,6 +502,50 @@ console.log(`https://clawkietalkie.app/voice#${params.toString()}`);
 ```
 
 The dry-run URL must include `host`, `session`, `channel`, and `target` in the hash.
+
+## Post-install: Device approval
+
+After the install completes and the user first tries "switch to voice", they may see:
+
+```
+VOICE ERROR · openclaw_gateway_unavailable
+```
+
+Check the daemon logs (Journal or LaunchAgent logs). Two common causes:
+
+1. **Scope upgrade pending approval** — the daemon's `openclaw agent --deliver --json` is treated as a new device connection requesting more permissions than currently approved.
+2. **Invalid session ID** — the handoff URL must include a real session ID, not an abstract key like `agent:main:main`.
+
+### Fix scope approval (device auth)
+
+If the daemon logs show a pending scope approval request:
+
+1. Tell the user to open their OpenClaw dashboard. The URL is typically the gateway address with port 18789, for example:
+   ```
+   http://<gateway-ip>:18789/
+   ```
+2. In the dashboard, look for a **pending pairing/scope approval request**.
+3. The request ID will appear in the daemon logs (example: `requestId a8b414c2-0d4b-4266-85b8-ab94662dce18`).
+4. Approve the request so the daemon can connect to the gateway for agent turns.
+5. After approval, restart the daemon service:
+   - macOS: `launchctl kickstart -k gui/$(id -u)/app.clawkietalkie.daemon`
+   - Linux: `systemctl --user restart clawkie-talkie.service`
+
+### Verify session ID in handoff URLs
+
+The handoff URL must include a real session ID in the `session` parameter. Example of a **valid** handoff URL:
+
+```
+https://clawkietalkie.app/voice#host=<peer-id>&session=0ee9365d-f6eb-4b93-8fcb-e04c092fde8c&channel=webchat
+```
+
+If the URL contains `session=agent%3Amain%3Amain` or similar abstract keys, the `clawkie-voice-handoff` skill is not resolving the session correctly. Verify:
+
+1. The skill is installed and `INSTALLED = true`.
+2. The skill's `CLAWKIE_DAEMON_HOST_ID` matches the daemon's `DAEMON_PEER_ID`.
+3. The current session has a valid session key that the skill can read.
+
+Tell the user: after approving the device request and confirming the handoff URL format, "switch to voice" should work without `openclaw_gateway_unavailable`.
 
 ## Required final report
 
