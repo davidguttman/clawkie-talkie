@@ -165,26 +165,32 @@ Use this flow when `CLAWKIE_SOURCE_DIR` already exists, the daemon has run befor
 7. Restart only the Clawkie Talkie user service and run the same daemon, service, and skill verification checks listed below.
 8. If verification fails, keep the preserved `.env` and report the failing command/output. Do not keep retrying with a new host ID.
 
-## Pre-emptive device auth check
+## Pre-emptive OpenClaw agent-turn check
 
-**Before reporting success**, test that the daemon can connect to OpenClaw for agent turns. This prevents the `openclaw_gateway_unavailable` error:
+**Before reporting success**, test the same OpenClaw agent-turn path the daemon will use after STT. `openclaw status`, STT, TTS, and daemon rendezvous registration are not enough; the install is not voice-ready until the daemon can run an OpenClaw chat turn without `openclaw_gateway_unavailable`.
+
+Use the real session key for the current conversation. For OpenClaw web chat, that is normally `agent:main:main`. For external channels, do not use `agent:main:main`; use the exact external session key such as `agent:main:discord:channel:<id>`:
 
 ```bash
-# Test device auth and agent connection
-openclaw agent --deliver --json
+SESSION_ID="<exact-current-session-id-or-key>"
+openclaw agent \
+  --agent main \
+  --session-id "$SESSION_ID" \
+  --channel last \
+  --deliver \
+  --json \
+  -m "Clawkie Talkie install smoke test. Reply with exactly: ok"
 ```
 
-Expected successful output:
-```json
-{"ok":true,"message":"device registered"}
-```
+This may deliver a small smoke-test reply to the current conversation; that is preferable to reporting a broken voice install as complete. If there is no real session key available yet, do not fake one. Mark this verification as blocked until a real `switch to voice` handoff can be generated from a live OpenClaw session.
 
 If you see scope approval prompts in the logs:
-1. Note the request ID (format like `a8b414c2-0d4b-4266-85b8-ab94662dce18`)
-2. Tell the user: "Your install is complete, but you'll need to approve a device auth request in your OpenClaw dashboard before using voice. Dashboard: http://<gateway-ip>:18789/"
-3. Mark the install as complete with this caveat
+1. Note the request ID (format like `a8b414c2-0d4b-4266-85b8-ab94662dce18`).
+2. Tell the user to approve the pending device/scope request in the OpenClaw dashboard.
+3. Report the install as **blocked pending device approval**, not complete.
+4. After approval, rerun this agent-turn check and restart the daemon service if needed.
 
-If you get connection errors (not scope approval), fix OpenClaw network/auth issues before proceeding.
+If you get connection errors, auth errors, gateway errors, or session lookup errors, fix those before proceeding. Do not classify the install as complete.
 
 ## Prerequisites to verify
 
@@ -530,7 +536,13 @@ params.set('target', 'channel:EXAMPLE');
 console.log(`https://clawkietalkie.app/voice#${params.toString()}`);
 ```
 
-The dry-run URL must include `host`, `session`, `channel`, and `target` in the hash.
+The dry-run URL must include `host`, `session`, `channel`, and `target` in the hash for external channels. For internal/webchat sessions, `target` may be omitted and `session=agent:main:main` is valid. The skill must never emit `agent:main:main` for an external channel such as Discord/Slack/WhatsApp.
+
+7. Run a real handoff-link smoke test in the current OpenClaw runtime by asking for `switch to voice` from the surface being installed for. Inspect the generated URL before trying the phone:
+   - It must use `/voice#` hash args.
+   - It must include the configured daemon `host`.
+   - For web chat, `session=agent%3Amain%3Amain&channel=webchat` is valid.
+   - For Discord/Slack/etc. it must include the correct external `session`, `channel`, and `target`, not `session=agent%3Amain%3Amain` or `channel=webchat`.
 
 ## Post-install: Device approval
 
@@ -540,10 +552,11 @@ After the install completes and the user first tries "switch to voice", they may
 VOICE ERROR · openclaw_gateway_unavailable
 ```
 
-Check the daemon logs (Journal or LaunchAgent logs). Two common causes:
+Check the daemon logs (Journal or LaunchAgent logs). Common causes:
 
-1. **Scope upgrade pending approval** — the daemon's `openclaw agent --deliver --json` is treated as a new device connection requesting more permissions than currently approved.
-2. **Invalid session ID** — the handoff URL must include a real session ID, not an abstract key like `agent:main:main`.
+1. **Service-context gateway/auth failure** — the daemon's systemd/launchd environment cannot reach or authenticate to the OpenClaw gateway even though the installer's interactive shell can.
+2. **Scope upgrade pending approval** — the daemon's `openclaw agent --deliver --json` is treated as a new device connection requesting more permissions than currently approved.
+3. **Invalid session ID for the surface** — `agent:main:main` is valid for OpenClaw web chat, but wrong for Discord/Slack/etc.; external channels need their real channel/thread session key and target.
 
 ### Fix scope approval (device auth)
 
@@ -562,19 +575,26 @@ If the daemon logs show a pending scope approval request:
 
 ### Verify session ID in handoff URLs
 
-The handoff URL must include a real session ID in the `session` parameter. Example of a **valid** handoff URL:
+The handoff URL must include a real session ID/key in the `session` parameter. Example of a **valid** handoff URL:
 
 ```
-https://clawkietalkie.app/voice#host=<peer-id>&session=0ee9365d-f6eb-4b93-8fcb-e04c092fde8c&channel=webchat
+https://clawkietalkie.app/voice#host=<peer-id>&session=agent%3Amain%3Adiscord%3Achannel%3A1498020851298209852&channel=discord&target=channel%3A1498020851298209852
 ```
 
-If the URL contains `session=agent%3Amain%3Amain` or similar abstract keys, the `clawkie-voice-handoff` skill is not resolving the session correctly. Verify:
+If the URL contains `session=agent%3Amain%3Amain` for Discord/Slack/etc., `session=agent%3Amain%3Awebchat`, `channel=webchat` for an external channel, or no target for an external channel, the `clawkie-voice-handoff` skill is not resolving the current conversation correctly. Verify:
 
 1. The skill is installed and `INSTALLED = true`.
 2. The skill's `CLAWKIE_DAEMON_HOST_ID` matches the daemon's `DAEMON_PEER_ID`.
 3. The current session has a valid session key that the skill can read.
 
-Tell the user: after approving the device request and confirming the handoff URL format, "switch to voice" should work without `openclaw_gateway_unavailable`.
+### Verify the daemon service can run the agent turn
+
+Do not rely only on `openclaw status`, STT, TTS, or a daemon "Waiting for phone…" log line. Those do not prove that the persistent daemon can run the OpenClaw chat turn. Before reporting success, verify one of these:
+
+- Preferred: complete a real phone voice smoke test. Logs must show STT, `[chat] running OpenClaw turn`, a successful agent reply, TTS conversion, and no fatal `openclaw_gateway_unavailable`.
+- If no phone is available: run the same `openclaw agent --agent main --session-id <exact-session> --channel last --deliver --json -m <smoke-message>` command from the same OS user and environment shape that the service uses. For systemd installs, do not assume the interactive shell environment is equivalent; inspect the user service environment and fix missing `OPENCLAW_*`, auth, PATH, or gateway settings before claiming success.
+
+Tell the user: after approving the device request, confirming the handoff URL format, and verifying the daemon service can run an OpenClaw agent turn, "switch to voice" should work without `openclaw_gateway_unavailable`.
 
 ## Required final report
 
@@ -588,7 +608,7 @@ Report only non-secret facts:
 - OpenClaw infer config present for `audio transcribe` and `tts convert`
 - `openclaw infer audio providers`, `tts providers`, `tts voices`, and smoke-test results
 - Persistence method installed: launchd or systemd user service
-- Service status/log evidence
+- Service status/log evidence, including proof the persistent daemon service can run an OpenClaw agent turn without `openclaw_gateway_unavailable`
 - Skill destination path
 - Skill configured: yes/no
 - Verification commands run

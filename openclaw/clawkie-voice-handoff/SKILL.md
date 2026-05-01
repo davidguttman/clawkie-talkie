@@ -43,7 +43,7 @@ https://clawkietalkie.app/voice#host=<host>&session=<sessionId>&channel=<channel
 For internal/webchat sessions where no external delivery target exists, omit `target`:
 
 ```txt
-https://clawkietalkie.app/voice#host=<host>&session=<sessionId>&channel=webchat
+https://clawkietalkie.app/voice#host=<host>&session=agent:main:main&channel=webchat
 ```
 
 Use hash args so `sessionId`, UUID-like values, and provider targets are not sent to web servers. Query params are compatibility-only; do not generate them unless explicitly requested.
@@ -64,7 +64,7 @@ I can’t create the voice link: missing Clawkie host ID.
 
 ### `session`
 
-Use the current OpenClaw agent session key/id. Prefer an exact session key if present in runtime/session context, e.g.:
+Use the current OpenClaw agent session key/id. For external channels, use an exact session key/id from trusted runtime/session context, e.g.:
 
 ```txt
 agent:main:discord:channel:1498020851298209852
@@ -72,13 +72,13 @@ agent:main:slack:channel:C123:thread:1710000000.000100
 agent:codex:acp:binding:discord:default:feedface
 ```
 
-For internal webchat sessions, use this session key when that is the only trusted session value visible:
+For internal web chat, the canonical main-session key is:
 
 ```txt
 agent:main:main
 ```
 
-For internal/webchat sessions, use `agent:main:main` when no more specific exact session key is visible. The daemon invokes OpenClaw with `--agent main --session-id agent:main:main --channel last --deliver`, so it does not need an external message target. Older `agent:main:webchat` links are normalized by the daemon to this webchat session-only form. Do not use this fallback for Discord or other external channels.
+Use `agent:main:main` only when the trusted runtime context is actually the OpenClaw web chat / internal main session. Do not use it as a fallback for Discord, Slack, WhatsApp, Telegram, ACP, subagent, custom, direct-message, or bound sessions.
 
 If no exact current session key/id is visible, do not invent one. For ordinary main group/channel sessions only, deriving from OpenClaw’s session-key convention is acceptable when all parts are certain:
 
@@ -110,7 +110,7 @@ Use the OpenClaw message target for mirroring transcripts back to the originatin
 
 Preferred source: `Conversation info` → `chat_id`, exactly as provided.
 
-If this is an internal/webchat session and no external delivery target exists, do **not** block; omit `target` from the URL. The daemon will run `openclaw agent --session-id` and return the spoken reply to the phone without calling `openclaw message send`.
+If this is an internal/webchat session and no external delivery target exists, do **not** block; omit `target` from the URL and use `session=agent:main:main` unless a more specific trusted webchat session key/id is visible.
 
 Examples:
 
