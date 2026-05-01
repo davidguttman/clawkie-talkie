@@ -13,7 +13,7 @@ import {
 } from 'react';
 import { RtcClient, type ControlMessage, type RtcStatus } from './client';
 import { attachDaemonRemoteStream, detachDaemonRemoteStream } from '../voice/tts';
-import { phoneToDaemon, type DeliveryTarget, type SttCatalog, type TtsCatalog, type VoiceSettings } from '../voice/protocol';
+import { phoneToDaemon, type SttCatalog, type TtsCatalog, type VoiceSettings } from '../voice/protocol';
 
 export interface RtcContextValue {
   status: RtcStatus;
@@ -98,7 +98,6 @@ function voiceSelectionKey(voiceSettings?: VoiceSettings | null): string | null 
 
 export interface RtcRendezvous {
   sessionId: string;
-  delivery: DeliveryTarget;
 }
 
 export function RtcProvider({
@@ -214,7 +213,6 @@ export function RtcProvider({
     clientRef.current?.sendControl(
       phoneToDaemon.rendezvousJoin({
         sessionId: rendezvous.sessionId,
-        delivery: rendezvous.delivery,
         ...(normalizedVoiceSettings ? { settings: normalizedVoiceSettings } : {}),
       }),
     );

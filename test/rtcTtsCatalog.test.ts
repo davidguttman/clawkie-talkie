@@ -106,7 +106,6 @@ const initialSettings: VoiceSettings = {
 
 const rendezvous: RtcRendezvous = {
   sessionId: 'session-1',
-  delivery: { channel: 'discord', target: 'channel:thread-1' },
 };
 
 const catalog: TtsCatalog = {
@@ -234,7 +233,6 @@ describe('RtcProvider TTS catalog and settings sync', () => {
       {
         t: 'rendezvous.join',
         sessionId: 'session-1',
-        delivery: { channel: 'discord', target: 'channel:thread-1' },
       },
     ]);
   });
@@ -469,7 +467,6 @@ describe('RtcProvider TTS catalog and settings sync', () => {
       {
         t: 'rendezvous.join',
         sessionId: 'session-1',
-        delivery: { channel: 'discord', target: 'channel:thread-1' },
         settings: initialSettings,
       },
     ]);

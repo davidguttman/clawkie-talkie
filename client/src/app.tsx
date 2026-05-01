@@ -240,7 +240,6 @@ export function App() {
         initial.handoff
           ? {
               sessionId: initial.handoff.sessionId,
-              delivery: initial.handoff.delivery,
             }
           : null
       }

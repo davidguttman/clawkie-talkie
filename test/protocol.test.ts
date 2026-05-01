@@ -32,30 +32,15 @@ describe('phone → daemon factories', () => {
     );
   });
 
-  it('emits a generic rendezvous join with delivery', () => {
-    expect(
-      phoneClient.rendezvousJoin({
-        sessionId: 'session-1',
-        delivery: { channel: 'discord', target: 'channel:thread-1' },
-      }),
-    ).toEqual({
-      t: 'rendezvous.join',
-      sessionId: 'session-1',
-      delivery: { channel: 'discord', target: 'channel:thread-1' },
-    });
-  });
-
   it('includes voice settings in rendezvous join when provided', () => {
     expect(
       phoneClient.rendezvousJoin({
         sessionId: 'session-1',
-        delivery: { channel: 'discord', target: 'channel:thread-1' },
         settings: { voice: 'ara' },
       }),
     ).toEqual({
       t: 'rendezvous.join',
       sessionId: 'session-1',
-      delivery: { channel: 'discord', target: 'channel:thread-1' },
       settings: { voice: 'ara' },
     });
   });
@@ -108,12 +93,10 @@ describe('phone → daemon factories', () => {
     expect(
       phoneClient.rendezvousJoin({
         sessionId: 's',
-        delivery: { channel: 'discord', target: 'channel:t' },
       }),
     ).toEqual(
       phoneDaemon.rendezvousJoin({
         sessionId: 's',
-        delivery: { channel: 'discord', target: 'channel:t' },
       }),
     );
   });
@@ -125,26 +108,11 @@ describe('rendezvous delivery validation', () => {
     expect(validateRendezvousDelivery(undefined)).toEqual({ ok: true });
   });
 
-  it('accepts webchat without an external target', () => {
+  it('ignores legacy delivery values instead of using URL channel/target', () => {
     expect(validateRendezvousDelivery({ channel: 'webchat' })).toEqual({ ok: true });
-  });
-
-  it('accepts complete external delivery and trims it', () => {
-    expect(validateRendezvousDelivery({ channel: ' discord ', target: ' channel:t ' })).toEqual({
-      ok: true,
-      delivery: { channel: 'discord', target: 'channel:t' },
-    });
-  });
-
-  it('rejects partial external delivery', () => {
-    expect(validateRendezvousDelivery({ channel: 'discord' })).toEqual({
-      ok: false,
-      message: 'invalid_delivery',
-    });
-    expect(validateRendezvousDelivery({ target: 'channel:t' })).toEqual({
-      ok: false,
-      message: 'invalid_delivery',
-    });
+    expect(validateRendezvousDelivery({ channel: ' discord ', target: ' channel:t ' })).toEqual({ ok: true });
+    expect(validateRendezvousDelivery({ channel: 'discord' })).toEqual({ ok: true });
+    expect(validateRendezvousDelivery({ target: 'channel:t' })).toEqual({ ok: true });
   });
 });
 

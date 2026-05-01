@@ -96,15 +96,13 @@ The interface is intentionally walkie-talkie shaped: one obvious start/stop cont
 A real handoff URL looks like this:
 
 ```text
-https://clawkietalkie.app/voice#host=<daemon>&session=<openclaw-session>&channel=<channel>&target=<target>
+https://clawkietalkie.app/voice#host=<daemon>&session=<openclaw-session>
 ```
 
 Those values are not a login token or a credential bundle. They are routing information:
 
 - `host` — the stable local daemon ID on the user's machine.
-- `session` — the OpenClaw session to continue.
-- `channel` — where the original conversation lives.
-- `target` — where transcript/reply mirroring should be delivered, when the source is an external channel like Discord.
+- `session` — the OpenClaw session to continue. For external channels, this must be the exact external session key; `channel` and `target` are not URL params.
 
 The values live in the URL hash so they are parsed by the browser locally instead of being sent to the web server as normal request parameters.
 
@@ -155,7 +153,7 @@ voice room = daemon host + OpenClaw session
 
 That means the same daemon can support multiple OpenClaw sessions without mixing them together. A Discord thread, a webchat session, and another channel can all produce different voice rooms through the same local daemon.
 
-The agent does not call a daemon API to mint a link. It builds the URL directly from already-known OpenClaw context: daemon host ID, session ID, channel, and target.
+The agent does not call a daemon API to mint a link. It builds the URL directly from already-known OpenClaw context: daemon host ID and session ID.
 
 ## What must already work
 
@@ -211,7 +209,7 @@ Join URL: https://clawkietalkie.app/?host=<daemon-peer-id>
 Waiting for phone…
 ```
 
-That host-only URL is a daemon connectivity hint. A real OpenClaw voice handoff uses `/voice#host=...&session=...&channel=...`.
+That host-only URL is a daemon connectivity hint. A real OpenClaw voice handoff uses `/voice#host=...&session=...`.
 
 ## Troubleshooting
 
@@ -221,7 +219,7 @@ Check that the daemon is running and that the `host` value in the link matches t
 
 ### The page says the session is bad
 
-The handoff link is missing routing fields or was built for the wrong context. External channels need `host`, `session`, `channel`, and `target`. Webchat/internal links can omit `target`.
+The handoff link is missing routing fields or was built for the wrong context. All handoff links need `host` and `session`; external channels need the exact external session key and no URL `channel`/`target`.
 
 ### Voice records but no reply comes back
 

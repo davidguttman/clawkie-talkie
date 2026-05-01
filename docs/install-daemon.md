@@ -136,10 +136,10 @@ Waiting for phone…
 
 Leave this terminal running for the first manual test. Press `Ctrl-C` to stop it.
 
-The printed `Join URL` proves the daemon has a host ID and client origin. Real voice handoff links are usually created by OpenClaw and include the current session and delivery target, for example:
+The printed `Join URL` proves the daemon has a host ID and client origin. Real voice handoff links are usually created by OpenClaw and include only the current session, for example:
 
 ```text
-https://clawkietalkie.app/voice#host=<host>&session=<session>&channel=<channel>&target=<target>
+https://clawkietalkie.app/voice#host=<host>&session=<session>
 ```
 
 ## Keep it running on macOS with launchd
@@ -388,7 +388,7 @@ This is usually a path or working-directory problem.
 
 ### The browser shows a bad-session error
 
-The link is missing required handoff fields. A real handoff URL needs `host`, `session`, `channel`, and `target`. The daemon's printed host-only URL is only a startup hint.
+The link is missing required handoff fields. A real handoff URL needs `host` and `session`. The daemon's printed host-only URL is only a startup hint.
 
 ### Signaling or WebRTC never connects
 
