@@ -18,9 +18,26 @@ Windows native packages exist for the WebRTC dependency, but this repo does not 
 - A machine that can stay online while you want voice handoff to work.
 - Node.js and npm. Use a current Node release; Node 22 LTS or newer is recommended.
 - `curl` and `unzip` for downloading the source ZIP.
+- `ffmpeg` installed and available on `PATH` for the same user/service that runs the daemon. OpenClaw TTS currently writes encoded audio, and the daemon decodes that file to PCM16LE before sending audio over WebRTC.
 - OpenClaw installed, configured, and available on `PATH` as `openclaw` for the same user that runs the daemon.
 - Working OpenClaw provider configuration for agent replies, audio transcription, and TTS. If infer audio/TTS is missing, the installer must configure or repair it before reporting success. Otherwise the daemon can start and print a Join URL, but voice turns fail: STT failures surface as `INFER ERROR · OPENCLAW INFER STT FAILED`; TTS failures surface as `TTS ERROR · OPENCLAW INFER TTS FAILED`.
 - Outbound network access to the signaling service and any OpenClaw providers you use.
+
+Install `ffmpeg` with the platform's normal package manager, for example:
+
+- macOS/Homebrew: `brew install ffmpeg`
+- Debian/Ubuntu: `sudo apt install ffmpeg`
+- Fedora/RHEL: `sudo dnf install ffmpeg`
+- Arch: `sudo pacman -S ffmpeg`
+
+Verify it from the same shell account that will run the daemon:
+
+```bash
+command -v ffmpeg
+ffmpeg -version
+```
+
+For launchd or systemd installs, make sure the service `PATH` includes the directory printed by `command -v ffmpeg`. A service can fail TTS conversion even when an interactive shell finds `ffmpeg` if the service environment has a narrower `PATH`.
 
 The daemon uses `@roamhq/wrtc` for native WebRTC. Its package includes prebuilt native packages for common macOS/Linux architectures. If your platform cannot use a prebuild, `npm install` may need native build tools:
 

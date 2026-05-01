@@ -8,8 +8,9 @@ Infer failures usually surface like this:
 
 - missing/broken audio transcription → `openclaw infer audio transcribe` fails, the phone receives `stt.error`, and the UI shows `INFER ERROR · OPENCLAW INFER STT FAILED`
 - missing/broken TTS → `openclaw infer tts convert` fails after the agent reply, the phone receives `tts.error`, and the UI shows `TTS ERROR · OPENCLAW INFER TTS FAILED`
+- missing `ffmpeg` after successful TTS generation → `openclaw infer tts convert` can create an MP3, but the daemon cannot decode that MP3 to PCM for WebRTC, so the phone still receives `tts.error` / `TTS ERROR · OPENCLAW INFER TTS FAILED`
 
-For infer failures, return to [`agent-install-infer.md`](agent-install-infer.md). If status/infer checks pass but voice replies fail, move directly to the agent-turn check/preflight; status and infer are not the relevant gate for reply-scope approval failures.
+For infer failures, return to [`agent-install-infer.md`](agent-install-infer.md). If OpenClaw TTS succeeds but daemon voice replies fail at the TTS audio step, verify `ffmpeg` first. If status/infer checks pass but voice replies fail before or during the OpenClaw chat turn, move directly to the agent-turn check/preflight; status and infer are not the relevant gate for reply-scope approval failures.
 
 After the user first tries `switch to voice`, they may see:
 

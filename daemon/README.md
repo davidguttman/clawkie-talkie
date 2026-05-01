@@ -23,7 +23,9 @@ From the repo root:
 
     npm install
 
-Runtime deps: `simple-peer`, `@roamhq/wrtc`, `ws`.
+Runtime deps: `simple-peer`, `@roamhq/wrtc`, `ws`, plus the `ffmpeg` executable on `PATH` for TTS audio decoding.
+
+OpenClaw infer TTS currently produces an encoded audio file. The daemon uses `ffmpeg` to decode that file into PCM16LE mono before forwarding audio to the phone/WebRTC path. If `openclaw infer tts convert` succeeds but spoken replies still fail with `tts.error`, verify `command -v ffmpeg` from the same user/service environment that runs the daemon.
 
 ## Local dev
 

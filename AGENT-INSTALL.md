@@ -13,7 +13,8 @@ Before reporting success, verify all of this:
 3. The daemon is persistent after login/reboot through launchd or `systemd --user`.
 4. The OpenClaw `clawkie-voice-handoff` skill is installed and points at the same daemon host ID.
 5. OpenClaw infer STT and TTS work for the same OS user that runs the daemon.
-6. The daemon, skill, infer config, persistence, and OpenClaw agent-turn path are verified. See [`docs/agent-install-verification.md`](docs/agent-install-verification.md).
+6. `ffmpeg` is installed and available on `PATH` for the daemon service user, because the daemon currently decodes OpenClaw TTS output into PCM before sending it over WebRTC.
+7. The daemon, skill, infer config, persistence, and OpenClaw agent-turn path are verified. See [`docs/agent-install-verification.md`](docs/agent-install-verification.md).
 
 ## Nontechnical user contract
 
@@ -69,12 +70,13 @@ Run as the OS user that will run the daemon:
 ```bash
 node -v
 npm -v
+command -v ffmpeg
 command -v openclaw
 openclaw --version || true
 openclaw status --json
 ```
 
-Use Node 22 LTS or newer when possible. Stop until OpenClaw 2026.4.25+ is installed and configured. After the source is present, use the repo preflight script for repeatable status/infer/agent-turn checks.
+Use Node 22 LTS or newer when possible. Install `ffmpeg` before daemon verification if it is missing. Stop until OpenClaw 2026.4.25+ is installed and configured. After the source is present, use the repo preflight script for repeatable status/infer/agent-turn checks.
 
 ### 2. Fetch and inspect source
 

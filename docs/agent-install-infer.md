@@ -48,6 +48,7 @@ Requirements:
 - `openclaw infer tts providers --json` must show at least one usable speech provider.
 - `openclaw infer tts voices --provider <provider> --json` should list voices or return a provider-specific success response.
 - `openclaw infer tts convert ... --json` must create an output file.
+- `ffmpeg` must be able to decode that TTS output to PCM from the same user/service environment that runs the daemon.
 
 If infer is not configured, do **not** improvise by installing random local speech packages, building `whisper-cpp`, editing protected OpenClaw config files directly, or relying on a no-key TTS provider by itself.
 
@@ -145,7 +146,12 @@ openclaw infer tts convert \
   --output /tmp/clawkie-openclaw-infer-smoke.mp3 \
   --json
 test -s /tmp/clawkie-openclaw-infer-smoke.mp3
+ffmpeg -hide_banner -loglevel error \
+  -i /tmp/clawkie-openclaw-infer-smoke.mp3 \
+  -f s16le -acodec pcm_s16le -ac 1 -ar 24000 \
+  /tmp/clawkie-openclaw-infer-smoke.pcm
+test -s /tmp/clawkie-openclaw-infer-smoke.pcm
 openclaw infer audio transcribe --file /tmp/clawkie-openclaw-infer-smoke.mp3 --json
 ```
 
-If TTS passes but audio transcription fails, fix `tools.media.audio`. If audio transcription passes but TTS fails, fix `messages.tts`.
+If TTS passes but the `ffmpeg` decode step fails, install/fix `ffmpeg` for the daemon user or service environment. If TTS passes but audio transcription fails, fix `tools.media.audio`. If audio transcription passes but TTS fails, fix `messages.tts`.
