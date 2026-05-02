@@ -1,148 +1,251 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
 
-const root = resolve(__dirname, '..');
-const appSource = readFileSync(resolve(root, 'client/src/app.tsx'), 'utf8');
+import { act, createElement, Fragment, useEffect, type ReactNode } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-function requireMatch(source: string, pattern: RegExp, label: string) {
-  const match = source.match(pattern);
-  expect(match, label).not.toBeNull();
-  return match as RegExpMatchArray;
+const drivingProbe = vi.hoisted(() => ({
+  mounts: 0,
+  unmounts: 0,
+}));
+
+const rtcProbe = vi.hoisted(() => ({
+  voiceSettings: [] as unknown[],
+}));
+
+vi.mock('../client/src/rtc/RtcContext', async () => {
+  const actual = await vi.importActual<typeof import('../client/src/rtc/RtcContext')>(
+    '../client/src/rtc/RtcContext',
+  );
+  return {
+    ...actual,
+    RtcProvider: ({
+      children,
+      voiceSettings,
+    }: {
+      children: ReactNode;
+      voiceSettings?: unknown;
+    }) => {
+      rtcProbe.voiceSettings.push(voiceSettings);
+      return createElement(Fragment, null, children);
+    },
+    useRtc: () => ({
+      status: 'open',
+      detail: undefined,
+      sendControl: () => undefined,
+      sendBinary: () => undefined,
+      addControlListener: () => () => undefined,
+      addBinaryListener: () => () => undefined,
+      addRemoteStreamListener: () => () => undefined,
+      ttsCatalog: null,
+      requestTtsCatalog: () => undefined,
+      sttCatalog: null,
+      requestSttCatalog: () => undefined,
+      hasClient: true,
+    }),
+  };
+});
+
+vi.mock('../client/src/screens/Driving', () => ({
+  DrivingScreen: ({ onSettings }: { onSettings?: () => void }) => {
+    useEffect(() => {
+      drivingProbe.mounts += 1;
+      return () => {
+        drivingProbe.unmounts += 1;
+      };
+    }, []);
+
+    return createElement(
+      'section',
+      { 'data-testid': 'driving-screen' },
+      createElement(
+        'button',
+        { type: 'button', 'aria-label': 'Settings', onClick: onSettings },
+        'Settings',
+      ),
+    );
+  },
+}));
+
+vi.mock('../client/src/screens/Settings', () => ({
+  SettingsScreen: ({ onBack }: { onBack: () => void }) => createElement(
+    'section',
+    { 'data-testid': 'settings-screen' },
+    createElement('button', { type: 'button', onClick: onBack }, 'Back'),
+  ),
+}));
+
+vi.mock('../client/src/screens/History', () => ({
+  HistoryScreen: () => createElement('section', { 'data-testid': 'history-screen' }),
+}));
+
+vi.mock('../client/src/screens/Transcript', () => ({
+  TranscriptScreen: () => createElement('section', { 'data-testid': 'transcript-screen' }),
+}));
+
+vi.mock('../client/src/screens/ErrorScreen', () => ({
+  ErrorScreen: () => createElement('section', { 'data-testid': 'error-screen' }),
+}));
+
+class MemoryStorage {
+  private data = new Map<string, string>();
+  getItem(key: string): string | null {
+    return this.data.get(key) ?? null;
+  }
+  setItem(key: string, value: string): void {
+    this.data.set(key, value);
+  }
+  clear(): void {
+    this.data.clear();
+  }
 }
 
-function jsxTag(source: string, component: string) {
-  const match = source.match(new RegExp(`<${component}\\b[\\s\\S]*?/>`));
-  expect(match, `${component} should be rendered from App`).not.toBeNull();
-  return match?.[0] ?? '';
+let root: Root | null = null;
+let container: HTMLDivElement | null = null;
+
+async function renderApp(hash = '#host=host-1&session=session-1'): Promise<HTMLDivElement> {
+  window.history.replaceState(null, '', `/voice${hash}`);
+  container = document.createElement('div');
+  document.body.appendChild(container);
+  root = createRoot(container);
+  const { App } = await import('../client/src/app');
+  await act(async () => {
+    root?.render(createElement(App));
+  });
+  return container;
 }
 
-function appRenderContainer(source: string) {
-  const appContent = source.match(/const\s+appContent\s*=\s*\(([\s\S]*?)\);\s*return\s*\(/);
-  if (appContent) return appContent[1];
-
-  return requireMatch(
-    source,
-    /<ResponsiveRuntime\b[^>]*>([\s\S]*?)<\/ResponsiveRuntime>/,
-    'App should render content inside ResponsiveRuntime',
-  )[1];
+function getDialog(): HTMLElement {
+  const dialog = container?.querySelector<HTMLElement>('[role="dialog"][aria-label="Settings"]');
+  if (!dialog) throw new Error('missing Settings dialog');
+  return dialog;
 }
 
-function componentSource(source: string, name: string) {
-  const start = source.indexOf(`function ${name}(`);
-  expect(start, `${name} should be declared`).toBeGreaterThanOrEqual(0);
+beforeEach(() => {
+  vi.resetModules();
+  vi.stubGlobal('localStorage', new MemoryStorage());
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  drivingProbe.mounts = 0;
+  drivingProbe.unmounts = 0;
+  rtcProbe.voiceSettings = [];
+  container = null;
+  root = null;
+});
 
-  const nextFunction = source.indexOf('\nfunction ', start + 1);
-  return source.slice(start, nextFunction === -1 ? source.length : nextFunction);
-}
+afterEach(async () => {
+  if (root) {
+    await act(async () => {
+      root?.unmount();
+    });
+  }
+  container?.remove();
+  root = null;
+  container = null;
+  vi.unstubAllGlobals();
+});
 
-describe('App Settings overlay contract', () => {
-  it('does not model Settings as an exclusive ScreenId route', () => {
-    const [, screenIdUnion] = requireMatch(
-      appSource,
-      /type\s+ScreenId\s*=\s*([^;]+);/s,
-      'ScreenId union should be declared in App',
+describe('App Settings overlay behavior', () => {
+  it('seeds RTC voice settings from the current host record and ignores legacy global voice/provider settings', async () => {
+    localStorage.setItem(
+      'clawkie.settings.v1',
+      JSON.stringify({
+        voice: 'global-rex',
+        tts: { providerId: 'global-provider', voice: 'global-rex' },
+        stt: { providerId: 'global-stt' },
+        hosts: {
+          'host-1': {
+            voice: 'nova',
+            tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' },
+            stt: { providerId: 'xai', model: 'grok-stt' },
+          },
+        },
+      }),
     );
 
-    expect(screenIdUnion).not.toMatch(/['"]settings['"]/);
+    await renderApp();
+
+    expect(rtcProbe.voiceSettings.at(-1)).toEqual({
+      voice: 'nova',
+      tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' },
+      stt: { providerId: 'xai', model: 'grok-stt' },
+    });
   });
 
-  it('does not navigate to Settings through the base screen router', () => {
-    expect(appSource).not.toMatch(/\bgo\s*\(\s*['"]settings['"]\s*\)/);
+  it('opens Settings as a dialog overlay while keeping the Driving screen mounted behind it', async () => {
+    const view = await renderApp();
+    expect(view.querySelector('[data-testid="driving-screen"]')).not.toBeNull();
+    expect(drivingProbe.mounts).toBe(1);
+
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('[aria-label="Settings"]')?.click();
+    });
+
+    const dialog = getDialog();
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    expect(dialog.tabIndex).toBe(-1);
+    expect(document.activeElement).toBe(dialog);
+    expect(view.querySelector('[data-testid="settings-screen"]')).not.toBeNull();
+    expect(view.querySelector('[data-testid="driving-screen"]')).not.toBeNull();
+    expect(drivingProbe.mounts).toBe(1);
+    expect(drivingProbe.unmounts).toBe(0);
   });
 
-  it('keeps DrivingScreen wired with an onSettings callback', () => {
-    const drivingScreen = jsxTag(appSource, 'DrivingScreen');
+  it('isolates the base content from assistive tech and focus while Settings is open', async () => {
+    const view = await renderApp();
 
-    expect(drivingScreen).toMatch(/\bonSettings\s*=\s*\{/);
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('[aria-label="Settings"]')?.click();
+    });
+
+    const driving = view.querySelector('[data-testid="driving-screen"]');
+    const baseContent = driving?.parentElement;
+    expect(baseContent?.getAttribute('aria-hidden')).toBe('true');
+    expect(baseContent?.getAttribute('inert')).toBe('');
   });
 
-  it('renders Settings from overlay state instead of a screen branch', () => {
-    expect(appSource).not.toMatch(/\bscreen\s*={2,3}\s*['"]settings['"]/);
-    expect(appSource).toMatch(/\bsettingsOpen\b/);
-    expect(appSource).toMatch(/\bsetSettingsOpen\b/);
+  it('does not close Settings when the scrim is clicked', async () => {
+    const view = await renderApp();
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('[aria-label="Settings"]')?.click();
+    });
 
-    const settingsScreen = jsxTag(appSource, 'SettingsScreen');
-    expect(settingsScreen).toMatch(/\bonBack\s*=\s*\{[^}]*setSettingsOpen\s*\(\s*false\s*\)/s);
+    const scrim = getDialog().parentElement?.querySelector<HTMLElement>('[aria-hidden="true"]');
+    expect(scrim).not.toBeNull();
+
+    await act(async () => {
+      scrim?.click();
+    });
+
+    expect(getDialog()).not.toBeNull();
+    expect(view.querySelector('[data-testid="driving-screen"]')).not.toBeNull();
+    expect(drivingProbe.unmounts).toBe(0);
   });
 
-  it('renders the base screen content before the Settings overlay without remount keys', () => {
-    const renderContainer = appRenderContainer(appSource);
-    const screenContentIndex = renderContainer.indexOf('screenContent');
-    const settingsOverlayIndex = renderContainer.search(
-      /settingsOpen|SettingsOverlay|SettingsScreen/,
-    );
+  it('closes Settings locally from Escape or the Settings back action without routing away', async () => {
+    const view = await renderApp();
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('[aria-label="Settings"]')?.click();
+    });
 
-    expect(screenContentIndex).toBeGreaterThanOrEqual(0);
-    expect(settingsOverlayIndex).toBeGreaterThan(screenContentIndex);
-    expect(appSource).not.toMatch(/\bkey\s*=\s*\{\s*(screen|settingsOpen)\s*\}/);
-    expect(appSource).not.toMatch(
-      /settingsOpen[\s\S]{0,240}\?\s*<DrivingScreen\b|<DrivingScreen\b[\s\S]{0,240}:\s*null[\s\S]{0,240}settingsOpen/,
-    );
-  });
+    await act(async () => {
+      getDialog().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
 
-  it('contains the overlay inside a positioned full-height App content stack', () => {
-    const renderContainer = appRenderContainer(appSource);
+    expect(view.querySelector('[role="dialog"][aria-label="Settings"]')).toBeNull();
+    expect(view.querySelector('[data-testid="driving-screen"]')).not.toBeNull();
+    expect(drivingProbe.mounts).toBe(1);
+    expect(drivingProbe.unmounts).toBe(0);
 
-    expect(renderContainer).toMatch(/position:\s*['"]relative['"]/);
-    expect(renderContainer).toMatch(/height:\s*['"]100%['"]/);
-    expect(renderContainer).toMatch(/minHeight:\s*0/);
-    expect(renderContainer).toMatch(/overflow:\s*['"]hidden['"]/);
-    expect(renderContainer).toMatch(/\{\.\.\.baseContentIsolationProps\}/);
-    expect(appSource).toMatch(
-      /const\s+overlayOpen\s*=\s*settingsOpen\s*\|\|\s*historyOpen;/,
-    );
-    expect(appSource).toMatch(
-      /const\s+baseContentIsolationProps:\s*\{\s*['"]aria-hidden['"]\?:\s*true;\s*inert\?:\s*['"]{2}\s*\}\s*=\s*overlayOpen\s*\?\s*\{\s*['"]aria-hidden['"]:\s*true,\s*inert:\s*['"]{2}\s*\}/,
-    );
-  });
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('[aria-label="Settings"]')?.click();
+    });
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('[data-testid="settings-screen"] button')?.click();
+    });
 
-  it('defines a SettingsOverlay shell with dialog accessibility attributes', () => {
-    const overlay = componentSource(appSource, 'SettingsOverlay');
-
-    expect(overlay).toMatch(/position:\s*['"]absolute['"]/);
-    expect(overlay).toMatch(/inset:\s*0/);
-    expect(overlay).toMatch(/<SettingsScreen\b/);
-    expect(overlay).toMatch(/role=["']dialog["']/);
-    expect(overlay).toMatch(/aria-modal=["']true["']/);
-    expect(overlay).toMatch(/aria-label=["']Settings["']/);
-    expect(overlay).toMatch(/tabIndex=\{-1\}/);
-    expect(overlay).toMatch(/dialogRef\.current\?\.focus\(\)/);
-  });
-
-  it('captures scrim input without closing or forwarding through to the base screen', () => {
-    const overlay = componentSource(appSource, 'SettingsOverlay');
-    const [, scrim] = requireMatch(
-      overlay,
-      /(<div\b[\s\S]*?aria-hidden=["']true["'][\s\S]*?\/>)/,
-      'SettingsOverlay should include an inert scrim/backdrop',
-    );
-
-    expect(scrim).toMatch(/\bonClick=\{\(\)\s*=>\s*undefined\}/);
-    expect(scrim).toMatch(/\bonPointerDown=\{\(\)\s*=>\s*undefined\}/);
-    expect(scrim).toMatch(/\bonTouchStart=\{\(\)\s*=>\s*undefined\}/);
-    expect(scrim).toMatch(/pointerEvents:\s*['"]auto['"]/);
-    expect(scrim).toMatch(/touchAction:\s*['"]none['"]/);
-    expect(scrim).not.toMatch(/setSettingsOpen\s*\(\s*false\s*\)/);
-    expect(scrim).not.toMatch(/\bgo\s*\(/);
-  });
-
-  it('keeps Escape close local to Settings overlay state', () => {
-    const overlay = componentSource(appSource, 'SettingsOverlay');
-    const escapeIndex = overlay.indexOf("event.key === 'Escape'");
-    const closeIndex = overlay.indexOf('setSettingsOpen(false)', escapeIndex);
-
-    expect(escapeIndex).toBeGreaterThanOrEqual(0);
-    expect(closeIndex).toBeGreaterThan(escapeIndex);
-    expect(overlay).not.toMatch(/\bgo\s*\(\s*['"]driving['"]\s*\)/);
-  });
-
-  it('does not put voice or media teardown calls on the App-level Settings path', () => {
-    expect(appSource).not.toMatch(/\bstopMediaSessionKeeper\b/);
-    expect(appSource).not.toMatch(/\bstopHoldMusic\b/);
-    expect(appSource).not.toMatch(/\bstt\s*\.\s*cancel\b/);
-    expect(appSource).not.toMatch(/\breply\s*\.\s*cancel\b/);
-    expect(appSource).not.toMatch(/\bcancel(Stt|STT|Reply|Tts|TTS)\b/);
-    expect(appSource).not.toMatch(/\bstop(Tts|TTS|HoldMusic|MediaSession)\b/);
+    expect(view.querySelector('[role="dialog"][aria-label="Settings"]')).toBeNull();
+    expect(view.querySelector('[data-testid="driving-screen"]')).not.toBeNull();
+    expect(drivingProbe.mounts).toBe(1);
+    expect(drivingProbe.unmounts).toBe(0);
   });
 });

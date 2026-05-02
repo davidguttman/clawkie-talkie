@@ -83,13 +83,13 @@ export function App() {
   const [openSession, setOpenSession] = useState<string | undefined>(initial.sessionId);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [settings, setSettingsState] = useState<Settings>(() => loadSettings());
+  const [settings, setSettingsState] = useState<Settings>(() => loadSettings(initial.hostPeerId));
   const [replayAvailabilityTick, setReplayAvailabilityTick] = useState(0);
   const [isNarrow, setIsNarrow] = useState(computeIsNarrow);
 
   useEffect(() => {
-    saveSettings(settings);
-  }, [settings]);
+    saveSettings(settings, initial.hostPeerId);
+  }, [settings, initial.hostPeerId]);
 
   useEffect(() => {
     const onResize = () => setIsNarrow(computeIsNarrow());

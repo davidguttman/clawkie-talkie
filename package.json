@@ -33,6 +33,7 @@
     "@types/simple-peer": "^9.11.8",
     "@types/ws": "^8.5.12",
     "@vitejs/plugin-react": "^4.3.3",
+    "jsdom": "^29.1.1",
     "nodemon": "^3.1.14",
     "tsx": "^4.19.1",
     "typescript": "^5.6.3",

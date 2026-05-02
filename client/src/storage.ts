@@ -13,7 +13,7 @@ import { notifyReplayAvailabilityChanged } from './replay';
 export type TtsSelection = ProtocolTtsSelection;
 export type SttSelection = ProtocolSttSelection;
 
-// Legacy static voice labels retained for migration/fallback display only.
+// Legacy static voice labels retained for fallback display only.
 // Storage normalization must not validate against them: provider support is
 // discovered dynamically by the daemon.
 export const VOICE_IDS = ['eve', 'ara', 'rex', 'sal', 'leo'] as const;
@@ -57,23 +57,23 @@ export const DEFAULT_SETTINGS: Settings = {
   ...DEFAULT_EXPORT_SETTINGS,
 };
 
-export function loadSettings(): Settings {
-  return normalizeSettings(readRawSettings());
+export function loadSettings(hostPeerId?: string | null): Settings {
+  return normalizeSettings(readRawSettings(), hostPeerId);
 }
 
-export function saveSettings(settings: Settings): void {
+export function saveSettings(settings: Settings, hostPeerId?: string | null): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify(normalizeSettingsForSave(settings)));
+    localStorage.setItem(KEY, JSON.stringify(normalizeSettingsForSave(settings, hostPeerId)));
   } catch {
     // storage full or disabled — settings won't persist, but the app still works.
   }
 }
 
 // Export settings boundary — callers that only need export/history work
-// can read these without importing the full Settings UI surface.
+// can read these without importing the full Settings UI surface. Export prefs
+// remain global; voice/provider selections are host-scoped under `hosts`.
 export function loadExportSettings(): ExportSettings {
-  const settings = normalizeSettings(readRawSettings());
-  return { format: settings.format, timestamps: settings.timestamps };
+  return normalizeExportSettings(readRawSettings());
 }
 
 function readRawSettings(): unknown {
@@ -86,31 +86,79 @@ function readRawSettings(): unknown {
   }
 }
 
-function normalizeSettings(value: unknown): Settings {
-  const source = (value && typeof value === 'object') ? (value as Record<string, unknown>) : {};
+function normalizeSettings(value: unknown, hostPeerId?: string | null): Settings {
+  const exportSettings = normalizeExportSettings(value);
+  const source = readHostSettings(value, hostPeerId);
   const tts = normalizeTtsSelection(source.tts, source.voice);
   const stt = normalizeSttSelection(source.stt);
   const voice = tts.voice ?? DEFAULT_SETTINGS.voice;
-  const format: ExportFormat = source.format === 'txt' || source.format === 'json'
-    ? source.format
-    : 'md';
-  const timestamps = typeof source.timestamps === 'boolean'
-    ? source.timestamps
-    : DEFAULT_SETTINGS.timestamps;
-  return { voice, tts, stt, format, timestamps };
+  return { voice, tts, stt, ...exportSettings };
 }
 
-function normalizeSettingsForSave(settings: Settings): Settings {
+function normalizeSettingsForSave(
+  settings: Settings,
+  hostPeerId?: string | null,
+): Record<string, unknown> {
+  const existing = objectRecord(readRawSettings());
+  const next: Record<string, unknown> = { ...normalizeExportSettings(settings) };
+  const hosts = cloneHosts(existing.hosts);
+  const hostKey = normalizeHostPeerId(hostPeerId);
+  if (hostKey) hosts[hostKey] = normalizeHostSettingsForSave(settings);
+  if (Object.keys(hosts).length > 0) next.hosts = hosts;
+  return next;
+}
+
+function normalizeHostSettingsForSave(settings: Settings): Record<string, unknown> {
   const legacyVoice = normalizeOptionalString(settings.voice);
-  if (!legacyVoice) return normalizeSettings(settings);
-  return normalizeSettings({
-    ...settings,
-    voice: legacyVoice,
-    tts: {
-      ...settings.tts,
-      voice: legacyVoice,
-    },
-  });
+  const tts = normalizeTtsSelection(
+    legacyVoice ? { ...settings.tts, voice: legacyVoice } : settings.tts,
+    undefined,
+  );
+  return {
+    voice: tts.voice ?? DEFAULT_SETTINGS.voice,
+    tts,
+    stt: normalizeSttSelection(settings.stt),
+  };
+}
+
+function normalizeExportSettings(value: unknown): ExportSettings {
+  const source = objectRecord(value);
+  const format: ExportFormat = source.format === 'txt' || source.format === 'json'
+    ? source.format
+    : DEFAULT_EXPORT_SETTINGS.format;
+  const timestamps = typeof source.timestamps === 'boolean'
+    ? source.timestamps
+    : DEFAULT_EXPORT_SETTINGS.timestamps;
+  return { format, timestamps };
+}
+
+function readHostSettings(value: unknown, hostPeerId?: string | null): Record<string, unknown> {
+  const hostKey = normalizeHostPeerId(hostPeerId);
+  if (!hostKey) return {};
+  const hosts = objectRecord(objectRecord(value).hosts);
+  return objectRecord(hosts[hostKey]);
+}
+
+function cloneHosts(value: unknown): Record<string, unknown> {
+  const hosts = objectRecord(value);
+  const next: Record<string, unknown> = {};
+  for (const [key, settings] of Object.entries(hosts)) {
+    const hostKey = normalizeHostPeerId(key);
+    if (!hostKey) continue;
+    const hostSettings = objectRecord(settings);
+    if (Object.keys(hostSettings).length > 0) next[hostKey] = hostSettings;
+  }
+  return next;
+}
+
+function objectRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function normalizeHostPeerId(value: unknown): string | undefined {
+  return normalizeOptionalString(value);
 }
 
 function normalizeTtsSelection(value: unknown, legacyVoice: unknown): TtsSelection {
