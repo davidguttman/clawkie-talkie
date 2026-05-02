@@ -52,6 +52,10 @@ Manual daemon setup is documented here:
 
 - [Install the Clawkie Talkie daemon](./docs/install-daemon.md)
 
+Custom frontend/signaling/TURN setup is documented here:
+
+- [Run a custom Clawkie Talkie stack](./docs/custom-stack.md)
+
 Agent install/upgrade/repair flow is documented here:
 
 - [Agent install instructions](./AGENT-INSTALL.md)
@@ -139,7 +143,7 @@ Phone / browser                          User's machine
           https://api.rambly.app                  openclaw
 ```
 
-The signaling service helps the browser and daemon find each other. The voice session itself runs over WebRTC. The daemon shells out to OpenClaw for transcription, the agent turn, reply delivery, and speech synthesis.
+The signaling service helps the browser and daemon find each other. By default this is the hosted rambly-compatible broker; custom signaling/ICE/TURN is documented in [Custom Clawkie Talkie stack](./docs/custom-stack.md). The voice session itself runs over WebRTC. The daemon shells out to OpenClaw for transcription, the agent turn, reply delivery, and speech synthesis.
 
 There is no inbound HTTP port for the daemon. It connects outbound to signaling and providers.
 

@@ -36,10 +36,58 @@ const DEFAULT_SIGNAL_SERVER =
     ? import.meta.env.VITE_SIGNAL_SERVER
     : 'https://api.rambly.app';
 
-const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
+const HOSTED_DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'turn:api.rambly.app:3478', username: 'rambly', credential: 'rambly' },
 ];
+
+export const DEFAULT_ICE_SERVERS: RTCIceServer[] =
+  parseClientIceServersJson(import.meta.env.VITE_ICE_SERVERS_JSON) ?? HOSTED_DEFAULT_ICE_SERVERS;
+
+export function parseClientIceServersJson(
+  raw: unknown,
+  warn: (message: string) => void = console.warn,
+): RTCIceServer[] | null {
+  if (typeof raw !== 'string' || raw.trim().length === 0) return null;
+  try {
+    return normalizeIceServers(JSON.parse(raw));
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    warn(`Invalid VITE_ICE_SERVERS_JSON; using hosted ICE defaults (${detail})`);
+    return null;
+  }
+}
+
+function normalizeIceServers(value: unknown): RTCIceServer[] {
+  if (!Array.isArray(value)) throw new Error('expected JSON array of RTCIceServer objects');
+  return value.map((entry, index) => normalizeIceServer(entry, index));
+}
+
+function normalizeIceServer(value: unknown, index: number): RTCIceServer {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`entry ${index} is not an object`);
+  }
+  const source = value as Record<string, unknown>;
+  const urls = normalizeUrls(source.urls, index);
+  const out: RTCIceServer = { urls };
+  if (source.username !== undefined) {
+    if (typeof source.username !== 'string') throw new Error(`entry ${index}.username is not a string`);
+    out.username = source.username;
+  }
+  if (source.credential !== undefined) {
+    if (typeof source.credential !== 'string') throw new Error(`entry ${index}.credential is not a string`);
+    out.credential = source.credential;
+  }
+  return out;
+}
+
+function normalizeUrls(value: unknown, index: number): string | string[] {
+  if (typeof value === 'string' && value.trim()) return value;
+  if (Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === 'string' && item.trim())) {
+    return value;
+  }
+  throw new Error(`entry ${index}.urls must be a non-empty string or string array`);
+}
 
 function randomPeerId(): string {
   // Short, opaque, URL-safe id for this browser session.

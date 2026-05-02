@@ -17,10 +17,8 @@
 // All LLM/STT/TTS auth lives in OpenClaw's own configuration; the
 // daemon does not hold provider API keys.
 
-import { parseArgs } from 'node:util';
 import { DaemonPeer } from './peer.js';
-import { resolveClientOrigin } from './clientOrigin.js';
-import { resolveDaemonPeerId } from './peerId.js';
+import { parseCli } from './cli.js';
 
 async function main(): Promise<void> {
   const cli = parseCli();
@@ -30,6 +28,8 @@ async function main(): Promise<void> {
     peerId: cli.peerId,
     sessionId: cli.sessionId,
     threadId: cli.threadId,
+    signalServer: cli.signalServer,
+    iceServers: cli.iceServers,
     onReady: (peerId) => {
       const joinUrl = cli.clientOrigin.replace(/\/$/, '') + '/?host=' + peerId;
       console.log(`Session:  ${cli.sessionId}`);
@@ -37,6 +37,7 @@ async function main(): Promise<void> {
         console.log(`Thread:   ${cli.threadId}`);
       }
       console.log(`Peer ID:  ${peerId}`);
+      console.log(`Signal:   ${cli.signalServer}`);
       console.log(`Join URL: ${joinUrl}`);
       console.log('Waiting for phone…');
     },
@@ -53,33 +54,6 @@ async function main(): Promise<void> {
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
-}
-
-function parseCli(): CliOptions {
-  const { values } = parseArgs({
-    options: {
-      'session-id': { type: 'string' },
-      'client-origin': { type: 'string' },
-      'stt-language': { type: 'string' },
-      'thread-id': { type: 'string' },
-    },
-  });
-
-  return {
-    sessionId: values['session-id'] || 'dev-local',
-    threadId: values['thread-id'] || process.env.CT_THREAD_ID,
-    clientOrigin: resolveClientOrigin(values['client-origin']),
-    sttLanguage: values['stt-language'] || process.env.CT_STT_LANGUAGE,
-    peerId: resolveDaemonPeerId(),
-  };
-}
-
-interface CliOptions {
-  sessionId: string;
-  threadId?: string;
-  clientOrigin: string;
-  sttLanguage?: string;
-  peerId: string;
 }
 
 main().catch((err) => {

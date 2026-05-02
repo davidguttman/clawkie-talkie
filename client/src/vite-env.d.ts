@@ -2,6 +2,7 @@
 
 interface ImportMetaEnv {
   VITE_SIGNAL_SERVER?: string;
+  VITE_ICE_SERVERS_JSON?: string;
   [key: string]: unknown;
 }
 
