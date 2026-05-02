@@ -549,8 +549,9 @@ function sanitizeOpenClawLogText(text: string): string {
     .replace(/("-m"\s+)"(?:\\.|[^"\\])*"/g, '$1"[redacted]"')
     .replace(/(--message\s+)(?:"(?:\\.|[^"\\])*"|'[^']*'|\S+)/g, '$1[redacted]')
     .replace(/(-m\s+)(?:"(?:\\.|[^"\\])*"|'[^']*'|\S+)/g, '$1[redacted]')
-    .replace(/(xai[_-]?api[_-]?key\s*[=:]\s*)\S+/gi, '$1[redacted]')
-    .replace(/(authorization:\s*bearer\s+)\S+/gi, '$1[redacted]')
+    .replace(/((?:authorization|proxy-authorization)\s*:\s*(?:bearer|basic)\s+)\S+/gi, '$1[redacted]')
+    .replace(/([A-Za-z0-9_.-]*(?:api[_-]?key|apikey|secret|token|credential|password)[A-Za-z0-9_.-]*\s*[=:]\s*)(?:"(?:\\.|[^"\\])*"|'[^']*'|\S+)/gi, '$1[redacted]')
+    .replace(/\b(token-[A-Za-z0-9_.-]+)\b/gi, '[redacted]')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 1000);

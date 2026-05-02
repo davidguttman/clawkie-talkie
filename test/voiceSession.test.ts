@@ -88,12 +88,13 @@ vi.mock('../daemon/src/vad.js', () => ({
 }));
 
 import { ChatError } from '../daemon/src/chatSession.js';
-import type { SttCatalog, TtsCatalog } from '../daemon/src/protocol.js';
+import type { SttCatalog, TtsCatalog, VoiceSettings } from '../daemon/src/protocol.js';
 import {
   createVoiceSessionState,
   decidePhoneConnection,
   VoiceSession,
   type SpeechDetectorFactory,
+  type TtsSessionFactory,
 } from '../daemon/src/voiceSession';
 
 function makeVoiceSession(overrides: {
@@ -104,6 +105,8 @@ function makeVoiceSession(overrides: {
   createSpeechDetector?: SpeechDetectorFactory;
   ttsCatalogProvider?: () => Promise<TtsCatalog>;
   sttCatalogProvider?: () => Promise<SttCatalog>;
+  voiceSettings?: VoiceSettings;
+  ttsSessionFactory?: TtsSessionFactory;
   onClose?: (roomId: string) => void;
 } = {}) {
   const fakeVad = {
@@ -111,6 +114,11 @@ function makeVoiceSession(overrides: {
     destroy: vi.fn(),
   };
   const createSpeechDetector = overrides.createSpeechDetector ?? vi.fn(async () => fakeVad);
+  const defaultTtsCatalogProvider = vi.fn(async (): Promise<TtsCatalog> => ({
+    activeProvider: undefined,
+    generatedAt: '2026-04-28T00:00:00.000Z',
+    providers: [],
+  }));
   const session = new VoiceSession({
     sttLanguage: 'en',
     signalServer: 'https://signal.example',
@@ -124,8 +132,10 @@ function makeVoiceSession(overrides: {
     ...(overrides.accountId ? { accountId: overrides.accountId } : {}),
     delivery: { channel: 'discord', target: 'channel:thread-1' },
     createSpeechDetector,
-    ...(overrides.ttsCatalogProvider ? { ttsCatalogProvider: overrides.ttsCatalogProvider } : {}),
+    ...(overrides.voiceSettings ? { voiceSettings: overrides.voiceSettings } : {}),
+    ttsCatalogProvider: overrides.ttsCatalogProvider ?? defaultTtsCatalogProvider,
     ...(overrides.sttCatalogProvider ? { sttCatalogProvider: overrides.sttCatalogProvider } : {}),
+    ...(overrides.ttsSessionFactory ? { ttsSessionFactory: overrides.ttsSessionFactory } : {}),
     onClose: overrides.onClose ?? vi.fn(),
   });
   const peer = {
@@ -620,6 +630,59 @@ describe('voice session OpenClaw infer STT runtime', () => {
     expect((session as unknown as { currentTtsSelection: unknown }).currentTtsSelection).toEqual({
       voice: 'rex',
     });
+  });
+
+  it('does not let stale TTS catalog resolution open audio after the turn is canceled and restarted', async () => {
+    chatMocks.runChat.mockResolvedValue({ text: 'spoken reply' });
+    let resolveCatalog: ((catalog: TtsCatalog) => void) | undefined;
+    const ttsCatalogProvider = vi.fn(() => new Promise<TtsCatalog>((resolve) => { resolveCatalog = resolve; }));
+    const { session } = makeVoiceSession({ ttsCatalogProvider });
+    sendControl(session, { t: 'stt.start' });
+    await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+    const firstStt = sttMocks.inferCtor.mock.results[0].value;
+    firstStt.cb.onDone('hello');
+    await vi.waitFor(() => expect(ttsCatalogProvider).toHaveBeenCalledTimes(1));
+    sendControl(session, { t: 'reply.cancel' });
+    sendControl(session, { t: 'stt.start' });
+    resolveCatalog?.({ activeProvider: undefined, generatedAt: '2026-04-28T00:00:00.000Z', providers: [] });
+    await Promise.resolve();
+    expect(ttsMocks.inferTtsCtor).not.toHaveBeenCalled();
+  });
+
+  it('times out slow TTS catalog loading and falls back to normal TTS creation', async () => {
+    vi.useFakeTimers();
+    try {
+      chatMocks.runChat.mockResolvedValue({ text: 'spoken reply' });
+      const ttsCatalogProvider = vi.fn(() => new Promise<TtsCatalog>(() => {}));
+      const { session } = makeVoiceSession({ ttsCatalogProvider, voiceSettings: { tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' } } });
+      sendControl(session, { t: 'stt.start' });
+      await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+      sttMocks.inferCtor.mock.results[0].value.cb.onDone('hello');
+      await vi.waitFor(() => expect(ttsCatalogProvider).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(1500);
+      await vi.waitFor(() => expect(ttsMocks.inferTtsCtor).toHaveBeenCalledTimes(1));
+      expect(ttsMocks.inferTtsCtor.mock.results[0].value.opts).toEqual({ text: 'spoken reply', voice: 'nova', model: 'openai/gpt-4o-mini-tts' });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('redacts provider secrets from TTS catalog and factory failure logs', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      chatMocks.runChat.mockResolvedValue({ text: 'spoken reply' });
+      const ttsCatalogProvider = vi.fn(async () => { throw Object.assign(new Error('catalog failed openai_api_key=secret'), { stderr: 'authorization: bearer token OPENAI_API_KEY=other-secret' }); });
+      const ttsSessionFactory = vi.fn(() => { throw Object.assign(new Error('factory failed xai_api_key=secret'), { stderr: 'authorization: bearer token-secret' }); });
+      const { session, peer } = makeVoiceSession({ ttsCatalogProvider, ttsSessionFactory });
+      sendControl(session, { t: 'stt.start' });
+      await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+      sttMocks.inferCtor.mock.results[0].value.cb.onDone('hello');
+      await vi.waitFor(() => expect(sentJson(peer)).toContainEqual({ t: 'tts.error', message: 'openclaw_infer_tts_failed' }));
+      const logs = consoleError.mock.calls.map(([msg]) => String(msg)).join('\n');
+      expect(logs).toContain('openai_api_key=[redacted]');
+      expect(logs).toContain('OPENAI_API_KEY=[redacted]');
+      expect(logs).toContain('xai_api_key=[redacted]');
+      expect(logs).not.toContain('other-secret');
+      expect(logs).not.toContain('token-secret');
+    } finally { consoleError.mockRestore(); }
   });
 
   it('uses OpenClaw infer TTS for the reply, emits tts.start/audio/tts.done, and resets the turn', async () => {

@@ -118,6 +118,28 @@ describe('buildTtsSessionRequest', () => {
 
     expect(buildTtsSessionRequest('hello', { voice: 'rex' })).toEqual({ text: 'hello' });
   });
+
+  it('drops known legacy Clawkie/xAI voice ids for OpenAI when the catalog is unavailable', async () => {
+    const { buildTtsSessionRequest } = await import('../daemon/src/voiceSession');
+
+    for (const voice of ['eve', 'ara', 'rex', 'sal', 'leo']) {
+      expect(
+        buildTtsSessionRequest('hello', {
+          providerId: 'openai',
+          model: 'gpt-4o-mini-tts',
+          voice,
+        }),
+      ).toEqual({ text: 'hello', model: 'openai/gpt-4o-mini-tts' });
+    }
+
+    expect(
+      buildTtsSessionRequest('hello', {
+        providerId: 'openai',
+        model: 'gpt-4o-mini-tts',
+        voice: 'nova',
+      }),
+    ).toEqual({ text: 'hello', model: 'openai/gpt-4o-mini-tts', voice: 'nova' });
+  });
 });
 
 describe('voice session voice settings', () => {

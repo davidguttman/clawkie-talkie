@@ -54,7 +54,7 @@ Valid external-channel example:
 https://clawkietalkie.app/voice#host=<peer-id>&session=agent%3Amain%3Adiscord%3Achannel%3A1498020851298209852
 ```
 
-If the URL contains `session=agent%3Amain%3Amain` for Discord/Slack/etc., `session=agent%3Amain%3Awebchat`, or any URL `channel`/`target` parameter, the `clawkie-voice-handoff` skill is not resolving the current conversation correctly.
+If the URL contains `session=agent%3Amain%3Amain` for Discord/Slack/etc., `session=agent%3Amain%3Awebchat`, or malformed URL `channel`/`target` metadata, stop and mark the handoff/OpenClaw runtime context as the blocker unless there is a clear Clawkie-side skill configuration workaround.
 
 Verify:
 
@@ -69,6 +69,6 @@ Before reporting success, verify one of these:
 - Preferred: complete a real phone voice smoke test. Logs must show STT, `[chat] running OpenClaw turn`, successful agent reply, TTS conversion, and no fatal `openclaw_gateway_unavailable`.
 - If no phone is available: resolve the handoff session key through the OpenClaw state dir (`OPENCLAW_STATE_DIR`, else `dirname(OPENCLAW_CONFIG_PATH)`, else `<OPENCLAW_HOME-or-home>/.openclaw`), then run `openclaw agent --agent main --session-id <stored-session-id-or-uuid> --channel last --json --timeout 60 -m <smoke-message>` from the same OS user and environment shape that the service uses. Add `--deliver` only when intentionally testing delivery.
 
-For systemd installs, do not assume the interactive shell environment is equivalent. Inspect the user service environment and fix missing `OPENCLAW_*`, auth, `PATH`, or gateway settings before claiming success.
+For systemd installs, do not assume the interactive shell environment is equivalent. Inspect the user service environment and either apply a Clawkie-side service environment workaround or mark missing `OPENCLAW_*`, auth, `PATH`, or gateway settings as the blocker before claiming success.
 
 After device approval, handoff URL validation, and service-context agent-turn verification, `switch to voice` should work without `openclaw_gateway_unavailable`.

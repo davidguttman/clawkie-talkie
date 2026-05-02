@@ -16,7 +16,7 @@ openclaw --version || true
 openclaw status --json
 ```
 
-OpenClaw must be 2026.4.25 or newer. If `openclaw` is missing, older, or not configured, stop Clawkie Talkie work and repair OpenClaw first. If `ffmpeg` is missing, install it before daemon verification; OpenClaw TTS can successfully generate an MP3 while the daemon still fails because it cannot decode that MP3 to PCM for WebRTC.
+OpenClaw must be 2026.4.25 or newer. If `openclaw` is missing, older, or not configured, stop Clawkie Talkie work and mark OpenClaw/auth/gateway as the blocker; only continue with Clawkie-side workarounds or docs after that boundary is explicit. If `ffmpeg` is missing, install it before daemon verification; OpenClaw TTS can successfully generate an MP3 while the daemon still fails because it cannot decode that MP3 to PCM for WebRTC.
 
 ## Infer verification
 
@@ -161,7 +161,7 @@ If there is no real session key/stored session id available, do not fake one. Ma
 
 If this check fails with `scope upgrade pending approval`, `pending device approval`, or a pending `openclaw devices approve <requestId>` command, treat it as an early actionable failure even if `openclaw status --json`, STT, and TTS all passed. The agent reply path needs upgraded local gateway scopes: `operator.pairing`, `operator.read`, and `operator.write`. Record the request ID, tell the user to approve the pending device/scope request in the OpenClaw dashboard or run the shown approval command, and report the install as **blocked pending device approval**. After approval, rerun the agent-turn preflight/check and restart the daemon service if needed.
 
-If you get connection errors, auth errors, gateway errors, or session lookup errors, fix those before proceeding.
+If you get connection errors, auth errors, gateway errors, or session lookup errors, stop and mark OpenClaw/auth/gateway/session lookup as the blocker. Do not imply this branch repairs OpenClaw itself; only apply Clawkie-side workarounds when the failure is inside Clawkie.
 
 ## Persistent daemon agent-turn check
 
