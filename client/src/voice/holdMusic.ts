@@ -27,6 +27,14 @@ const HOLD_MUSIC_MAX_DECIBELS = -10;
 let sharedAudioCtx: AudioContext | null = null;
 let activeHoldMusicAnalyser: AnalyserNode | null = null;
 
+interface PreloadedHoldMusicTrack {
+  audio: HTMLAudioElement;
+}
+
+let shuffledHoldMusicDeck: string[] = [];
+let lastHoldMusicTrack: string | null = null;
+let preloadedHoldMusicTrack: PreloadedHoldMusicTrack | null = null;
+
 export function getActiveHoldMusicAnalyser(): AnalyserNode | null {
   return activeHoldMusicAnalyser;
 }
@@ -134,7 +142,8 @@ export class HoldMusicController {
     void resumeAudioContext(audioCtx);
 
     try {
-      const audio = new Audio(pickHoldMusicUrl());
+      const audio = consumePreloadedHoldMusicAudio();
+      if (!audio) return;
       audio.loop = true;
       audio.preload = 'auto';
 
@@ -287,7 +296,10 @@ export class HoldMusicController {
   stop(): void {
     const session = this.session;
     this.session = null;
-    if (!session) return;
+    if (!session) {
+      preloadNextHoldMusicTrack();
+      return;
+    }
     session.stopped = true;
     if (session.musicAnalyser && activeHoldMusicAnalyser === session.musicAnalyser) {
       activeHoldMusicAnalyser = null;
@@ -349,6 +361,8 @@ export class HoldMusicController {
         // already disconnected
       }
     }
+
+    preloadNextHoldMusicTrack();
   }
 
   private beginSession(session: HoldMusicSession): void {
@@ -361,18 +375,76 @@ export class HoldMusicController {
     session.hissSource.start(0);
     session.crackleSource.start(0);
     void session.audio.play().catch(() => {
-      this.stop();
+      if (this.session === session && !session.stopped) {
+        this.stop();
+      }
     });
   }
 }
 
 export function pickHoldMusicUrl(random: () => number = Math.random): string {
+  if (HOLD_MUSIC_TRACKS.length === 0) return '';
   const index = Math.min(
     HOLD_MUSIC_TRACKS.length - 1,
     Math.floor(random() * HOLD_MUSIC_TRACKS.length),
   );
-  return `/music/${encodeURIComponent(HOLD_MUSIC_TRACKS[index])}`;
+  return holdMusicTrackUrl(HOLD_MUSIC_TRACKS[index]);
 }
+
+function consumePreloadedHoldMusicAudio(): HTMLAudioElement | null {
+  preloadNextHoldMusicTrack();
+  const preloaded = preloadedHoldMusicTrack;
+  preloadedHoldMusicTrack = null;
+  return preloaded?.audio ?? null;
+}
+
+function preloadNextHoldMusicTrack(): void {
+  if (preloadedHoldMusicTrack || typeof Audio === 'undefined') return;
+  const track = takeNextHoldMusicTrack();
+  if (!track) return;
+
+  try {
+    const audio = new Audio(holdMusicTrackUrl(track));
+    audio.preload = 'auto';
+    audio.load();
+    preloadedHoldMusicTrack = { audio };
+  } catch {
+    // Preloading is opportunistic; playback can fail silently like the rest of the hold bed.
+  }
+}
+
+function takeNextHoldMusicTrack(): string | null {
+  if (HOLD_MUSIC_TRACKS.length === 0) return null;
+  if (shuffledHoldMusicDeck.length === 0) {
+    shuffledHoldMusicDeck = createShuffledHoldMusicDeck();
+  }
+  const track = shuffledHoldMusicDeck.shift() ?? null;
+  if (track) lastHoldMusicTrack = track;
+  return track;
+}
+
+function createShuffledHoldMusicDeck(): string[] {
+  const deck = [...HOLD_MUSIC_TRACKS];
+  for (let i = deck.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [deck[i], deck[j]] = [deck[j], deck[i]];
+  }
+
+  if (deck.length > 1 && deck[0] === lastHoldMusicTrack) {
+    const swapIndex = deck.findIndex((track, index) => index > 0 && track !== lastHoldMusicTrack);
+    if (swapIndex > 0) {
+      [deck[0], deck[swapIndex]] = [deck[swapIndex], deck[0]];
+    }
+  }
+
+  return deck;
+}
+
+function holdMusicTrackUrl(track: string): string {
+  return `/music/${encodeURIComponent(track)}`;
+}
+
+preloadNextHoldMusicTrack();
 
 export function pickRandomStartTime(duration: number, random: () => number = Math.random): number {
   if (!Number.isFinite(duration) || duration <= 0) return 0.001;

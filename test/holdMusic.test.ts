@@ -208,6 +208,7 @@ class FakeAudioElement {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.doUnmock('virtual:hold-music-tracks');
   vi.resetModules();
   FakeAudioContext.instances = [];
   FakeAudioContext.audioWorkletAddModule = null;
@@ -272,6 +273,83 @@ describe('radio static generation', () => {
 });
 
 describe('HoldMusicController', () => {
+  it('preloads exactly one shuffled next track when the module loads', async () => {
+    vi.stubGlobal('Audio', FakeAudioElement);
+
+    await import('../client/src/voice/holdMusic');
+
+    expect(FakeAudioElement.instances).toHaveLength(1);
+    const audio = FakeAudioElement.instances[0];
+    expect(audio.src).toMatch(/^\/music\/.+\.mp3$/);
+    expect(audio.preload).toBe('auto');
+    expect(audio.load).toHaveBeenCalledTimes(1);
+  });
+
+  it('consumes the preloaded track for playback and preloads the next track after stop', async () => {
+    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+    vi.stubGlobal('Audio', FakeAudioElement);
+    const { HoldMusicController } = await import('../client/src/voice/holdMusic');
+    const preloaded = FakeAudioElement.instances[0];
+
+    const controller = new HoldMusicController();
+    controller.start();
+
+    expect(FakeAudioElement.instances).toHaveLength(1);
+    expect(FakeAudioContext.instances[0].mediaElementSources).toHaveLength(1);
+    preloaded.duration = 100;
+    preloaded.dispatch('loadedmetadata');
+    expect(preloaded.play).toHaveBeenCalledTimes(1);
+
+    controller.stop();
+
+    expect(FakeAudioElement.instances).toHaveLength(2);
+    expect(FakeAudioElement.instances[1]).not.toBe(preloaded);
+    expect(FakeAudioElement.instances[1].preload).toBe('auto');
+    expect(FakeAudioElement.instances[1].load).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores stale play rejections after a newer session has started', async () => {
+    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+    vi.stubGlobal('Audio', FakeAudioElement);
+    const firstPlay = createDeferred<void>();
+    const { HoldMusicController } = await import('../client/src/voice/holdMusic');
+    const firstAudio = FakeAudioElement.instances[0];
+    firstAudio.play = vi.fn(() => firstPlay.promise);
+
+    const controller = new HoldMusicController();
+    controller.start();
+    firstAudio.duration = 100;
+    firstAudio.dispatch('loadedmetadata');
+    expect(firstAudio.play).toHaveBeenCalledTimes(1);
+
+    controller.start();
+    const secondAudio = FakeAudioElement.instances[1];
+    secondAudio.duration = 100;
+    secondAudio.dispatch('loadedmetadata');
+    expect(secondAudio.play).toHaveBeenCalledTimes(1);
+
+    firstPlay.reject(new Error('stale play rejection'));
+    await flushPromises();
+
+    expect(secondAudio.pause).not.toHaveBeenCalled();
+    expect(secondAudio.removeAttribute).not.toHaveBeenCalled();
+    expect(FakeAudioElement.instances).toHaveLength(2);
+  });
+
+  it('does not create preload or playback audio when the hold music manifest is empty', async () => {
+    vi.doMock('virtual:hold-music-tracks', () => ({ HOLD_MUSIC_TRACKS: [] }));
+    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+    vi.stubGlobal('Audio', FakeAudioElement);
+    const { HoldMusicController, pickHoldMusicUrl } = await import('../client/src/voice/holdMusic');
+
+    expect(pickHoldMusicUrl()).toBe('');
+    expect(FakeAudioElement.instances).toHaveLength(0);
+
+    const controller = new HoldMusicController();
+    expect(() => controller.start()).not.toThrow();
+    expect(FakeAudioElement.instances).toHaveLength(0);
+  });
+
   it('persists mute preference and applies it to the active music and static bed', async () => {
     const storage = new Map<string, string>();
     vi.stubGlobal('localStorage', {
@@ -483,6 +561,16 @@ function countSamplesAbove(samples: Float32Array, threshold: number): number {
     if (Math.abs(sample) > threshold) count += 1;
   }
   return count;
+}
+
+function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T | PromiseLike<T>) => void; reject: (reason?: unknown) => void } {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
 }
 
 async function flushPromises(): Promise<void> {
