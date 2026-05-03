@@ -70,6 +70,16 @@ describe('DrivingScreen response scroll timing', () => {
   });
 });
 
+describe('DrivingScreen caption display', () => {
+  it('does not render a visible caption-state label above the transcript', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    expect(source).toContain('isAiResponseCaption');
+    expect(source).not.toContain('{caption.label}</span>');
+    expect(source).not.toContain('animation: \'pulseDot 1.2s ease-in-out infinite\'');
+  });
+});
+
 describe('DrivingScreen voice error labels', () => {
   it('surfaces infer STT, infer TTS, and reply auth failures with distinct labels', () => {
     const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');

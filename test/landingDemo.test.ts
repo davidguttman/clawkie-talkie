@@ -47,12 +47,9 @@ describe('landing page scripted demo', () => {
     expect(html).toContain("phase: 'recording'");
     expect(html).toContain("phase: 'thinking'");
     expect(html).toContain("phase: 'ai'");
-    expect(html).toContain("label: 'READY'");
-    expect(html).toContain("label: 'YOU · LIVE'");
-    expect(html).toContain("label: 'TRANSCRIBING · OPENCLAW'");
-    expect(html).toContain("label: 'THINKING'");
-    expect(html).toContain("label: 'AI · READING ALOUD'");
-    expect(html).toContain("label: 'AI · LAST'");
+    expect(html).toContain("pill: 'READY'");
+    expect(html).toContain("pill: 'REC'");
+    expect(html).toContain("pill: 'THINKING'");
     expect(html).toContain("pill: 'READING REPLY'");
   });
 
@@ -115,6 +112,22 @@ describe('landing page scripted demo', () => {
     }
   });
 
+  it('keeps the header pill and transcript wired without a duplicate caption-state label', () => {
+    const html = readLanding();
+
+    expect(html).toContain('data-demo-pill');
+    expect(html).toContain('data-demo-caption');
+    expect(html).toContain('nodes.pill.textContent = step.pill');
+    expect(html).toContain('nodes.caption.textContent = step.text');
+    expect(html).toContain('nodes.caption.textContent = text.slice(0, i)');
+
+    expect(html).not.toContain('class="device-caption-label"');
+    expect(html).not.toContain('device-caption-label');
+    expect(html).not.toContain('data-demo-label');
+    expect(html).not.toContain('nodes.label');
+    expect(html).not.toContain('step.label');
+  });
+
   it('shows the user transcript on the transcribing/thinking page, not filler', () => {
     const html = readLanding();
 
@@ -126,7 +139,7 @@ describe('landing page scripted demo', () => {
     expect(aiIdx).toBeGreaterThan(transcribingIdx);
 
     const transcribingBlock = html.slice(transcribingIdx, aiIdx);
-    expect(transcribingBlock).toContain("label: 'TRANSCRIBING · OPENCLAW'");
+    expect(transcribingBlock).toContain("pill: 'THINKING'");
     expect(transcribingBlock).toContain('USER_LINE');
 
     // The "thinking-pending" beat between transcribe → ai must be empty

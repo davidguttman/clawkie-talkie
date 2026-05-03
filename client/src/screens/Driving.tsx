@@ -675,34 +675,6 @@ function Caption({
       }}
     >
       <div
-        style={{
-          fontFamily: HIFI.fonts.mono,
-          fontSize: 10,
-          fontWeight: 700,
-          letterSpacing: 1.6,
-          color: caption.color,
-          marginBottom: 8,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          flexShrink: 0,
-        }}
-      >
-        {caption.live && (
-          <span
-            style={{
-              width: 6,
-              height: 6,
-              borderRadius: '50%',
-              background: caption.color,
-              animation: 'pulseDot 1.2s ease-in-out infinite',
-              boxShadow: `0 0 6px ${caption.color}`,
-            }}
-          />
-        )}
-        <span style={{ flex: 1 }}>{caption.label}</span>
-      </div>
-      <div
         ref={scrollRef}
         className="transcript-scroll"
         style={{

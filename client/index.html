@@ -329,30 +329,6 @@
         background: var(--demo-state);
         box-shadow: 0 0 8px var(--demo-state);
       }
-      .device-caption-label {
-        font-family: var(--mono);
-        font-size: 10px;
-        font-weight: 700;
-        letter-spacing: 1.6px;
-        color: var(--demo-state);
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        margin-bottom: 8px;
-      }
-      .device-caption-label .dot {
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        background: var(--demo-state);
-        box-shadow: 0 0 6px var(--demo-state);
-        animation: pulseDot 1.4s ease-in-out infinite;
-      }
-      .device[data-demo-phase="idle"] .device-caption-label .dot {
-        animation: none;
-        opacity: 0.55;
-        box-shadow: none;
-      }
       .device-caption {
         font-family: var(--mono);
         font-size: 14px;
@@ -769,9 +745,6 @@
               <span>CLWK · f3c1 · agent</span>
               <span class="pill"><span class="dot"></span><span data-demo-pill>READY</span></span>
             </div>
-            <div class="device-caption-label">
-              <span class="dot"></span><span data-demo-label>READY</span>
-            </div>
             <div class="device-caption" aria-live="polite">
               <span data-demo-caption></span><span class="device-caret"></span>
             </div>
@@ -980,13 +953,12 @@
 
         // State sequence mirrors the real driving reducer:
         // idle → recording → thinking(transcribing) → thinking(pending) → ai → idle.
-        // Labels/pills/glyphs/control-labels come from client/src/screens/Driving.tsx.
+        // Pills/glyphs/control-labels come from client/src/screens/Driving.tsx.
         var demoSteps = [
           {
             id: 'idle-ready',
             phase: 'idle',
             pill: 'READY',
-            label: 'READY',
             text: '',
             glyph: '●',
             controlLabel: 'TAP TO TALK',
@@ -997,7 +969,6 @@
             id: 'recording-counter',
             phase: 'recording',
             pill: 'REC',
-            label: 'YOU · LIVE',
             text: USER_LINE,
             glyph: '■',
             controlLabel: 'TAP TO STOP',
@@ -1010,7 +981,6 @@
             id: 'thinking-transcribing',
             phase: 'thinking',
             pill: 'THINKING',
-            label: 'TRANSCRIBING · OPENCLAW',
             text: USER_LINE,
             glyph: '◐',
             controlLabel: 'THINKING…',
@@ -1021,7 +991,6 @@
             id: 'thinking-pending',
             phase: 'thinking',
             pill: 'THINKING',
-            label: 'THINKING',
             text: '',
             glyph: '◐',
             controlLabel: 'THINKING…',
@@ -1032,7 +1001,6 @@
             id: 'ai-readback',
             phase: 'ai',
             pill: 'READING REPLY',
-            label: 'AI · READING ALOUD',
             text: AI_LINE,
             glyph: '◉',
             controlLabel: 'TAP TO SILENCE',
@@ -1045,7 +1013,6 @@
             id: 'idle-ai-last',
             phase: 'idle',
             pill: 'READY',
-            label: 'AI · LAST',
             text: AI_LINE,
             glyph: '●',
             controlLabel: 'TAP TO TALK',
@@ -1056,7 +1023,6 @@
 
         var nodes = {
           pill: device.querySelector('[data-demo-pill]'),
-          label: device.querySelector('[data-demo-label]'),
           caption: device.querySelector('[data-demo-caption]'),
           glyph: device.querySelector('[data-demo-glyph]'),
           controlLabel: device.querySelector('[data-demo-control-label]')
@@ -1085,7 +1051,6 @@
           device.dataset.demoPhase = step.phase;
           device.dataset.demoLive = step.live ? 'true' : 'false';
           nodes.pill.textContent = step.pill;
-          nodes.label.textContent = step.label;
           nodes.glyph.textContent = step.glyph;
           nodes.controlLabel.textContent = step.controlLabel;
           control.setAttribute('aria-label', step.controlLabel + ': advance Clawkie-Talkie demo');
