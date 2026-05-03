@@ -62,7 +62,7 @@ Installer responsibility:
 2. Configure or repair the missing OpenClaw infer surface for the same OS user that will run the daemon.
 3. Prefer an already-authenticated OpenClaw provider or already-installed local CLI.
 4. Preserve existing working provider config and only add missing audio/TTS pieces.
-5. If multiple providers are available, choose the least invasive working option and state what was chosen in the final report.
+5. If multiple providers are available and the user has not named or already configured an intended provider, choose the least invasive working option and state what was chosen in the final report. If a provider is named, already has an API key/config, or is otherwise identified as intended, repair that provider's STT/TTS infer surfaces instead; do not substitute another provider as the final fix unless the user explicitly approves changing providers.
 6. If no usable provider credentials or local CLI are available, stop with a concrete blocker: failed command, missing config surface, and the safe auth/config step the user must provide.
 7. Do not ask the user to paste secrets into chat.
 8. Rerun smoke tests after every config change.
@@ -110,14 +110,17 @@ unset OPENAI_KEY
 
 ## xAI infer setup
 
-OpenClaw has separate xAI config surfaces. Do not collapse them into one provider block.
+OpenClaw has separate xAI config surfaces. Do not collapse them into one provider block, and do not treat one xAI surface as proof that the other surface is configured.
 
-- `models.providers.xai` is model-provider metadata/auth used by the media-understanding STT path and other xAI model surfaces.
-- `tools.media.audio.models` selects the STT provider/model for `openclaw infer audio transcribe`.
-- `messages.tts.provider` and `messages.tts.providers.xai` configure xAI TTS for `openclaw infer tts convert`.
+For Clawkie Talkie:
+
+- STT uses `models.providers.xai` for xAI auth/metadata and `tools.media.audio.models` to select the transcription model.
+- TTS uses `messages.tts.provider = "xai"` and `messages.tts.providers.xai.apiKey` plus `voiceId`.
+- xAI TTS is voice-based. `openclaw infer tts providers --json` may show xAI with `models: []`; that is not a reason to switch providers.
 - xAI TTS does **not** become configured by adding `grok-tts` to `models.providers.xai.models`.
-- `openclaw infer tts providers --json` showing xAI with `models: []` is normal. The xAI TTS provider is voice-based (`voiceId`, default `eve`), not model-list based.
 - If TTS conversion reports `not_configured` or falls back to Microsoft/another provider, fix `messages.tts.provider` and `messages.tts.providers.xai.apiKey` for the same process/user running the command.
+- If an xAI API key exists only under `models.providers.xai`, copy/wire the same existing key into the supported xAI TTS config surface without printing it, or report the exact blocker.
+- Microsoft or another provider passing TTS does not satisfy an xAI Clawkie Talkie install unless the user explicitly approved changing providers.
 - The TTS CLI `--model` override, if used, must be a provider/model ref such as `openai/gpt-4o-mini-tts`; `--model xai` is invalid. Prefer setting `messages.tts.provider` and smoke-testing without a model override.
 
 ```bash
