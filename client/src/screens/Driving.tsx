@@ -26,6 +26,7 @@ export function DrivingScreen({
   onReplay,
   canReplay = false,
   onHistory,
+  onSessions,
   onSettings,
   compact = false,
   sessionId,
@@ -37,6 +38,7 @@ export function DrivingScreen({
   onReplay?: () => void | Promise<void>;
   canReplay?: boolean;
   onHistory?: () => void;
+  onSessions?: () => void;
   onSettings?: () => void;
   compact?: boolean;
   sessionId?: string;
@@ -333,7 +335,7 @@ export function DrivingScreen({
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
+          gridTemplateColumns: onSessions ? '1fr 1fr 1fr' : '1fr 1fr',
           gap: 8,
           minWidth: 0,
         }}
@@ -344,6 +346,7 @@ export function DrivingScreen({
           onClick={replayEnabled ? onReplay : undefined}
           compact={compact}
         />
+        {onSessions && <FooterButton icon="⇄" label="SESS" onClick={onSessions} compact={compact} />}
         <FooterButton icon="≡" label="HISTORY" onClick={onHistory} compact={compact} />
       </div>
     </div>

@@ -15,7 +15,7 @@ import wrtc from '@roamhq/wrtc';
 import SimplePeer from 'simple-peer';
 import { runChat, ChatError, type DeliveryTarget as ChatDeliveryTarget } from './chatSession.js';
 import { OpenClawInferTtsSession, TTS_SAMPLE_RATE, type TtsSessionCallbacks, type TtsSessionOptions } from './ttsSession.js';
-import { daemonToPhone, type PhoneToDaemon, type SttCatalog, type SttSelection, type TtsCatalog, type TtsSelection, type VoiceSettings } from './protocol.js';
+import { daemonToPhone, type PhoneToDaemon, type RecentSessionsSnapshot, type SttCatalog, type SttSelection, type TtsCatalog, type TtsSelection, type VoiceSettings } from './protocol.js';
 import { OpenClawInferSttSession, type OpenClawInferSttSessionOptions } from './inferSttSession.js';
 import type { SttSessionCallbacks } from './sttTypes.js';
 import { createWasmVad, type SpeechDetector, type WasmVadOptions } from './vad.js';
@@ -183,6 +183,7 @@ export interface VoiceSessionRuntimeOptions {
   ttsSessionFactory?: TtsSessionFactory;
   ttsCatalogProvider?: () => Promise<TtsCatalog>;
   sttCatalogProvider?: () => Promise<SttCatalog>;
+  recentSessionsProvider?: () => RecentSessionsSnapshot | Promise<RecentSessionsSnapshot>;
   onClose: (roomId: string) => void;
 }
 
@@ -671,6 +672,10 @@ export class VoiceSession {
       void this.sendSttCatalog();
       return;
     }
+    if (msg.t === 'sessions.catalog.request') {
+      void this.sendRecentSessionsCatalog();
+      return;
+    }
     if (msg.t === 'stt.start') {
       this.resetTurn('stt_restart');
       // Routing is room-bound — ignore any payload on stt.start.
@@ -714,6 +719,17 @@ export class VoiceSession {
       this.send(daemonToPhone.sttCatalog(catalog));
     } catch {
       this.send(daemonToPhone.sttCatalog(createEmptySttCatalog()));
+    }
+  }
+
+  private async sendRecentSessionsCatalog(): Promise<void> {
+    const empty: RecentSessionsSnapshot = { generatedAt: new Date(0).toISOString(), sessions: [] };
+    try {
+      const loadCatalog = this.opts.recentSessionsProvider;
+      this.send(daemonToPhone.sessionsCatalog(loadCatalog ? await loadCatalog() : empty));
+    } catch (err) {
+      console.error(`[voice ${this.roomId}] recent sessions load failed: ${sanitizedErrorMessage(err)}`);
+      this.send(daemonToPhone.sessionsCatalog(empty));
     }
   }
 

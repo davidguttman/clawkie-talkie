@@ -51,7 +51,7 @@ describe('App History overlay contract', () => {
 
     expect(appSource).toMatch(/\bconst\s+\[historyOpen,\s*setHistoryOpen\]\s*=\s*useState\(false\)/);
     expect(drivingScreen).toMatch(/\bonHistory=\{openHistory\}/);
-    expect(appSource).toMatch(/const\s+openHistory\s*=\s*useCallback\(\(\)\s*=>\s*\{\s*setSettingsOpen\(false\);\s*setHistoryOpen\(true\);/s);
+    expect(appSource).toMatch(/const\s+openHistory\s*=\s*useCallback\(\(\)\s*=>\s*\{[\s\S]*setSettingsOpen\(false\);[\s\S]*setHistoryOpen\(true\);/s);
   });
 
   it('renders the base screen content before the History overlay without remount keys', () => {
@@ -64,8 +64,8 @@ describe('App History overlay contract', () => {
     expect(appSource).not.toMatch(/\bkey\s*=\s*\{\s*(screen|historyOpen)\s*\}/);
   });
 
-  it('isolates base content whenever Settings or History is open', () => {
-    expect(appSource).toMatch(/const\s+overlayOpen\s*=\s*settingsOpen\s*\|\|\s*historyOpen;/);
+  it('isolates base content whenever Settings, History, or Sessions is open', () => {
+    expect(appSource).toMatch(/const\s+overlayOpen\s*=\s*settingsOpen\s*\|\|\s*historyOpen\s*\|\|\s*sessionsOpen;/);
     expect(appSource).toMatch(
       /const\s+baseContentIsolationProps:\s*\{\s*['"]aria-hidden['"]\?:\s*true;\s*inert\?:\s*['"]{2}\s*\}\s*=\s*overlayOpen\s*\?\s*\{\s*['"]aria-hidden['"]:\s*true,\s*inert:\s*['"]{2}\s*\}/,
     );
