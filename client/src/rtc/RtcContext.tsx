@@ -13,7 +13,7 @@ import {
 } from 'react';
 import { RtcClient, type ControlMessage, type RtcStatus } from './client';
 import { attachDaemonRemoteStream, detachDaemonRemoteStream } from '../voice/tts';
-import { phoneToDaemon, type DeliveryTarget, type SttCatalog, type TtsCatalog, type VoiceSettings } from '../voice/protocol';
+import { phoneToDaemon, type DeliveryTarget, type RecentSessionsSnapshot, type SttCatalog, type TtsCatalog, type VoiceSettings } from '../voice/protocol';
 
 export interface RtcContextValue {
   status: RtcStatus;
@@ -30,6 +30,8 @@ export interface RtcContextValue {
   requestTtsCatalog: () => void;
   sttCatalog: SttCatalog | null;
   requestSttCatalog: () => void;
+  sessionsCatalog: RecentSessionsSnapshot | null;
+  requestSessionsCatalog: () => void;
   hasClient: boolean;
 }
 
@@ -47,6 +49,8 @@ const Ctx = createContext<RtcContextValue>({
   requestTtsCatalog: noop,
   sttCatalog: null,
   requestSttCatalog: noop,
+  sessionsCatalog: null,
+  requestSessionsCatalog: noop,
   hasClient: false,
 });
 
@@ -120,6 +124,7 @@ export function RtcProvider({
   const [detail, setDetail] = useState<string | undefined>(undefined);
   const [ttsCatalog, setTtsCatalog] = useState<TtsCatalog | null>(null);
   const [sttCatalog, setSttCatalog] = useState<SttCatalog | null>(null);
+  const [sessionsCatalog, setSessionsCatalog] = useState<RecentSessionsSnapshot | null>(null);
   // The active room flips from the rendezvous host to the
   // deterministic per-session voice room after `rendezvous.accept`
   // arrives. Each flip re-creates the underlying RtcClient.
@@ -168,6 +173,9 @@ export function RtcProvider({
         if (msg.t === 'stt.catalog' && msg.catalog && typeof msg.catalog === 'object') {
           setSttCatalog(msg.catalog as SttCatalog);
         }
+        if (msg.t === 'sessions.catalog' && msg.catalog && typeof msg.catalog === 'object') {
+          setSessionsCatalog(msg.catalog as RecentSessionsSnapshot);
+        }
         for (const fn of controlListenersRef.current) fn(msg);
       },
       onBinaryMessage: (bytes) => {
@@ -200,8 +208,10 @@ export function RtcProvider({
       appliedVoiceSettingsRef.current = null;
       lastSentVoiceRef.current = null;
       catalogRequestedRoomRef.current = null;
+      setStatus('idle');
+      setActiveRoomId(hostPeerId);
     }
-  }, [rendezvousKey]);
+  }, [rendezvousKey, hostPeerId]);
 
   // Rendezvous orchestration: when we are still on the rendezvous
   // (host) room and the data channel comes up, send rendezvous.join
@@ -265,6 +275,12 @@ export function RtcProvider({
     clientRef.current?.sendControl(phoneToDaemon.sttCatalogRequest());
   }, [activeRoomId, hostPeerId, status]);
 
+  const requestSessionsCatalog = useCallback(() => {
+    if (!activeRoomId || activeRoomId === hostPeerId) return;
+    if (status !== 'open') return;
+    clientRef.current?.sendControl(phoneToDaemon.sessionsCatalogRequest());
+  }, [activeRoomId, hostPeerId, status]);
+
   useEffect(() => {
     if (!rendezvous || !hostPeerId) return;
     if (!activeRoomId || activeRoomId === hostPeerId) return;
@@ -273,7 +289,8 @@ export function RtcProvider({
     catalogRequestedRoomRef.current = activeRoomId;
     requestTtsCatalog();
     requestSttCatalog();
-  }, [rendezvous, hostPeerId, activeRoomId, status, requestTtsCatalog, requestSttCatalog]);
+    requestSessionsCatalog();
+  }, [rendezvous, hostPeerId, activeRoomId, status, requestTtsCatalog, requestSttCatalog, requestSessionsCatalog]);
 
   useEffect(() => {
     if (activeRoomId === hostPeerId) {
@@ -349,6 +366,8 @@ export function RtcProvider({
       requestTtsCatalog,
       sttCatalog,
       requestSttCatalog,
+      sessionsCatalog,
+      requestSessionsCatalog,
       hasClient: !!hostPeerId,
     }),
     [
@@ -363,6 +382,8 @@ export function RtcProvider({
       requestTtsCatalog,
       sttCatalog,
       requestSttCatalog,
+      sessionsCatalog,
+      requestSessionsCatalog,
       hostPeerId,
     ],
   );

@@ -25,6 +25,7 @@ import { classifySignal, decideForwardToLivePeer, decideIncomingSignal } from '.
 
 const MAX_BUFFERED_CANDIDATES_PER_PEER = 32;
 import { DEFAULT_SIGNAL_SERVER } from './signalServer.js';
+import { RecentSessionsCache } from './recentSessions.js';
 import { makeVoiceRoomId } from './voiceRoom.js';
 import { VoiceSession } from './voiceSession.js';
 
@@ -72,6 +73,7 @@ export class DaemonPeer {
   private rendezvousPeers = new Map<string, RendezvousPeer>();
   private voiceSessions = new Map<string, VoiceSession>();
   private pendingCandidates = new Map<string, SignalPayload[]>();
+  private readonly recentSessions = new RecentSessionsCache();
 
   constructor(private readonly opts: DaemonPeerOptions) {
     this.iceServers = opts.iceServers ?? DEFAULT_ICE_SERVERS;
@@ -174,6 +176,8 @@ export class DaemonPeer {
       try { session.close(); } catch { /* ignore */ }
     }
     this.voiceSessions.clear();
+
+    this.recentSessions.stop();
 
     try { this.signalClient.close(); } catch { /* ignore */ }
   }
@@ -318,6 +322,7 @@ export class DaemonPeer {
         ...(accountId ? { accountId } : {}),
         delivery,
         ...(msg.settings ? { voiceSettings: msg.settings } : {}),
+        recentSessionsProvider: () => this.recentSessions.getSnapshot(),
         onClose: (id) => {
           this.voiceSessions.delete(id);
         },

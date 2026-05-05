@@ -101,6 +101,11 @@ describe('phone → daemon factories', () => {
     expect(phoneDaemon.sttCatalogRequest()).toEqual({ t: 'stt.catalog.request' });
   });
 
+  it('requests the daemon recent session catalog', () => {
+    expect(phoneClient.sessionsCatalogRequest()).toEqual({ t: 'sessions.catalog.request' });
+    expect(phoneDaemon.sessionsCatalogRequest()).toEqual({ t: 'sessions.catalog.request' });
+  });
+
   it('includes canonical STT selection in settings.update', () => {
     const stt = { providerId: 'xai', model: 'grok-stt' };
     expect(phoneClient.settingsUpdate({ stt })).toEqual({
@@ -126,6 +131,7 @@ describe('phone → daemon factories', () => {
     expect(phoneClient.sttAudioDone()).toEqual(phoneDaemon.sttAudioDone());
     expect(phoneClient.sttCancel()).toEqual(phoneDaemon.sttCancel());
     expect(phoneClient.replyCancel()).toEqual(phoneDaemon.replyCancel());
+    expect(phoneClient.sessionsCatalogRequest()).toEqual(phoneDaemon.sessionsCatalogRequest());
     expect(
       phoneClient.rendezvousJoin({
         sessionId: 's',
@@ -188,6 +194,10 @@ describe('daemon → phone factories', () => {
     expect(daemonClient.replyDone('a')).toEqual({ t: 'reply.done', text: 'a' });
     expect(daemonClient.replyError('r')).toEqual({ t: 'reply.error', message: 'r' });
     expect(daemonClient.ttsStart(24000)).toEqual({ t: 'tts.start', sample_rate: 24000 });
+    expect(daemonClient.sessionsCatalog({ generatedAt: '2026-05-05T00:00:00.000Z', sessions: [] })).toEqual({
+      t: 'sessions.catalog',
+      catalog: { generatedAt: '2026-05-05T00:00:00.000Z', sessions: [] },
+    });
     expect(daemonClient.ttsDone()).toEqual({ t: 'tts.done' });
     expect(daemonClient.ttsError('nope')).toEqual({ t: 'tts.error', message: 'nope' });
   });
@@ -244,6 +254,9 @@ describe('daemon → phone factories', () => {
     expect(daemonClient.replyDone('a')).toEqual(daemonDaemon.replyDone('a'));
     expect(daemonClient.replyError('r')).toEqual(daemonDaemon.replyError('r'));
     expect(daemonClient.ttsStart(24000)).toEqual(daemonDaemon.ttsStart(24000));
+    expect(daemonClient.sessionsCatalog({ generatedAt: 'now', sessions: [] })).toEqual(
+      daemonDaemon.sessionsCatalog({ generatedAt: 'now', sessions: [] }),
+    );
     expect(daemonClient.ttsDone()).toEqual(daemonDaemon.ttsDone());
     expect(daemonClient.ttsError('n')).toEqual(daemonDaemon.ttsError('n'));
   });
