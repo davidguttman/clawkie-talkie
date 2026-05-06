@@ -2,9 +2,10 @@ import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { holdMusicTracksPlugin } from './vite/holdMusicTracksPlugin';
+import { pwaHtmlPlugin } from './vite/pwaPlugin';
 
 export default defineConfig({
-  plugins: [react(), holdMusicTracksPlugin(resolve(__dirname, 'public/music'))],
+  plugins: [react(), holdMusicTracksPlugin(resolve(__dirname, 'public/music')), pwaHtmlPlugin()],
   define: {
     global: 'globalThis',
     process: 'globalThis.__clawkieProcess',
