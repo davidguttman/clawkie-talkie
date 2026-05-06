@@ -32,6 +32,8 @@ import {
   reduce,
   type DrivingContext,
   type DrivingEvent,
+  type DrivingHydration,
+  type DrivingReplayEvent,
   type DrivingSideEffect,
   type DrivingState,
 } from './drivingReducer';
@@ -46,7 +48,7 @@ export interface Turn {
   text: string;
 }
 
-interface CurrentTurnTranscript {
+export interface CurrentTurnTranscript {
   active: boolean;
   sttDone: boolean;
   text: string;
@@ -145,6 +147,20 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
   // Listen for daemon control messages that drive state transitions.
   useEffect(() => {
     const detach = rtc.addControlListener((msg) => {
+      if (msg.t === 'session.snapshot') {
+        const plan = sessionSnapshotReplayPlanFromControlMessage(msg);
+        if (plan) {
+          for (const event of sessionSnapshotControlEvents(msg)) {
+            applyReplayControlSideEffects(event, sessionMetaRef.current, holdMusicRef.current);
+          }
+          if (plan.transcript) {
+            accumulatedRef.current = [];
+            setCurrentTurnTranscript(plan.transcript);
+          }
+          dispatch(plan.event);
+        }
+        return;
+      }
       if (msg.t === 'stt.partial') {
         const text = typeof msg.text === 'string' ? msg.text : '';
         // Some STT providers can emit empty partials (and even empty
@@ -461,6 +477,276 @@ export function resolveSttDone(
     event: { type: 'stt.done', text: finalText },
     saveText: finalText,
   };
+}
+
+export interface SessionSnapshotReplayPlan {
+  event: Extract<DrivingEvent, { type: 'session.replay' }>;
+  transcript: CurrentTurnTranscript | null;
+}
+
+interface SnapshotHydrationPlan {
+  hydration: DrivingHydration;
+  transcript: CurrentTurnTranscript;
+}
+
+export function sessionSnapshotReplayPlanFromControlMessage(
+  msg: ControlMessage,
+): SessionSnapshotReplayPlan | null {
+  if (msg.t !== 'session.snapshot') return null;
+  const events = sessionSnapshotControlEvents(msg)
+    .map(drivingReplayEventFromControlMessage)
+    .filter((event): event is DrivingReplayEvent => !!event);
+  const snapshot = sessionSnapshotRecord(msg);
+  const hydrated = snapshot ? snapshotHydrationPlan(snapshot) : null;
+  if (!hydrated && events.length === 0) return null;
+  return {
+    event: {
+      type: 'session.replay',
+      events,
+      ...(hydrated ? { hydration: hydrated.hydration } : {}),
+    },
+    transcript: hydrated?.transcript ?? null,
+  };
+}
+
+export function sessionSnapshotControlEvents(msg: ControlMessage): ControlMessage[] {
+  const events = Array.isArray(msg.events) ? msg.events : [];
+  return events
+    .filter((event): event is Record<string, unknown> => {
+      return !!event && typeof event === 'object' && !Array.isArray(event) && typeof event.t === 'string';
+    })
+    .map((event) => event as ControlMessage);
+}
+
+export function drivingReplayEventFromControlMessage(msg: ControlMessage): DrivingReplayEvent | null {
+  if (msg.t === 'stt.done') return resolveSttDone(msg.text).event;
+  if (msg.t === 'stt.error') {
+    return { type: 'stt.error', reason: typeof msg.message === 'string' ? msg.message : 'stt_error' };
+  }
+  if (msg.t === 'reply.done') {
+    return { type: 'reply.done', text: typeof msg.text === 'string' ? msg.text : '' };
+  }
+  if (msg.t === 'reply.error') {
+    return { type: 'reply.error', reason: typeof msg.message === 'string' ? msg.message : 'reply_error' };
+  }
+  if (msg.t === 'tts.start') return { type: 'tts.start' };
+  if (msg.t === 'tts.done') return { type: 'tts.done' };
+  if (msg.t === 'tts.error') {
+    return { type: 'tts.error', reason: typeof msg.message === 'string' ? msg.message : 'tts_error' };
+  }
+  return null;
+}
+
+function sessionSnapshotRecord(msg: ControlMessage): Record<string, unknown> | null {
+  const message = objectRecord(msg) ?? {};
+  const nestedSnapshot = objectRecord(message.snapshot);
+  const nestedTurn = objectRecord(nestedSnapshot?.turn) ?? objectRecord(message.turn);
+  const merged = {
+    ...message,
+    ...(nestedSnapshot ?? {}),
+    ...(nestedTurn ?? {}),
+  };
+  return Object.keys(merged).length > 0 ? merged : null;
+}
+
+function snapshotHydrationPlan(source: Record<string, unknown>): SnapshotHydrationPlan | null {
+  const phase = normalizeSnapshotPhase(
+    firstString(source, ['phase', 'turnPhase', 'status', 'state']),
+    source,
+  );
+  const lastUserText = firstString(source, [
+    'lastUserText',
+    'userText',
+    'transcript',
+    'finalTranscript',
+    'promptText',
+  ]);
+  const replyText = firstString(source, [
+    'lastReplyText',
+    'replyText',
+    'assistantText',
+    'responseText',
+    'pendingReplyText',
+  ]);
+  const pendingReplyText = firstString(source, [
+    'pendingReplyText',
+    'pendingReply',
+    'replyText',
+    'assistantText',
+    'responseText',
+  ]);
+  const error = firstString(source, ['error', 'reason', 'message']) || null;
+
+  if (!phase) return null;
+
+  if (phase === 'completed') {
+    return {
+      hydration: {
+        context: {
+          ...initialContext,
+          state: 'idle',
+          lastUserText,
+          lastReplyText: replyText,
+        },
+        armTts: false,
+      },
+      transcript: { active: false, sttDone: false, text: '' },
+    };
+  }
+
+  if (phase === 'reply-ready') {
+    return {
+      hydration: {
+        context: {
+          ...initialContext,
+          state: 'thinking',
+          lastUserText,
+          pendingReplyText,
+        },
+        armTts: !!pendingReplyText,
+      },
+      transcript: { active: !!lastUserText, sttDone: true, text: lastUserText },
+    };
+  }
+
+  if (phase === 'speaking') {
+    return {
+      hydration: {
+        context: {
+          ...initialContext,
+          state: 'ai',
+          lastUserText,
+          lastReplyText: replyText,
+          liveReplyText: replyText,
+        },
+        armTts: !!replyText,
+      },
+      transcript: { active: !!lastUserText, sttDone: true, text: lastUserText },
+    };
+  }
+
+  if (phase === 'error') {
+    return {
+      hydration: {
+        context: {
+          ...initialContext,
+          state: 'idle',
+          lastUserText,
+          lastReplyText: replyText,
+          error,
+        },
+        armTts: false,
+      },
+      transcript: { active: false, sttDone: false, text: '' },
+    };
+  }
+
+  if (phase === 'thinking') {
+    return {
+      hydration: {
+        context: {
+          ...initialContext,
+          state: 'thinking',
+          lastUserText,
+        },
+        armTts: false,
+      },
+      transcript: { active: !!lastUserText, sttDone: true, text: lastUserText },
+    };
+  }
+
+  if (phase === 'recording') {
+    return {
+      hydration: {
+        context: {
+          ...initialContext,
+          state: 'recording',
+          lastUserText,
+        },
+        armTts: false,
+      },
+      transcript: { active: true, sttDone: false, text: lastUserText },
+    };
+  }
+
+  return {
+    hydration: {
+      context: {
+        ...initialContext,
+        state: 'idle',
+        lastUserText,
+        lastReplyText: replyText,
+      },
+      armTts: false,
+    },
+    transcript: { active: false, sttDone: false, text: '' },
+  };
+}
+
+type SnapshotPhase = 'idle' | 'recording' | 'thinking' | 'reply-ready' | 'speaking' | 'completed' | 'error';
+
+function normalizeSnapshotPhase(
+  raw: string,
+  source: Record<string, unknown>,
+): SnapshotPhase | null {
+  const value = raw.trim().toLowerCase().replace(/[ _]+/g, '-');
+  if (value === 'completed' || value === 'complete' || value === 'done') return 'completed';
+  if (value === 'reply-ready' || value === 'replyready' || value === 'reply-done') return 'reply-ready';
+  if (value === 'speaking' || value === 'ai' || value === 'tts' || value === 'tts-started') return 'speaking';
+  if (value === 'error' || value === 'failed') return 'error';
+  if (value === 'thinking' || value === 'replying' || value === 'generating') return 'thinking';
+  if (value === 'recording' || value === 'listening' || value === 'stt') return 'recording';
+  if (value === 'idle') {
+    return firstString(source, ['lastReplyText', 'replyText', 'assistantText', 'responseText'])
+      ? 'completed'
+      : 'idle';
+  }
+  if (source.error || source.reason) return 'error';
+  if (firstString(source, ['lastReplyText', 'replyText', 'assistantText', 'responseText'])) return 'completed';
+  if (firstString(source, ['lastUserText', 'userText', 'transcript', 'finalTranscript'])) return 'thinking';
+  return null;
+}
+
+function firstString(source: Record<string, unknown>, keys: readonly string[]): string {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+  return '';
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+
+function applyReplayControlSideEffects(
+  msg: ControlMessage,
+  sessionMeta: Pick<DrivingLoopOptions, 'sessionId' | 'threadId' | 'hostPeerId'>,
+  holdMusic: HoldMusicLike | null,
+): void {
+  if (msg.t === 'stt.done') {
+    const result = resolveSttDone(msg.text);
+    if ('saveText' in result) saveTranscriptTurn(sessionMeta, 'user', result.saveText);
+    return;
+  }
+  if (msg.t === 'reply.done') {
+    saveTranscriptTurn(sessionMeta, 'assistant', typeof msg.text === 'string' ? msg.text : '');
+    return;
+  }
+  if (msg.t === 'reply.error') {
+    const reason = typeof msg.message === 'string' ? msg.message : 'reply_error';
+    saveTranscriptTurn(sessionMeta, 'assistant', '', reason);
+    stopHoldMusicForControlMessage(msg, holdMusic);
+    return;
+  }
+  if (msg.t === 'tts.start' || msg.t === 'tts.done' || msg.t === 'tts.error') {
+    stopHoldMusicForControlMessage(msg, holdMusic);
+  }
 }
 
 export function readTargetBands(

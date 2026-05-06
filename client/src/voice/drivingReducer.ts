@@ -25,7 +25,7 @@ export interface DrivingContext {
   error: string | null;
 }
 
-export type DrivingEvent =
+export type DrivingReplayEvent =
   | { type: 'tap'; currentTurnTranscribing?: boolean }
   | { type: 'silence' }
   | { type: 'stt.done'; text: string }
@@ -35,6 +35,15 @@ export type DrivingEvent =
   | { type: 'tts.start' }
   | { type: 'tts.done' }
   | { type: 'tts.error'; reason: string };
+
+export interface DrivingHydration {
+  context: DrivingContext;
+  armTts?: boolean;
+}
+
+export type DrivingEvent =
+  | DrivingReplayEvent
+  | { type: 'session.replay'; events: DrivingReplayEvent[]; hydration?: DrivingHydration };
 
 export type DrivingSideEffect =
   | { kind: 'startMic' }
@@ -59,6 +68,8 @@ export const initialContext: DrivingContext = {
 };
 
 export function reduce(ctx: DrivingContext, event: DrivingEvent): Reduction {
+  if (event.type === 'session.replay') return reduceSessionReplay(ctx, event);
+
   switch (ctx.state) {
     case 'idle':
       if (event.type === 'tap') {
@@ -164,4 +175,27 @@ export function reduce(ctx: DrivingContext, event: DrivingEvent): Reduction {
       }
       return { next: ctx, side: [] };
   }
+}
+
+function reduceSessionReplay(
+  ctx: DrivingContext,
+  event: Extract<DrivingEvent, { type: 'session.replay' }>,
+): Reduction {
+  let next = ctx;
+  let side: DrivingSideEffect[] = [];
+  for (const replayEvent of event.events) {
+    const reduced = reduce(next, replayEvent);
+    next = reduced.next;
+    side.push(...reduced.side);
+  }
+  if (event.hydration) {
+    next = event.hydration.context;
+    if (!event.hydration.armTts && next.state === 'idle' && !next.pendingReplyText) {
+      side = side.filter((item) => item.kind !== 'armTts');
+    }
+    if (event.hydration.armTts && !side.some((item) => item.kind === 'armTts')) {
+      side.push({ kind: 'armTts' });
+    }
+  }
+  return { next, side };
 }
