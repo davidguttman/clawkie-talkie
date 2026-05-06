@@ -32,7 +32,10 @@ type ServiceWorkerHelpers = {
   hasSensitiveQuery: (url: URL) => boolean;
   isHtmlRequest: (request: MockRequest, url: URL) => boolean;
   isUpdateSensitiveAsset: (url: URL) => boolean;
+  isRangeRequest: (request: MockRequest) => boolean;
   isStaticAsset: (url: URL) => boolean;
+  cacheFirst: (request: MockRequest) => Promise<Response>;
+  putIfCacheable: (request: MockRequest, response: Response) => Promise<void>;
 };
 
 type MockRequest = {
@@ -58,24 +61,26 @@ function mockRequest(path: string, headers: HeaderMap = {}, method = 'GET'): Moc
   };
 }
 
-function loadServiceWorkerHelpers(): ServiceWorkerHelpers {
+function loadServiceWorkerHelpers(overrides: { caches?: unknown; fetch?: unknown } = {}): ServiceWorkerHelpers {
   const sw = readFileSync(resolve(publicDir, 'sw.js'), 'utf8');
   const context = {
     URL,
+    Response,
+    fetch: overrides.fetch ?? (async () => { throw new Error('Unexpected fetch'); }),
     self: {
       location: { origin: 'https://clawkie.test' },
       addEventListener() {},
       skipWaiting() {},
       clients: { claim() {} },
     },
-    caches: {},
+    caches: overrides.caches ?? {},
     console,
   };
 
   createContext(context);
   runInContext(
     `${sw}\n` +
-      `globalThis.__helpers = { PRECACHE_ASSETS, shouldBypass, hasSensitiveQuery, isHtmlRequest, isUpdateSensitiveAsset, isStaticAsset };`,
+      `globalThis.__helpers = { PRECACHE_ASSETS, shouldBypass, hasSensitiveQuery, isHtmlRequest, isUpdateSensitiveAsset, isRangeRequest, isStaticAsset, cacheFirst, putIfCacheable };`,
     context,
   );
 
@@ -190,6 +195,10 @@ describe('PWA metadata and assets', () => {
     expect(helpers.shouldBypass(mockRequest('/socket'), url('/socket'))).toBe(true);
     expect(helpers.shouldBypass(mockRequest('/ws'), url('/ws'))).toBe(true);
     expect(helpers.shouldBypass(mockRequest('/icons/icon-192x192.png'), url('/icons/icon-192x192.png'))).toBe(false);
+    expect(helpers.shouldBypass(mockRequest('/music/hold.mp3', { range: 'bytes=0-1023' }), url('/music/hold.mp3'))).toBe(true);
+
+    expect(helpers.isRangeRequest(mockRequest('/music/hold.mp3', { range: 'bytes=0-1023' }))).toBe(true);
+    expect(helpers.isRangeRequest(mockRequest('/music/hold.mp3'))).toBe(false);
 
     expect(helpers.hasSensitiveQuery(url('/voice/?peer=abc'))).toBe(true);
     expect(helpers.hasSensitiveQuery(url('/voice/?utm_source=test'))).toBe(false);
@@ -208,4 +217,51 @@ describe('PWA metadata and assets', () => {
     expect(helpers.isStaticAsset(url('/audio/worklet.js'))).toBe(true);
     expect(helpers.isStaticAsset(url('/api/say'))).toBe(false);
   });
+
+  it('lets hold-music Range requests use the network without cache failures becoming 503s', async () => {
+    let putCount = 0;
+    const rangeResponse = new Response('partial audio', { status: 206, statusText: 'Partial Content' });
+    const helpers = loadServiceWorkerHelpers({
+      fetch: async () => rangeResponse,
+      caches: {
+        match: async () => undefined,
+        open: async () => ({
+          put: async () => {
+            putCount += 1;
+            throw new Error('Cache API rejects partial content');
+          },
+        }),
+      },
+    });
+
+    const response = await helpers.cacheFirst(mockRequest('/music/hold.mp3', { range: 'bytes=0-1023' }));
+
+    expect(response).toBe(rangeResponse);
+    expect(response.status).toBe(206);
+    expect(putCount).toBe(0);
+  });
+
+  it('treats runtime cache writes as best-effort after a successful network fetch', async () => {
+    let putCount = 0;
+    const networkResponse = new Response('audio', { status: 200 });
+    const helpers = loadServiceWorkerHelpers({
+      fetch: async () => networkResponse,
+      caches: {
+        match: async () => undefined,
+        open: async () => ({
+          put: async () => {
+            putCount += 1;
+            throw new Error('Quota exceeded');
+          },
+        }),
+      },
+    });
+
+    const response = await helpers.cacheFirst(mockRequest('/music/hold.mp3'));
+
+    expect(response).toBe(networkResponse);
+    expect(response.status).toBe(200);
+    expect(putCount).toBe(1);
+  });
+
 });
