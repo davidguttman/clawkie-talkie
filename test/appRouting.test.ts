@@ -149,6 +149,7 @@ describe('session picker handoff selection', () => {
           agent: 'kamaji',
           channel: 'discord',
           target: 'channel:new-thread',
+          accountId: 'acct-1',
           displayLabel: 'New thread',
         },
       ),
@@ -158,6 +159,7 @@ describe('session picker handoff selection', () => {
       sessionKey: 'agent:kamaji:discord:channel:new-thread',
       channel: 'discord',
       target: 'channel:new-thread',
+      accountId: 'acct-1',
     });
   });
 
@@ -169,12 +171,14 @@ describe('session picker handoff selection', () => {
         sessionKey: 'agent:main:discord:channel:t1',
         channel: 'discord',
         target: 'channel:t1',
+        accountId: 'acct-1',
       }),
     ).toEqual({
       sessionId: 'session-uuid',
       sessionKey: 'agent:main:discord:channel:t1',
       channel: 'discord',
       target: 'channel:t1',
+      accountId: 'acct-1',
     });
   });
 });

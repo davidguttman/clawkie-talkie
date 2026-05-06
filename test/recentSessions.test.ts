@@ -1,10 +1,24 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const childProcessMocks = vi.hoisted(() => ({
+  execFile: vi.fn(),
+}));
+
+vi.mock('node:child_process', () => ({
+  execFile: childProcessMocks.execFile,
+}));
 import {
   buildRecentSessionsFromRows,
   createRecentSessionsCache,
   extractDiscordChannelName,
+  getRecentSessionsWithOpenClaw,
   parseOpenClawSessionKey,
+  resolveDiscordChannelLabel,
 } from '../daemon/src/recentSessions';
+
+beforeEach(() => {
+  childProcessMocks.execFile.mockReset();
+});
 
 describe('recent OpenClaw session parsing', () => {
   it('derives Discord routing metadata and labels from OpenClaw session keys', async () => {
@@ -40,6 +54,87 @@ describe('recent OpenClaw session parsing', () => {
         },
       ],
     });
+  });
+
+  it('runs OpenClaw session and Discord label lookups with argv, not shell strings', async () => {
+    const dangerousTarget = 'channel:abc$(touch /tmp/clawkie-pwned)"; echo owned #';
+    childProcessMocks.execFile.mockImplementation((
+      file: string,
+      args: string[],
+      _options: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      if (file !== 'openclaw') throw new Error(`unexpected command: ${file}`);
+      if (args[0] === 'sessions') {
+        callback(
+          null,
+          JSON.stringify({
+            sessions: [
+              {
+                key: 'agent:kamaji:discord:channel:dangerous',
+                sessionId: 'dangerous-session',
+                agentId: 'kamaji',
+                channel: 'discord',
+                target: dangerousTarget,
+                accountId: 'acct-1',
+                updatedAt: '2026-05-05T19:26:00.000Z',
+              },
+            ],
+          }),
+          '',
+        );
+        return {};
+      }
+      if (args[0] === 'message') {
+        callback(null, JSON.stringify({ payload: { channel: { name: 'danger label' } } }), '');
+        return {};
+      }
+      throw new Error(`unexpected args: ${args.join(' ')}`);
+    });
+
+    const snapshot = await getRecentSessionsWithOpenClaw();
+
+    expect(snapshot.sessions[0]).toMatchObject({
+      sessionId: 'dangerous-session',
+      target: dangerousTarget,
+      accountId: 'acct-1',
+      displayLabel: 'danger label',
+    });
+    expect(childProcessMocks.execFile).toHaveBeenNthCalledWith(
+      1,
+      'openclaw',
+      ['sessions', '--json', '--all-agents', '--active', '10080', '--limit', '10'],
+      expect.objectContaining({ windowsHide: true }),
+      expect.any(Function),
+    );
+    expect(childProcessMocks.execFile).toHaveBeenNthCalledWith(
+      2,
+      'openclaw',
+      ['message', 'channel', 'info', '--channel', 'discord', '--target', dangerousTarget, '--json'],
+      expect.objectContaining({ windowsHide: true }),
+      expect.any(Function),
+    );
+  });
+
+  it('returns undefined for failed Discord label lookups without shelling through dangerous targets', async () => {
+    const dangerousTarget = 'channel:$(printf exploited)';
+    childProcessMocks.execFile.mockImplementation((
+      _file: string,
+      _args: string[],
+      _options: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      callback(new Error('lookup failed'), '', '');
+      return {};
+    });
+
+    await expect(resolveDiscordChannelLabel(dangerousTarget)).resolves.toBeUndefined();
+    expect(childProcessMocks.execFile).toHaveBeenCalledWith(
+      'openclaw',
+      ['message', 'channel', 'info', '--channel', 'discord', '--target', dangerousTarget, '--json'],
+      expect.objectContaining({ windowsHide: true }),
+      expect.any(Function),
+    );
   });
 
   it('sorts by last activity and caps to the 10 most recent sessions', async () => {
@@ -104,6 +199,22 @@ describe('recent OpenClaw session parsing', () => {
       'webchat-session',
       'group-session',
     ]);
+  });
+
+  it('preserves accountId from OpenClaw rows for reconnect routing', async () => {
+    const snapshot = await buildRecentSessionsFromRows(
+      [
+        {
+          key: 'agent:kamaji:discord:channel:1501301184101617886',
+          sessionId: 'uuid-1',
+          updatedAt: '2026-05-05T19:26:00.000Z',
+          accountId: 'discord-account-1',
+        },
+      ],
+      { generatedAt: 'now' },
+    );
+
+    expect(snapshot.sessions[0].accountId).toBe('discord-account-1');
   });
 
   it('preserves numeric updatedAt timestamps as ISO last activity', async () => {

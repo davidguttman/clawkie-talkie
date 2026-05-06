@@ -87,6 +87,7 @@ export interface RecentSession {
   agent: string;
   channel?: string;
   target?: string;
+  accountId?: string;
   lastActivity?: string;
   displayLabel: string;
 }

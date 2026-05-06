@@ -99,6 +99,7 @@ export function selectHandoffFromRecentSession(
     sessionKey: session.sessionKey,
     ...(session.channel ? { channel: session.channel } : {}),
     ...(session.target ? { target: session.target } : {}),
+    ...(session.accountId ? { accountId: session.accountId } : {}),
   };
 }
 

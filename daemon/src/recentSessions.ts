@@ -1,8 +1,5 @@
-import { exec } from 'node:child_process';
-import { promisify } from 'node:util';
+import { execFile } from 'node:child_process';
 import type { RecentSession, RecentSessionsSnapshot } from './protocol.js';
-
-const execAsync = promisify(exec);
 
 export const DEFAULT_RECENT_SESSIONS_TTL_MS = 60_000;
 export const DEFAULT_RECENT_SESSIONS_LIMIT = 10;
@@ -26,6 +23,18 @@ export interface BuildRecentSessionsOptions {
 
 interface OpenClawSessionsJson {
   sessions?: unknown[];
+}
+
+function execOpenClaw(args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile('openclaw', args, { windowsHide: true }, (error, stdout) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(stdout);
+    });
+  });
 }
 
 export function createEmptyRecentSessionsSnapshot(generatedAt = new Date().toISOString()): RecentSessionsSnapshot {
@@ -63,7 +72,7 @@ export async function getRecentSessionsWithOpenClaw(): Promise<RecentSessionsSna
     '--limit',
     String(DEFAULT_RECENT_SESSIONS_LIMIT),
   ];
-  const { stdout } = await execAsync(`openclaw ${args.map((arg) => JSON.stringify(arg)).join(' ')}`);
+  const stdout = await execOpenClaw(args);
   return buildRecentSessionsFromOpenClawJson(stdout, {
     limit: DEFAULT_RECENT_SESSIONS_LIMIT,
     resolveDisplayLabel: resolveOpenClawDisplayLabel,
@@ -130,6 +139,7 @@ function parseOpenClawSessionRow(row: unknown): RecentSession | null {
     readTimestamp(source.updatedAt) ?? readTimestamp(source.lastActivity) ?? readTimestamp(source.lastActivityAt);
   const channel = readString(source.channel) ?? parsedKey.channel;
   const target = readString(source.target) ?? parsedKey.target;
+  const accountId = readString(source.accountId) ?? readString(source.account);
 
   return {
     sessionId,
@@ -137,6 +147,7 @@ function parseOpenClawSessionRow(row: unknown): RecentSession | null {
     agent: agent || 'unknown',
     channel,
     target,
+    ...(accountId ? { accountId } : {}),
     lastActivity,
     displayLabel: sessionKey,
   };
@@ -200,7 +211,7 @@ async function resolveOpenClawDisplayLabel(session: RecentSession): Promise<stri
 export async function resolveDiscordChannelLabel(target: string): Promise<string | undefined> {
   const args = ['message', 'channel', 'info', '--channel', 'discord', '--target', target, '--json'];
   try {
-    const { stdout } = await execAsync(`openclaw ${args.map((arg) => JSON.stringify(arg)).join(' ')}`);
+    const stdout = await execOpenClaw(args);
     return extractDiscordChannelName(stdout);
   } catch {
     return undefined;
