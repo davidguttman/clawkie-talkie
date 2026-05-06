@@ -336,6 +336,47 @@ describe('daemon TTS playback audio context', () => {
     });
   });
 
+
+  it('plays buffered reconnect PCM over the data channel even when a remote stream is attached', async () => {
+    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+    const audioEl = {
+      autoplay: false,
+      pause: vi.fn(),
+      play: vi.fn(() => Promise.resolve()),
+      setAttribute: vi.fn(),
+      srcObject: null as MediaStream | null,
+      style: {},
+    };
+    vi.stubGlobal('document', {
+      body: { appendChild: vi.fn() },
+      createElement: vi.fn(() => audioEl),
+    });
+    const { attachDaemonRemoteStream, playDaemonTts } = await import('../client/src/voice/tts');
+    const controls: Array<(msg: { t: string; [k: string]: unknown }) => void> = [];
+    const binaries: Array<(bytes: ArrayBuffer) => void> = [];
+    const stream = new FakeMediaStream() as unknown as MediaStream;
+
+    attachDaemonRemoteStream(stream);
+    const handle = playDaemonTts({
+      addControlListener(fn) {
+        controls.push(fn);
+        return vi.fn();
+      },
+      addBinaryListener(fn) {
+        binaries.push(fn);
+        return vi.fn();
+      },
+      sendControl: vi.fn(),
+      initialControlMessage: { t: 'tts.start', sample_rate: 24000, buffered: true },
+    });
+
+    binaries[0](new Uint8Array([0, 0, 0xff, 0x7f]).buffer);
+    controls[0]({ t: 'tts.done' });
+    await handle.done;
+
+    expect(FakeAudioContext.instances[0].buffers).toContainEqual({ channels: 1, length: 2, sampleRate: 24000 });
+  });
+
   it('defensively resumes the shared context when TTS starts without prior unlock', async () => {
     vi.stubGlobal('window', { AudioContext: FakeAudioContext });
     const { playDaemonTts } = await import('../client/src/voice/tts');

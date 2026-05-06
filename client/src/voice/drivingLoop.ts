@@ -29,7 +29,6 @@ import {
 import { getActiveMicAnalyser } from './audioSource';
 import {
   initialContext,
-  RECONNECT_AUTO_RESUME_THRESHOLD_MS,
   reduce,
   type DrivingContext,
   type DrivingEvent,
@@ -143,6 +142,14 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     };
   }, [opts.sessionId, opts.threadId, opts.hostPeerId]);
 
+  useEffect(() => {
+    accumulatedRef.current = [];
+    setCurrentTurnTranscript({ active: false, sttDone: false, text: '' });
+    runCancelMic(sttRef);
+    runStopTts(ttsRef);
+    dispatch({ type: 'session.reset' });
+  }, [opts.sessionId, opts.threadId, opts.hostPeerId]);
+
   const daemonConnected = rtc.hasClient && rtc.status === 'open';
 
   // Listen for daemon control messages that drive state transitions.
@@ -215,7 +222,14 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
       }
       if (msg.t === 'tts.start') {
         stopHoldMusicForControlMessage(msg, holdMusicRef.current);
-        dispatch({ type: 'tts.start' });
+        const replayStart = msg.buffered === true;
+        if (replayStart && !ttsRef.current) {
+          runArmTts(rtcRef, ttsRef, dispatch, msg);
+        }
+        dispatch({
+          type: 'tts.start',
+          ...(typeof msg.text === 'string' && msg.text.trim() ? { text: msg.text.trim() } : {}),
+        });
         return;
       }
       if (msg.t === 'tts.done') {
@@ -396,11 +410,13 @@ function runArmTts(
   rtcRef: React.MutableRefObject<DrivingLoopOptions['rtc']>,
   ttsRef: React.MutableRefObject<TTSHandle | null>,
   dispatch: Dispatch,
+  initialControlMessage?: ControlMessage,
 ): void {
   const tts = playDaemonTts({
     addControlListener: rtcRef.current.addControlListener,
     addBinaryListener: rtcRef.current.addBinaryListener,
     sendControl: rtcRef.current.sendControl,
+    ...(initialControlMessage ? { initialControlMessage } : {}),
   });
   ttsRef.current = tts;
   void tts.done.then(() => {
@@ -413,7 +429,7 @@ function runArmTts(
 function runStopTts(ttsRef: React.MutableRefObject<TTSHandle | null>): void {
   const tts = ttsRef.current;
   ttsRef.current = null;
-  tts?.stop();
+  tts?.stop({ cancelRemote: false });
 }
 
 function runCancelReply(
@@ -427,7 +443,7 @@ function runCancelReply(
   }
   const tts = ttsRef.current;
   ttsRef.current = null;
-  tts?.stop();
+  tts?.stop({ cancelRemote: false });
 }
 
 function saveTranscriptTurn(
@@ -513,10 +529,17 @@ export function sessionSnapshotReplayPlanFromControlMessage(
 export function sessionSnapshotControlEvents(msg: ControlMessage): ControlMessage[] {
   const events = Array.isArray(msg.events) ? msg.events : [];
   return events
-    .filter((event): event is Record<string, unknown> => {
-      return !!event && typeof event === 'object' && !Array.isArray(event) && typeof event.t === 'string';
+    .map((event): ControlMessage | null => {
+      if (!event || typeof event !== 'object' || Array.isArray(event)) return null;
+      const record = event as Record<string, unknown>;
+      if (typeof record.t === 'string') return record as ControlMessage;
+      const nested = record.msg;
+      if (nested && typeof nested === 'object' && !Array.isArray(nested) && typeof (nested as { t?: unknown }).t === 'string') {
+        return nested as ControlMessage;
+      }
+      return null;
     })
-    .map((event) => event as ControlMessage);
+    .filter((event): event is ControlMessage => !!event);
 }
 
 export function drivingReplayEventFromControlMessage(msg: ControlMessage): DrivingReplayEvent | null {
@@ -530,7 +553,12 @@ export function drivingReplayEventFromControlMessage(msg: ControlMessage): Drivi
   if (msg.t === 'reply.error') {
     return { type: 'reply.error', reason: typeof msg.message === 'string' ? msg.message : 'reply_error' };
   }
-  if (msg.t === 'tts.start') return { type: 'tts.start' };
+  if (msg.t === 'tts.start') {
+    return {
+      type: 'tts.start',
+      ...(typeof msg.text === 'string' && msg.text.trim() ? { text: msg.text.trim() } : {}),
+    };
+  }
   if (msg.t === 'tts.done') return { type: 'tts.done' };
   if (msg.t === 'tts.error') {
     return { type: 'tts.error', reason: typeof msg.message === 'string' ? msg.message : 'tts_error' };
@@ -577,9 +605,6 @@ function snapshotHydrationPlan(source: Record<string, unknown>): SnapshotHydrati
     'responseText',
   ]);
   const error = firstString(source, ['error', 'reason', 'message']) || null;
-  const disconnectedMs = numberValue(source.disconnectedMs);
-  const canAutoResume = disconnectedMs === undefined || disconnectedMs <= RECONNECT_AUTO_RESUME_THRESHOLD_MS;
-
   if (!phase) return null;
 
   if (phase === 'completed') {
@@ -598,20 +623,6 @@ function snapshotHydrationPlan(source: Record<string, unknown>): SnapshotHydrati
   }
 
   if (phase === 'reply-ready') {
-    if (!canAutoResume) {
-      return {
-        hydration: {
-          context: {
-            ...initialContext,
-            state: 'idle',
-            lastUserText,
-            lastReplyText: pendingReplyText,
-          },
-          armTts: false,
-        },
-        transcript: { active: false, sttDone: false, text: '' },
-      };
-    }
     return {
       hydration: {
         context: {
@@ -627,20 +638,6 @@ function snapshotHydrationPlan(source: Record<string, unknown>): SnapshotHydrati
   }
 
   if (phase === 'speaking') {
-    if (!canAutoResume) {
-      return {
-        hydration: {
-          context: {
-            ...initialContext,
-            state: 'idle',
-            lastUserText,
-            lastReplyText: replyText,
-          },
-          armTts: false,
-        },
-        transcript: { active: false, sttDone: false, text: '' },
-      };
-    }
     return {
       hydration: {
         context: {
@@ -736,10 +733,6 @@ function normalizeSnapshotPhase(
   if (firstString(source, ['lastReplyText', 'replyText', 'assistantText', 'responseText'])) return 'completed';
   if (firstString(source, ['lastUserText', 'userText', 'transcript', 'finalTranscript'])) return 'thinking';
   return null;
-}
-
-function numberValue(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function firstString(source: Record<string, unknown>, keys: readonly string[]): string {

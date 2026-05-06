@@ -14,7 +14,6 @@
 
 export type DrivingState = 'idle' | 'recording' | 'thinking' | 'ai';
 
-export const RECONNECT_AUTO_RESUME_THRESHOLD_MS = 30_000;
 
 export interface DrivingContext {
   state: DrivingState;
@@ -34,7 +33,7 @@ export type DrivingReplayEvent =
   | { type: 'stt.error'; reason: string }
   | { type: 'reply.done'; text: string }
   | { type: 'reply.error'; reason: string }
-  | { type: 'tts.start' }
+  | { type: 'tts.start'; text?: string }
   | { type: 'tts.done' }
   | { type: 'tts.error'; reason: string };
 
@@ -45,7 +44,8 @@ export interface DrivingHydration {
 
 export type DrivingEvent =
   | DrivingReplayEvent
-  | { type: 'session.replay'; events: DrivingReplayEvent[]; hydration?: DrivingHydration };
+  | { type: 'session.replay'; events: DrivingReplayEvent[]; hydration?: DrivingHydration }
+  | { type: 'session.reset' };
 
 export type DrivingSideEffect =
   | { kind: 'startMic' }
@@ -72,6 +72,7 @@ export const initialContext: DrivingContext = {
 
 export function reduce(ctx: DrivingContext, event: DrivingEvent): Reduction {
   if (event.type === 'session.replay') return reduceSessionReplay(ctx, event);
+  if (event.type === 'session.reset') return { next: { ...initialContext }, side: [] };
 
   switch (ctx.state) {
     case 'idle':
@@ -79,6 +80,12 @@ export function reduce(ctx: DrivingContext, event: DrivingEvent): Reduction {
         return {
           next: { ...ctx, state: 'recording', error: null, pendingReplyText: '', liveReplyText: '' },
           side: [{ kind: 'startMic' }],
+        };
+      }
+      if (event.type === 'tts.start' && event.text) {
+        return {
+          next: { ...ctx, state: 'ai', lastReplyText: event.text, liveReplyText: event.text, error: null },
+          side: [],
         };
       }
       return { next: ctx, side: [] };
@@ -111,13 +118,14 @@ export function reduce(ctx: DrivingContext, event: DrivingEvent): Reduction {
         };
       }
       if (event.type === 'tts.start') {
-        if (!ctx.pendingReplyText) return { next: ctx, side: [] };
+        const replyText = ctx.pendingReplyText || event.text || '';
+        if (!replyText) return { next: ctx, side: [] };
         return {
           next: {
             ...ctx,
             state: 'ai',
-            lastReplyText: ctx.pendingReplyText,
-            liveReplyText: ctx.pendingReplyText,
+            lastReplyText: replyText,
+            liveReplyText: replyText,
             pendingReplyText: '',
           },
           side: [],

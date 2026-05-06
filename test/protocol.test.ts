@@ -200,6 +200,13 @@ describe('daemon → phone factories', () => {
     expect(daemonClient.replyDone('a')).toEqual({ t: 'reply.done', text: 'a' });
     expect(daemonClient.replyError('r')).toEqual({ t: 'reply.error', message: 'r' });
     expect(daemonClient.ttsStart(24000)).toEqual({ t: 'tts.start', sample_rate: 24000 });
+    expect(daemonClient.ttsStart(24000, { buffered: true, turnId: 7, text: 'saved audio' })).toEqual({
+      t: 'tts.start',
+      sample_rate: 24000,
+      buffered: true,
+      turnId: 7,
+      text: 'saved audio',
+    });
     expect(daemonClient.ttsDone()).toEqual({ t: 'tts.done' });
     expect(daemonClient.ttsError('nope')).toEqual({ t: 'tts.error', message: 'nope' });
   });
@@ -309,6 +316,9 @@ describe('daemon → phone factories', () => {
     expect(daemonClient.replyDone('a')).toEqual(daemonDaemon.replyDone('a'));
     expect(daemonClient.replyError('r')).toEqual(daemonDaemon.replyError('r'));
     expect(daemonClient.ttsStart(24000)).toEqual(daemonDaemon.ttsStart(24000));
+    expect(daemonClient.ttsStart(24000, { buffered: true, turnId: 1, text: 'x' })).toEqual(
+      daemonDaemon.ttsStart(24000, { buffered: true, turnId: 1, text: 'x' }),
+    );
     expect(daemonClient.ttsDone()).toEqual(daemonDaemon.ttsDone());
     expect(daemonClient.ttsError('n')).toEqual(daemonDaemon.ttsError('n'));
   });

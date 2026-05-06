@@ -143,9 +143,10 @@ function createFakeDrivingRtc(): FakeDrivingRtc {
   };
 }
 
-async function renderDrivingLoopHarness(): Promise<{
+async function renderDrivingLoopHarness(initialOptions: { sessionId?: string; threadId?: string; hostPeerId?: string | null } = {}): Promise<{
   loop(): DrivingLoop;
   rtc: FakeDrivingRtc;
+  rerender(options: { sessionId?: string; threadId?: string; hostPeerId?: string | null }): Promise<void>;
   unmount(): Promise<void>;
 }> {
   installMinimalDom();
@@ -155,12 +156,15 @@ async function renderDrivingLoopHarness(): Promise<{
   const container = document.createElement('div');
   const root: Root = createRoot(container);
   let currentLoop: DrivingLoop | null = null;
+  let currentOptions = {
+    sessionId: initialOptions.sessionId ?? 'session-1',
+    threadId: initialOptions.threadId ?? 'thread-1',
+    hostPeerId: initialOptions.hostPeerId ?? 'host-1',
+  };
 
   function Probe(): null {
     currentLoop = useDrivingLoop({
-      sessionId: 'session-1',
-      threadId: 'thread-1',
-      hostPeerId: 'host-1',
+      ...currentOptions,
       rtc,
     });
     return null;
@@ -176,6 +180,16 @@ async function renderDrivingLoopHarness(): Promise<{
       return currentLoop;
     },
     rtc,
+    rerender: async (options) => {
+      currentOptions = {
+        sessionId: options.sessionId ?? currentOptions.sessionId,
+        threadId: options.threadId ?? currentOptions.threadId,
+        hostPeerId: options.hostPeerId ?? currentOptions.hostPeerId,
+      };
+      await act(async () => {
+        root.render(createElement(Probe));
+      });
+    },
     unmount: async () => {
       await act(async () => {
         root.unmount();
@@ -234,6 +248,73 @@ describe('driving loop old-daemon compatibility', () => {
       await rendered.unmount();
     }
   });
+
+  it('arms TTS immediately for daemon-buffered reconnect audio and resets after tts.done', async () => {
+    const ttsModule = await import('../client/src/voice/tts');
+    const playDaemonTts = vi.mocked(ttsModule.playDaemonTts);
+    let resolveDone!: () => void;
+    playDaemonTts.mockReturnValueOnce({
+      analyser: null,
+      done: new Promise<void>((resolve) => { resolveDone = resolve; }),
+      error: null,
+      stop: vi.fn(),
+    });
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      await act(async () => {
+        rendered.rtc.emitControl({ t: 'tts.start', sample_rate: 24000, buffered: true, text: 'missed reply' });
+      });
+
+      expect(playDaemonTts).toHaveBeenCalledWith(expect.objectContaining({
+        initialControlMessage: { t: 'tts.start', sample_rate: 24000, buffered: true, text: 'missed reply' },
+      }));
+      expect(rendered.loop().state).toBe('ai');
+      expect(rendered.loop().liveText).toBe('missed reply');
+
+      await act(async () => {
+        rendered.rtc.emitControl({ t: 'tts.done' });
+        resolveDone();
+      });
+      expect(rendered.loop().state).toBe('idle');
+      expect(rendered.loop().lastTurn).toEqual({ who: 'ai', text: 'missed reply' });
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
+
+  it('resets local TTS/UI state when switching sessions without sending remote reply.cancel', async () => {
+    const ttsModule = await import('../client/src/voice/tts');
+    const playDaemonTts = vi.mocked(ttsModule.playDaemonTts);
+    const stop = vi.fn((options?: { cancelRemote?: boolean }) => {
+      if (options?.cancelRemote !== false) rendered.rtc.sendControl({ t: 'reply.cancel' });
+    });
+    playDaemonTts.mockReturnValueOnce({
+      analyser: null,
+      done: new Promise<void>(() => undefined),
+      error: null,
+      stop,
+    });
+    const rendered = await renderDrivingLoopHarness({ sessionId: 'session-a' });
+    try {
+      await act(async () => {
+        rendered.rtc.emitControl({ t: 'tts.start', sample_rate: 24000, buffered: true, text: 'session A reply' });
+      });
+      expect(rendered.loop().state).toBe('ai');
+      expect(rendered.loop().liveText).toBe('session A reply');
+
+      await rendered.rerender({ sessionId: 'session-b' });
+
+      expect(rendered.loop().state).toBe('idle');
+      expect(rendered.loop().liveText).toBe('');
+      expect(rendered.loop().lastTurn).toBeNull();
+      expect(stop).toHaveBeenCalledWith({ cancelRemote: false });
+      expect(rendered.rtc.sentControl).not.toContainEqual({ t: 'reply.cancel' });
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
 });
 
 describe('driving loop visualization band selection', () => {

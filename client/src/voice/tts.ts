@@ -85,7 +85,7 @@ export function getRemoteTtsAudioDebugSnapshot(): RemoteTtsAudioDebugSnapshot {
 
 export interface TTSHandle {
   done: Promise<void>;
-  stop(): void;
+  stop(options?: { cancelRemote?: boolean }): void;
   readonly error?: string;
   readonly analyser?: AnalyserNode | null;
 }
@@ -217,6 +217,7 @@ export interface TTSPlayerOptions {
   addControlListener: (fn: (msg: { t: string; [k: string]: unknown }) => void) => () => void;
   addBinaryListener: (fn: (bytes: ArrayBuffer) => void) => () => void;
   sendControl: (msg: { t: string; [k: string]: unknown }) => void;
+  initialControlMessage?: { t: string; [k: string]: unknown };
 }
 
 // Mobile browsers only allow playback after the user has unlocked audio from a
@@ -406,6 +407,7 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
     remoteRecorder: null as RemoteReplyRecorder | null,
     replayChunks: [] as ArrayBuffer[],
     replayBytes: 0,
+    forcePcmPlayback: false,
   };
 
   const finishCleanup = () => {
@@ -505,14 +507,15 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
     void resumeAudioContext(audioCtx);
   };
 
-  const detachControl = opts.addControlListener((msg) => {
+  const handleControl = (msg: { t: string; [k: string]: unknown }) => {
     if (state.finished || state.stopped) return;
     if (msg.t === 'tts.start') {
       state.started = true;
       state.replayChunks = [];
       state.replayBytes = 0;
+      state.forcePcmPlayback = msg.buffered === true;
       state.remoteRecorder?.cancel();
-      state.remoteRecorder = startRemoteReplyRecorder(attachedRemoteStream);
+      state.remoteRecorder = state.forcePcmPlayback ? null : startRemoteReplyRecorder(attachedRemoteStream);
       const sr = typeof msg.sample_rate === 'number' ? msg.sample_rate : DEFAULT_SAMPLE_RATE;
       initAudio(sr);
       return;
@@ -525,14 +528,17 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
       const message = typeof msg.message === 'string' ? msg.message : 'openclaw_infer_tts_failed';
       finish(message);
     }
-  });
+  };
+
+  const detachControl = opts.addControlListener(handleControl);
+  if (opts.initialControlMessage) handleControl(opts.initialControlMessage);
 
   const detachBinary = opts.addBinaryListener((bytes) => {
     if (state.finished || state.stopped) return;
     // When the daemon's WebRTC audio track is attached, the remote
     // audio element is the source of truth. Ignore PCM frames so we
     // don't double-play with subtle drift.
-    if (isRemoteAudioActive()) return;
+    if (isRemoteAudioActive() && !state.forcePcmPlayback) return;
     if (!state.audioCtx) initAudio(state.sampleRate);
     if (!state.audioCtx || !state.gain) return;
     state.replayChunks.push(bytes.slice(0));
@@ -542,13 +548,15 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
 
   return {
     done,
-    stop() {
+    stop(options?: { cancelRemote?: boolean }) {
       if (state.stopped) return;
       state.stopped = true;
-      try {
-        opts.sendControl({ t: 'reply.cancel' });
-      } catch {
-        // ignore — connection may already be gone
+      if (options?.cancelRemote !== false) {
+        try {
+          opts.sendControl({ t: 'reply.cancel' });
+        } catch {
+          // ignore — connection may already be gone
+        }
       }
       finish();
     },

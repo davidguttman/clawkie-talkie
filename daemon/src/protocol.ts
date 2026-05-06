@@ -151,7 +151,7 @@ export type DaemonToPhoneEvent =
   | { t: 'reply.start'; text: string }
   | { t: 'reply.done'; text: string }
   | { t: 'reply.error'; message: string }
-  | { t: 'tts.start'; sample_rate: number }
+  | { t: 'tts.start'; sample_rate: number; buffered?: boolean; turnId?: number; text?: string }
   | { t: 'tts.catalog'; catalog: TtsCatalog }
   | { t: 'stt.catalog'; catalog: SttCatalog }
   | { t: 'sessions.list'; generatedAt: string; sessions: RecentSession[] }
@@ -241,9 +241,12 @@ export const daemonToPhone = {
   replyStart: (text: string): DaemonToPhone => ({ t: 'reply.start', text }),
   replyDone: (text: string): DaemonToPhone => ({ t: 'reply.done', text }),
   replyError: (message: string): DaemonToPhone => ({ t: 'reply.error', message }),
-  ttsStart: (sampleRate: number): DaemonToPhone => ({
+  ttsStart: (sampleRate: number, options: { buffered?: boolean; turnId?: number; text?: string } = {}): DaemonToPhone => ({
     t: 'tts.start',
     sample_rate: sampleRate,
+    ...(options.buffered ? { buffered: true } : {}),
+    ...(typeof options.turnId === 'number' ? { turnId: options.turnId } : {}),
+    ...(options.text ? { text: options.text } : {}),
   }),
   ttsCatalog: (catalog: TtsCatalog): DaemonToPhone => ({ t: 'tts.catalog', catalog }),
   sttCatalog: (catalog: SttCatalog): DaemonToPhone => ({ t: 'stt.catalog', catalog }),

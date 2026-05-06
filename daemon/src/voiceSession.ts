@@ -25,15 +25,17 @@ import { createEmptyTtsCatalog, defaultTtsCatalogCache } from './ttsCatalog.js';
 import { createEmptySttCatalog, defaultSttCatalogCache } from './sttCatalog.js';
 import { createEmptyRecentSessionsSnapshot, defaultRecentSessionsCache } from './recentSessions.js';
 
-const MAX_BUFFERED_CANDIDATES_PER_PEER = 32;
-const RECENT_SESSIONS_SUBSCRIPTION_INTERVAL_MS = 60_000;
-const MAX_CONTROL_HISTORY_EVENTS = 128;
 import {
   FRAME_10MS,
   WEBRTC_SAMPLE_RATE,
   pcmToFrames,
   resamplePcm,
 } from './audio.js';
+
+const MAX_BUFFERED_CANDIDATES_PER_PEER = 32;
+const RECENT_SESSIONS_SUBSCRIPTION_INTERVAL_MS = 60_000;
+const MAX_CONTROL_HISTORY_EVENTS = 128;
+const MAX_BUFFERED_TTS_TURN_BYTES = 64 * 1024 * 1024;
 
 export interface VoiceSessionConfig {
   roomId: string;
@@ -119,6 +121,17 @@ interface AudioSourceLike {
 
 interface MediaStreamLike {
   addTrack(track: unknown): void;
+}
+
+interface BufferedTtsTurn {
+  turnId: number;
+  text: string;
+  sampleRate: number;
+  chunks: Buffer[];
+  byteLength: number;
+  complete: boolean;
+  drained: boolean;
+  overflowed: boolean;
 }
 
 export interface SttSessionLike {
@@ -225,6 +238,7 @@ export class VoiceSession {
   private lastPeerDetachEventId = 0;
   private lastPeerDetachAtMs: number | null = null;
   private readonly controlHistory: ControlEventRecord[] = [];
+  private bufferedTtsTurn: BufferedTtsTurn | null = null;
   private turnSnapshot: VoiceTurnSnapshot = {
     inFlight: false,
     phase: 'idle',
@@ -562,9 +576,7 @@ export class VoiceSession {
     this.audioSource = null;
     this.outboundStream = null;
     if (shouldCompletePendingTrackTts) {
-      this.send(daemonToPhone.ttsDone());
-      this.tts = null;
-      this.resetTurn('tts_audio_transport_closed');
+      this.completeTtsTurn('tts_audio_transport_closed');
     }
   }
 
@@ -623,10 +635,7 @@ export class VoiceSession {
       if (!frame) {
         if (this.audioPumpAwaitingDone) {
           this.stopAudioPump();
-          this.audioPumpAwaitingDone = false;
-          this.send(daemonToPhone.ttsDone());
-          this.tts = null;
-          this.resetTurn('tts_audio_pump_done');
+          this.completeTtsTurn('tts_audio_pump_done');
         }
         return;
       }
@@ -933,30 +942,122 @@ export class VoiceSession {
     console.error(fields.join(' '));
   }
 
+  private startBufferedTtsTurn(token: number, text: string): void {
+    this.bufferedTtsTurn = {
+      turnId: token,
+      text,
+      sampleRate: TTS_SAMPLE_RATE,
+      chunks: [],
+      byteLength: 0,
+      complete: false,
+      drained: false,
+      overflowed: false,
+    };
+  }
+
+  private appendBufferedTtsPcm(token: number, pcm: Uint8Array): void {
+    const turn = this.bufferedTtsTurn;
+    if (!turn || turn.turnId !== token || turn.drained || turn.overflowed || pcm.byteLength === 0) return;
+    if (turn.byteLength + pcm.byteLength > MAX_BUFFERED_TTS_TURN_BYTES) {
+      turn.chunks = [];
+      turn.byteLength = 0;
+      turn.overflowed = true;
+      console.error(`[voice ${this.roomId}] buffered TTS replay dropped: exceeded ${MAX_BUFFERED_TTS_TURN_BYTES} bytes`);
+      return;
+    }
+    const copy = Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+    turn.chunks.push(Buffer.from(copy));
+    turn.byteLength += copy.byteLength;
+  }
+
+  private markBufferedTtsComplete(token: number): void {
+    const turn = this.bufferedTtsTurn;
+    if (!turn || turn.turnId !== token || turn.overflowed) return;
+    turn.complete = true;
+  }
+
+  private clearBufferedTtsTurn(): void {
+    this.bufferedTtsTurn = null;
+  }
+
+  private completeTtsTurn(reason: string): void {
+    this.markBufferedTtsComplete(this.turnToken);
+    this.audioPumpAwaitingDone = false;
+    this.send(daemonToPhone.ttsDone());
+    this.tts = null;
+    this.resetTurn(reason);
+  }
+
+  private drainBufferedTtsTurn(peer: SimplePeer.Instance): void {
+    const turn = this.bufferedTtsTurn;
+    if (!turn || turn.drained || !turn.complete || turn.overflowed || turn.chunks.length === 0) return;
+    if (!this.sendToPeer(peer, daemonToPhone.ttsStart(turn.sampleRate, {
+      buffered: true,
+      turnId: turn.turnId,
+      text: turn.text,
+    }))) return;
+    for (const chunk of turn.chunks) {
+      if (!this.sendBinaryToPeer(peer, chunk, 'buffered binary send failed')) return;
+    }
+    if (!this.sendToPeer(peer, daemonToPhone.ttsDone())) return;
+    turn.drained = true;
+    this.clearBufferedTtsTurn();
+  }
+
   private async openTtsAsync(text: string, token: number): Promise<void> {
     try {
       this.audioQueue = [];
       this.rawRemainder = Buffer.alloc(0);
       this.resampledRemainder = Buffer.alloc(0);
       this.audioPumpAwaitingDone = false;
+      this.startBufferedTtsTurn(token, text);
       const catalog = await this.loadTtsCatalogForTurn();
       if (!this.isTurnActive(token)) return;
       const useTrack = !!this.audioSource;
       const createTts = this.opts.ttsSessionFactory ?? ((opts, cb) => new OpenClawInferTtsSession(opts, cb));
       const request = buildTtsSessionRequest(text, this.ttsSelection, { catalog });
       this.tts = createTts(request, {
-        onOpen: () => { if (this.isTurnActive(token)) this.send(daemonToPhone.ttsStart(useTrack ? WEBRTC_SAMPLE_RATE : TTS_SAMPLE_RATE)); },
-        onAudio: (pcm) => { if (!this.isTurnActive(token)) return; if (useTrack) this.enqueueTtsPcm(pcm); else this.sendBinary(pcm); },
+        onOpen: () => {
+          if (!this.isTurnActive(token)) return;
+          this.send(daemonToPhone.ttsStart(useTrack ? WEBRTC_SAMPLE_RATE : TTS_SAMPLE_RATE));
+        },
+        onAudio: (pcm) => {
+          if (!this.isTurnActive(token)) return;
+          if (useTrack) {
+            if (this.connected && this.audioSource) this.enqueueTtsPcm(pcm);
+            else this.appendBufferedTtsPcm(token, pcm);
+            return;
+          }
+          if (!this.sendBinary(pcm)) this.appendBufferedTtsPcm(token, pcm);
+        },
         onDone: () => {
           if (!this.isTurnActive(token)) return;
-          if (!useTrack || !this.audioSource) { this.send(daemonToPhone.ttsDone()); this.tts = null; this.resetTurn('tts_done'); return; }
+          this.markBufferedTtsComplete(token);
+          if (!useTrack || !this.audioSource) {
+            this.completeTtsTurn('tts_done');
+            return;
+          }
           this.flushTtsTail(); this.audioPumpAwaitingDone = true; this.startAudioPump(token);
-          if (this.audioQueue.length === 0) { this.audioPumpAwaitingDone = false; this.send(daemonToPhone.ttsDone()); this.tts = null; this.resetTurn('tts_done'); }
+          if (this.audioQueue.length === 0) {
+            this.completeTtsTurn('tts_done');
+          }
         },
-        onError: (message) => { if (!this.isTurnActive(token)) return; this.stopAudioPump(); this.audioQueue = []; this.rawRemainder = Buffer.alloc(0); this.resampledRemainder = Buffer.alloc(0); this.audioPumpAwaitingDone = false; this.send(daemonToPhone.ttsError(sanitizeReplyFailureLogText(message))); this.tts = null; this.resetTurn('tts_error'); },
+        onError: (message) => {
+          if (!this.isTurnActive(token)) return;
+          this.clearBufferedTtsTurn();
+          this.stopAudioPump();
+          this.audioQueue = [];
+          this.rawRemainder = Buffer.alloc(0);
+          this.resampledRemainder = Buffer.alloc(0);
+          this.audioPumpAwaitingDone = false;
+          this.send(daemonToPhone.ttsError(sanitizeReplyFailureLogText(message)));
+          this.tts = null;
+          this.resetTurn('tts_error');
+        },
       });
     } catch (err) {
       if (!this.isTurnActive(token)) return;
+      this.clearBufferedTtsTurn();
       console.error(`[voice ${this.roomId}] TTS open failed: ${sanitizedErrorMessage(err)}`);
       this.send(daemonToPhone.ttsError('openclaw_infer_tts_failed'));
       this.resetTurn('tts_open_failed');
@@ -971,6 +1072,7 @@ export class VoiceSession {
 
 
   private beginTurn(): number {
+    this.clearBufferedTtsTurn();
     const token = ++this.turnToken;
     this.sttOpenToken = token;
     this.state.handleStartTurn();
@@ -986,7 +1088,10 @@ export class VoiceSession {
     return token === this.turnToken && this.state.turnInFlight && !this.closing;
   }
 
-  private resetTurn(_reason: string): void {
+  private resetTurn(reason: string): void {
+    if (!['tts_done', 'tts_audio_pump_done', 'tts_audio_transport_closed'].includes(reason)) {
+      this.clearBufferedTtsTurn();
+    }
     this.turnToken += 1;
     this.sttOpenToken = this.turnToken;
     this.state.resetTurn();
@@ -1077,25 +1182,34 @@ export class VoiceSession {
       turn: { ...this.turnSnapshot, latestEventId: this.controlEventId },
       events,
     }));
+    this.drainBufferedTtsTurn(peer);
   }
 
-  private sendToPeer(peer: SimplePeer.Instance, msg: unknown): void {
+  private sendToPeer(peer: SimplePeer.Instance, msg: unknown): boolean {
     try {
       peer.send(JSON.stringify(msg));
+      return true;
     } catch (err) {
       console.error(`[voice ${this.roomId}] send failed: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
     }
   }
 
-  private sendBinary(pcm: Uint8Array): void {
+  private sendBinary(pcm: Uint8Array): boolean {
     const peer = this.peer;
-    if (!peer || !this.connected) return;
+    if (!peer || !this.connected) return false;
+    return this.sendBinaryToPeer(peer, pcm, 'binary send failed');
+  }
+
+  private sendBinaryToPeer(peer: SimplePeer.Instance, pcm: Uint8Array, label: string): boolean {
     try {
       const copy = new Uint8Array(pcm.byteLength);
       copy.set(pcm);
       peer.send(copy);
+      return true;
     } catch (err) {
-      console.error(`[voice ${this.roomId}] binary send failed: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`[voice ${this.roomId}] ${label}: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
     }
   }
 }
