@@ -287,15 +287,15 @@ export function DrivingScreen({
           <button
             onClick={onSettings}
             style={{
-              width: 30,
-              height: 30,
-              borderRadius: 10,
+              width: 38,
+              height: 38,
+              borderRadius: 12,
               background: 'transparent',
               border: `1px solid ${HIFI.stroke}`,
               color: HIFI.ink2,
               cursor: 'pointer',
               fontFamily: HIFI.fonts.mono,
-              fontSize: 15,
+              fontSize: 21,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -898,9 +898,9 @@ function pickCaption({
 function buildHeaderLabel(activeSession?: RecentSession): string {
   const displayLabel = trimString(activeSession?.displayLabel);
   const agent = trimString(activeSession?.agent);
-  if (displayLabel && agent) return `${displayLabel} · ${agent}`;
+  if (displayLabel && agent) return `${agent} - ${displayLabel}`;
   if (displayLabel) return displayLabel;
-  if (agent) return `VOICE SESSION · ${agent}`;
+  if (agent) return agent;
   return 'VOICE SESSION';
 }
 

@@ -28,8 +28,19 @@ describe('DrivingScreen settings button', () => {
     // Settings button must not be gated on `!compact` — mobile users
     // need an accessible path to Settings too.
     expect(source).not.toContain('!compact && onSettings');
+    const settingsButton = source.slice(
+      Math.max(0, source.indexOf('aria-label="Settings"') - 760),
+      source.indexOf('aria-label="Settings"') + 80,
+    );
+
     expect(source).toContain('{onSettings && (');
     expect(source).toContain('aria-label="Settings"');
+    expect(settingsButton).toContain('width: 38');
+    expect(settingsButton).toContain('height: 38');
+    expect(settingsButton).toContain('fontSize: 21');
+    expect(settingsButton).not.toContain('width: 30');
+    expect(settingsButton).not.toContain('height: 30');
+    expect(settingsButton).not.toContain('fontSize: 15');
   });
 });
 
@@ -131,8 +142,12 @@ describe('DrivingScreen session picker control', () => {
 
     expect(buildHeaderLabel).toContain('trimString(activeSession?.displayLabel)');
     expect(buildHeaderLabel).toContain('trimString(activeSession?.agent)');
-    expect(buildHeaderLabel).toContain('return `${displayLabel} · ${agent}`;');
+    expect(buildHeaderLabel).toContain('return `${agent} - ${displayLabel}`;');
+    expect(buildHeaderLabel).toContain('if (displayLabel) return displayLabel;');
+    expect(buildHeaderLabel).toContain('if (agent) return agent;');
     expect(buildHeaderLabel).toContain("return 'VOICE SESSION';");
+    expect(buildHeaderLabel).not.toContain('`${displayLabel} · ${agent}`');
+    expect(buildHeaderLabel).not.toContain('VOICE SESSION · ${agent}');
     expect(buildHeaderLabel).not.toContain('sessionId');
     expect(buildHeaderLabel).not.toContain('hostPeerId');
     expect(source).not.toContain('compactValue');
