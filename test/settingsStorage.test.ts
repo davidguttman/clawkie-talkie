@@ -21,6 +21,17 @@ beforeEach(() => {
   vi.stubGlobal('localStorage', new MemoryStorage());
 });
 
+describe('dashboard host recovery storage', () => {
+  it('remembers the last dashboard host for PWA launches', async () => {
+    const { loadLastDashboardHostPeerId, saveLastDashboardHostPeerId } = await import('../client/src/storage');
+
+    expect(loadLastDashboardHostPeerId()).toBeNull();
+    saveLastDashboardHostPeerId(' host-1 ');
+
+    expect(loadLastDashboardHostPeerId()).toBe('host-1');
+  });
+});
+
 describe('settings storage', () => {
   it('returns defaults with no selected TTS provider, model, or voice when nothing is stored', async () => {
     const { loadSettings, DEFAULT_SETTINGS } = await import('../client/src/storage');

@@ -9,7 +9,8 @@
 // The daemon subscribes to the hosted rambly-style signaling broker
 // under a UUID token generated each session (or overridden via
 // DAEMON_PEER_ID env). The phone discovers the daemon via
-// `?host=<uuid>` and joins the same room. simple-peer + @roamhq/wrtc
+// `/dashboard#host=<uuid>` for the host dashboard or `/voice#host=...&session=...`
+// for a selected voice session. simple-peer + @roamhq/wrtc
 // drive the WebRTC DataChannel; the daemon owns the full turn:
 // OpenClaw infer transcription on inbound mic PCM, the configured
 // OpenClaw agent on the final transcript, and OpenClaw infer TTS on
@@ -19,6 +20,7 @@
 
 import { DaemonPeer } from './peer.js';
 import { parseCli } from './cli.js';
+import { formatDashboardJoinUrl } from './dashboardUrl.js';
 
 async function main(): Promise<void> {
   const cli = parseCli();
@@ -31,7 +33,7 @@ async function main(): Promise<void> {
     signalServer: cli.signalServer,
     iceServers: cli.iceServers,
     onReady: (peerId) => {
-      const joinUrl = cli.clientOrigin.replace(/\/$/, '') + '/?host=' + peerId;
+      const joinUrl = formatDashboardJoinUrl(cli.clientOrigin, peerId);
       console.log(`Session:  ${cli.sessionId}`);
       if (cli.threadId) {
         console.log(`Thread:   ${cli.threadId}`);

@@ -19,6 +19,7 @@ const PRECACHE_ASSETS = [
   '/index.html',
   '/voice/',
   '/voice.html',
+  '/dashboard/',
   '/manifest.json',
   '/sw.js',
   '/icons/icon-192x192.png',
@@ -137,6 +138,10 @@ async function networkFirst(request) {
     if (cached) return cached;
 
     if (request.mode === 'navigate') {
+      if (new URL(request.url).pathname.startsWith('/dashboard')) {
+        const dashboardCached = await caches.match('/dashboard/');
+        if (dashboardCached) return dashboardCached;
+      }
       const voiceCached = await caches.match('/voice/');
       if (voiceCached) return voiceCached;
       const indexCached = await caches.match('/index.html');

@@ -591,6 +591,30 @@ describe('RtcProvider recent session picker sync', () => {
     },
   ];
 
+  it('uses the host-only dashboard lane for session discovery without rendezvous.join', async () => {
+    const rendered = await renderRtcProvider({ rendezvous: null, voiceSettings: null });
+    const dashboardClient = rtcMock.instances[0];
+
+    expect(dashboardClient.hostPeerId).toBe('host-1');
+    await act(async () => {
+      dashboardClient.emitStatus('open');
+    });
+
+    expect(sentOf(dashboardClient, 'rendezvous.join')).toEqual([]);
+    expect(sentOf(dashboardClient, 'sessions.list.subscribe')).toEqual([{ t: 'sessions.list.subscribe' }]);
+    expect(sentOf(dashboardClient, 'sessions.catalog.request')).toEqual([{ t: 'sessions.catalog.request' }]);
+    expect(rendered.context().recentSessionsSupportStatus).toBe('probing');
+
+    await act(async () => {
+      rendered.context().requestRecentSessions?.();
+    });
+    expect(sentOf(dashboardClient, 'sessions.list.request')).toEqual([{ t: 'sessions.list.request' }]);
+    expect(sentOf(dashboardClient, 'sessions.catalog.request')).toEqual([
+      { t: 'sessions.catalog.request' },
+      { t: 'sessions.catalog.request' },
+    ]);
+  });
+
   it('subscribes to recent sessions once after the voice room opens', async () => {
     await renderRtcProvider();
     const voiceClient = await openRendezvousAndAccept();

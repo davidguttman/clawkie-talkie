@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { handoffToRendezvous, parseInitialLocation, parseInitialSearch, selectHandoffFromRecentSession } from '../client/src/app';
-import { parseHandoffUrl } from '../client/src/voice/handoffUrl';
+import { formatHandoffHash, parseHandoffUrl, parseHostDashboardUrl } from '../client/src/voice/handoffUrl';
 
 describe('client URL parsing (legacy query)', () => {
   it('defaults to the bad-session error instead of a handoff screen', () => {
@@ -89,10 +89,28 @@ describe('parseHandoffUrl', () => {
     });
   });
 
-  it('returns null when required args are missing', () => {
+  it('returns null when required handoff args are missing', () => {
     expect(parseHandoffUrl('/voice')).toBeNull();
     expect(parseHandoffUrl('/voice#host=h&channel=webchat')).toBeNull();
     expect(parseHandoffUrl('/voice#session=s&channel=webchat')).toBeNull();
+  });
+
+  it('parses host-only dashboard URLs without treating them as handoffs', () => {
+    expect(parseHostDashboardUrl('/dashboard#host=host-1')).toEqual({ hostPeerId: 'host-1' });
+    expect(parseHostDashboardUrl('/voice#host=host-1')).toEqual({ hostPeerId: 'host-1' });
+    expect(parseHostDashboardUrl('/?host=host-1')).toBeNull();
+    expect(parseHostDashboardUrl('/voice#host=host-1&session=session-1')).toBeNull();
+  });
+
+  it('formats selected session handoff hashes with hash-scoped identifiers', () => {
+    expect(formatHandoffHash({
+      hostPeerId: 'host-1',
+      sessionId: 'session-1',
+      sessionKey: 'agent:main:main',
+      channel: 'discord',
+      target: 'channel:thread-1',
+      accountId: 'acct-1',
+    })).toBe('#host=host-1&session=session-1&sessionKey=agent%3Amain%3Amain&channel=discord&target=channel%3Athread-1&accountId=acct-1');
   });
 });
 
@@ -117,11 +135,71 @@ describe('initial handoff routing', () => {
     });
   });
 
-  it('keeps invalid handoff URLs on the bad-session error', () => {
+  it('routes host-only dashboard URLs to the dashboard instead of bad-session', () => {
+    expect(
+      parseInitialLocation({
+        pathname: '/dashboard',
+        search: '',
+        hash: '#host=host-1',
+      }),
+    ).toMatchObject({
+      screen: 'dashboard',
+      hostPeerId: 'host-1',
+      sessionId: undefined,
+      handoff: null,
+    });
+
+    expect(
+      parseInitialLocation({
+        pathname: '/voice',
+        search: '',
+        hash: '#host=host-1',
+      }),
+    ).toMatchObject({
+      screen: 'dashboard',
+      hostPeerId: 'host-1',
+      handoff: null,
+    });
+  });
+
+  it('recovers a saved host for PWA dashboard launches with no URL host', () => {
+    expect(
+      parseInitialLocation(
+        {
+          pathname: '/dashboard/',
+          search: '',
+          hash: '',
+        },
+        { savedDashboardHostPeerId: ' saved-host ' },
+      ),
+    ).toMatchObject({
+      screen: 'dashboard',
+      hostPeerId: 'saved-host',
+      sessionId: undefined,
+      handoff: null,
+    });
+  });
+
+  it('does not route root query host URLs because root is marketing-only', () => {
+    expect(
+      parseInitialLocation({
+        pathname: '/',
+        search: '?host=host-1',
+        hash: '',
+      }),
+    ).toMatchObject({
+      screen: 'error',
+      errorKind: 'bad_session',
+      hostPeerId: 'host-1',
+      handoff: null,
+    });
+  });
+
+  it('keeps URLs without a host on the bad-session error', () => {
     expect(
       parseInitialLocation({
         search: '',
-        hash: '#host=host-1',
+        hash: '',
       }),
     ).toMatchObject({
       screen: 'error',
@@ -160,6 +238,25 @@ describe('session picker handoff selection', () => {
       channel: 'discord',
       target: 'channel:new-thread',
       accountId: 'acct-1',
+    });
+  });
+
+  it('builds a handoff from dashboard host context when no session is active yet', () => {
+    expect(
+      selectHandoffFromRecentSession(
+        null,
+        {
+          sessionId: 'session-uuid',
+          sessionKey: 'agent:kamaji:main',
+          agent: 'kamaji',
+          displayLabel: 'Main',
+        },
+        'host-1',
+      ),
+    ).toEqual({
+      hostPeerId: 'host-1',
+      sessionId: 'session-uuid',
+      sessionKey: 'agent:kamaji:main',
     });
   });
 

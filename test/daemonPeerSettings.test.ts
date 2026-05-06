@@ -79,4 +79,70 @@ describe('DaemonPeer rendezvous voice settings', () => {
     clearTimeout(rendezvousPeer.timeout);
     peer.close();
   });
+
+  it('serves recent sessions on the host-only rendezvous lane before join', async () => {
+    const { DaemonPeer } = await import('../daemon/src/peer');
+    const snapshot = {
+      generatedAt: 'recent-time',
+      sessions: [
+        {
+          sessionId: 'session-1',
+          sessionKey: 'agent:kamaji:main',
+          agent: 'kamaji',
+          displayLabel: 'Main chat',
+        },
+      ],
+    };
+    const peer = new DaemonPeer({
+      peerId: 'host-1',
+      signalServer: 'https://signal.example',
+      iceServers: [],
+      recentSessionsProvider: vi.fn(async () => snapshot),
+      onReady: vi.fn(),
+    });
+    const rendezvousPeer = makeRendezvousPeer();
+
+    (peer as unknown as {
+      handleRendezvousData(rp: unknown, data: unknown): void;
+    }).handleRendezvousData(
+      rendezvousPeer,
+      JSON.stringify({ t: 'sessions.list.request' }),
+    );
+
+    await vi.waitFor(() => {
+      expect(rendezvousPeer.peer.send).toHaveBeenCalledWith(
+        JSON.stringify({ t: 'sessions.list', ...snapshot }),
+      );
+    });
+
+    expect((peer as unknown as { activeRoomIds: string[] }).activeRoomIds).toEqual([]);
+    clearTimeout(rendezvousPeer.timeout);
+    peer.close();
+  });
+
+  it('keeps unexpected rendezvous-lane messages failing safely', async () => {
+    const { DaemonPeer } = await import('../daemon/src/peer');
+    const peer = new DaemonPeer({
+      peerId: 'host-1',
+      signalServer: 'https://signal.example',
+      iceServers: [],
+      onReady: vi.fn(),
+    });
+    const rendezvousPeer = makeRendezvousPeer();
+
+    (peer as unknown as {
+      handleRendezvousData(rp: unknown, data: unknown): void;
+    }).handleRendezvousData(
+      rendezvousPeer,
+      JSON.stringify({ t: 'tts.catalog.request' }),
+    );
+
+    expect(rendezvousPeer.peer.send).toHaveBeenCalledWith(
+      JSON.stringify({ t: 'rendezvous.error', message: 'unexpected_message' }),
+    );
+
+    clearTimeout(rendezvousPeer.timeout);
+    peer.close();
+  });
+
 });

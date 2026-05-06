@@ -19,14 +19,17 @@ import {
   daemonToPhone,
   validateRendezvousDelivery,
   type PhoneToDaemon,
+  type RecentSessionsSnapshot,
 } from './protocol.js';
 import { SignalClient, type SignalData } from './signal.js';
 import { classifySignal, decideForwardToLivePeer, decideIncomingSignal } from './signalKind.js';
 
-const MAX_BUFFERED_CANDIDATES_PER_PEER = 32;
+import { createEmptyRecentSessionsSnapshot, defaultRecentSessionsCache } from './recentSessions.js';
 import { DEFAULT_SIGNAL_SERVER } from './signalServer.js';
 import { makeVoiceRoomId } from './voiceRoom.js';
 import { VoiceSession } from './voiceSession.js';
+
+const MAX_BUFFERED_CANDIDATES_PER_PEER = 32;
 
 const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -34,6 +37,7 @@ const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
 ];
 
 const RENDEZVOUS_TIMEOUT_MS = 12_000;
+const RECENT_SESSIONS_SUBSCRIPTION_INTERVAL_MS = 60_000;
 
 export interface DaemonPeerOptions {
   sttLanguage?: string;
@@ -46,6 +50,7 @@ export interface DaemonPeerOptions {
   signalServer?: string;
   iceServers?: RTCIceServer[];
   maxVoiceSessions?: number;
+  recentSessionsProvider?: () => Promise<RecentSessionsSnapshot>;
   onReady: (peerId: string) => void;
   onFatalError?: (err: Error) => void;
 }
@@ -60,6 +65,7 @@ interface RendezvousPeer {
   initiator: boolean;
   acceptedOffer: boolean;
   acceptedAnswer: boolean;
+  recentSessionsInterval: NodeJS.Timeout | null;
 }
 
 export class DaemonPeer {
@@ -212,6 +218,7 @@ export class DaemonPeer {
       initiator,
       acceptedOffer: false,
       acceptedAnswer: false,
+      recentSessionsInterval: null,
     };
     this.rendezvousPeers.set(remoteId, rp);
 
@@ -258,6 +265,7 @@ export class DaemonPeer {
     const rp = this.rendezvousPeers.get(remoteId);
     if (!rp) return;
     clearTimeout(rp.timeout);
+    if (rp.recentSessionsInterval) clearInterval(rp.recentSessionsInterval);
     try { rp.peer.destroy(); } catch { /* ignore */ }
     this.rendezvousPeers.delete(remoteId);
   }
@@ -271,9 +279,30 @@ export class DaemonPeer {
     } catch {
       return;
     }
+    if (msg.t === 'sessions.list.request') {
+      this.keepRendezvousOpenForDashboard(rp);
+      void this.sendRendezvousRecentSessions(rp, 'list');
+      return;
+    }
+    if (msg.t === 'sessions.catalog.request') {
+      this.keepRendezvousOpenForDashboard(rp);
+      void this.sendRendezvousRecentSessions(rp, 'catalog');
+      return;
+    }
+    if (msg.t === 'sessions.list.subscribe') {
+      this.keepRendezvousOpenForDashboard(rp);
+      this.startRendezvousRecentSessionsSubscription(rp);
+      void this.sendRendezvousRecentSessions(rp, 'list');
+      return;
+    }
+    if (msg.t === 'sessions.list.unsubscribe') {
+      this.stopRendezvousRecentSessionsSubscription(rp);
+      return;
+    }
     if (msg.t !== 'rendezvous.join') {
-      // The rendezvous lane only accepts a join — any other control
-      // message is a sign the browser is targeting the wrong room.
+      // The rendezvous lane accepts host-scoped recent-session discovery
+      // plus a single join. Any other control message is a sign the
+      // browser is targeting the wrong room.
       this.sendRendezvous(rp, daemonToPhone.rendezvousError('unexpected_message'));
       return;
     }
@@ -318,6 +347,7 @@ export class DaemonPeer {
         ...(accountId ? { accountId } : {}),
         delivery,
         ...(msg.settings ? { voiceSettings: msg.settings } : {}),
+        ...(this.opts.recentSessionsProvider ? { recentSessionsProvider: this.opts.recentSessionsProvider } : {}),
         onClose: (id) => {
           this.voiceSessions.delete(id);
         },
@@ -335,6 +365,36 @@ export class DaemonPeer {
     // Drop the rendezvous lane after accept — the browser will open a
     // fresh peer connection to `roomId` for actual voice traffic.
     setTimeout(() => this.dropRendezvous(rp.remoteId), 250).unref?.();
+  }
+
+  private keepRendezvousOpenForDashboard(rp: RendezvousPeer): void {
+    // Host dashboards intentionally remain on the rendezvous lane while the
+    // user chooses a session, so the short join timeout no longer applies.
+    clearTimeout(rp.timeout);
+  }
+
+  private startRendezvousRecentSessionsSubscription(rp: RendezvousPeer): void {
+    if (rp.recentSessionsInterval) return;
+    rp.recentSessionsInterval = setInterval(() => {
+      void this.sendRendezvousRecentSessions(rp, 'list');
+    }, RECENT_SESSIONS_SUBSCRIPTION_INTERVAL_MS);
+    rp.recentSessionsInterval.unref?.();
+  }
+
+  private stopRendezvousRecentSessionsSubscription(rp: RendezvousPeer): void {
+    if (!rp.recentSessionsInterval) return;
+    clearInterval(rp.recentSessionsInterval);
+    rp.recentSessionsInterval = null;
+  }
+
+  private async sendRendezvousRecentSessions(rp: RendezvousPeer, format: 'list' | 'catalog'): Promise<void> {
+    const toMessage = format === 'catalog' ? daemonToPhone.sessionsCatalog : daemonToPhone.sessionsList;
+    try {
+      const loadSessions = this.opts.recentSessionsProvider ?? (() => defaultRecentSessionsCache.get());
+      this.sendRendezvous(rp, toMessage(await loadSessions()));
+    } catch {
+      this.sendRendezvous(rp, toMessage(createEmptyRecentSessionsSnapshot()));
+    }
   }
 
   private sendRendezvous(rp: RendezvousPeer, msg: unknown): void {

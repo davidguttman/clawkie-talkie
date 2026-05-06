@@ -42,7 +42,7 @@ Success looks like:
 
 ```text
 Peer ID:  <DAEMON_PEER_ID>
-Join URL: https://clawkietalkie.app/?host=<DAEMON_PEER_ID>
+Join URL: https://clawkietalkie.app/dashboard#host=<DAEMON_PEER_ID>
 Waiting for phone…
 ```
 
