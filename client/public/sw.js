@@ -74,6 +74,7 @@ self.addEventListener('fetch', (event) => {
 });
 
 function shouldBypass(request, url) {
+  if (isRangeRequest(request)) return true;
   if (request.headers.get('upgrade') === 'websocket') return true;
   if (request.headers.get('accept')?.includes('text/event-stream')) return true;
   if (hasSensitiveQuery(url)) return true;
@@ -103,6 +104,10 @@ function isUpdateSensitiveAsset(url) {
   return /\.(?:js|css|json)$/.test(url.pathname) &&
     !url.pathname.startsWith('/icons/') &&
     !url.pathname.startsWith('/splash/');
+}
+
+function isRangeRequest(request) {
+  return request.headers.get('range') !== null;
 }
 
 function isStaticAsset(url) {
@@ -153,12 +158,23 @@ async function networkFirst(request) {
 }
 
 async function putIfCacheable(request, response) {
-  if (!response || !response.ok || response.type === 'opaque') return;
+  if (
+    !response ||
+    !response.ok ||
+    response.type === 'opaque' ||
+    response.status === 206 ||
+    isRangeRequest(request)
+  ) return;
 
   const url = new URL(request.url);
   if (url.origin !== self.location.origin || hasSensitiveQuery(url)) return;
   if (shouldBypass(request, url)) return;
 
-  const cache = await caches.open(RUNTIME_CACHE);
-  await cache.put(request, response.clone());
+  try {
+    const cache = await caches.open(RUNTIME_CACHE);
+    await cache.put(request, response.clone());
+  } catch {
+    // Cache writes are best-effort. Audio Range/partial responses and quota
+    // failures must never turn a successful network fetch into a 503.
+  }
 }
