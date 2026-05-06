@@ -277,11 +277,17 @@ describe('session snapshot replay', () => {
 
   it('treats missing disconnectedMs as auto-resumable for older snapshot payloads', () => {
     const { next, side } = reduce(idle, {
-      type: 'session.snapshot',
-      phase: 'reply_ready',
-      inFlight: true,
-      userText: 'hello',
-      replyText: 'spoken reply',
+      type: 'session.replay',
+      events: [{ type: 'reply.done', text: 'spoken reply' }],
+      hydration: {
+        context: {
+          ...initialContext,
+          state: 'thinking',
+          lastUserText: 'hello',
+          pendingReplyText: 'spoken reply',
+        },
+        armTts: true,
+      },
     });
 
     expect(next.state).toBe('thinking');

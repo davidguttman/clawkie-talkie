@@ -173,6 +173,42 @@ export function RtcProvider({
     if (!activeRoomId) return;
 
     let client: RtcClient;
+    const deliverControlMessage = (msg: ControlMessage) => {
+      if (msg.t === 'session.replaced') {
+        setDetail('session_replaced');
+        setStatus('closed');
+        setTimeout(() => client.close(), 0);
+      }
+      if (msg.t === 'tts.catalog' && msg.catalog && typeof msg.catalog === 'object') {
+        setTtsCatalog(msg.catalog as TtsCatalog);
+      }
+      if (msg.t === 'stt.catalog' && msg.catalog && typeof msg.catalog === 'object') {
+        setSttCatalog(msg.catalog as SttCatalog);
+      }
+      if (msg.t === 'sessions.list' && Array.isArray(msg.sessions)) {
+        setRecentSessionsSupportStatus('supported');
+        setRecentSessionsResponseSeq((seq) => seq + 1);
+        setRecentSessionsSnapshot({
+          generatedAt: typeof msg.generatedAt === 'string' ? msg.generatedAt : '',
+          sessions: msg.sessions as RecentSession[],
+        });
+      }
+      if (
+        msg.t === 'sessions.catalog' &&
+        msg.catalog &&
+        typeof msg.catalog === 'object' &&
+        Array.isArray((msg.catalog as { sessions?: unknown }).sessions)
+      ) {
+        const catalog = msg.catalog as Partial<RecentSessionsSnapshot>;
+        setRecentSessionsSupportStatus('supported');
+        setRecentSessionsResponseSeq((seq) => seq + 1);
+        setRecentSessionsSnapshot({
+          generatedAt: typeof catalog.generatedAt === 'string' ? catalog.generatedAt : '',
+          sessions: catalog.sessions as RecentSession[],
+        });
+      }
+      for (const fn of controlListenersRef.current) fn(msg);
+    };
     client = new RtcClient({
       hostPeerId: activeRoomId,
       onStatusChange: (s, d) => {
@@ -180,40 +216,21 @@ export function RtcProvider({
         setDetail((prev) => d ?? (prev === 'session_replaced' ? prev : undefined));
       },
       onControlMessage: (msg) => {
-        if (msg.t === 'session.replaced') {
-          setDetail('session_replaced');
-          setStatus('closed');
-          setTimeout(() => client.close(), 0);
+        if (msg.t === 'session.snapshot' && Array.isArray(msg.events)) {
+          deliverControlMessage(msg);
+          const events = msg.events
+            .filter((event): event is { id: number; msg: ControlMessage } => (
+              !!event &&
+              typeof event === 'object' &&
+              typeof (event as { id?: unknown }).id === 'number' &&
+              !!(event as { msg?: unknown }).msg &&
+              typeof (event as { msg?: unknown }).msg === 'object'
+            ))
+            .sort((a, b) => a.id - b.id);
+          for (const event of events) deliverControlMessage(event.msg);
+          return;
         }
-        if (msg.t === 'tts.catalog' && msg.catalog && typeof msg.catalog === 'object') {
-          setTtsCatalog(msg.catalog as TtsCatalog);
-        }
-        if (msg.t === 'stt.catalog' && msg.catalog && typeof msg.catalog === 'object') {
-          setSttCatalog(msg.catalog as SttCatalog);
-        }
-        if (msg.t === 'sessions.list' && Array.isArray(msg.sessions)) {
-          setRecentSessionsSupportStatus('supported');
-          setRecentSessionsResponseSeq((seq) => seq + 1);
-          setRecentSessionsSnapshot({
-            generatedAt: typeof msg.generatedAt === 'string' ? msg.generatedAt : '',
-            sessions: msg.sessions as RecentSession[],
-          });
-        }
-        if (
-          msg.t === 'sessions.catalog' &&
-          msg.catalog &&
-          typeof msg.catalog === 'object' &&
-          Array.isArray((msg.catalog as { sessions?: unknown }).sessions)
-        ) {
-          const catalog = msg.catalog as Partial<RecentSessionsSnapshot>;
-          setRecentSessionsSupportStatus('supported');
-          setRecentSessionsResponseSeq((seq) => seq + 1);
-          setRecentSessionsSnapshot({
-            generatedAt: typeof catalog.generatedAt === 'string' ? catalog.generatedAt : '',
-            sessions: catalog.sessions as RecentSession[],
-          });
-        }
-        for (const fn of controlListenersRef.current) fn(msg);
+        deliverControlMessage(msg);
       },
       onBinaryMessage: (bytes) => {
         for (const fn of binaryListenersRef.current) fn(bytes);
