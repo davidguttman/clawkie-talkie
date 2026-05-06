@@ -548,6 +548,36 @@ describe('RtcProvider TTS catalog and settings sync', () => {
 });
 
 
+
+  it('expands reconnect snapshots into ordered missed control events for listeners', async () => {
+    const rendered = await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+    const seen: ControlMessage[] = [];
+    const detach = rendered.context().addControlListener((msg) => seen.push(msg));
+
+    await act(async () => {
+      voiceClient.emitControl({
+        t: 'session.snapshot',
+        roomId: 'voice-room-1',
+        latestEventId: 3,
+        turn: {
+          inFlight: false,
+          phase: 'complete',
+          latestEventId: 3,
+          userText: 'hello',
+          replyText: 'spoken reply',
+        },
+        events: [
+          { id: 3, msg: { t: 'tts.done' } },
+          { id: 2, msg: { t: 'reply.done', text: 'spoken reply' } },
+        ],
+      });
+    });
+
+    detach();
+    expect(seen.map((msg) => msg.t)).toEqual(['session.snapshot', 'reply.done', 'tts.done']);
+  });
+
 describe('RtcProvider recent session picker sync', () => {
   const sessions: RecentSession[] = [
     {

@@ -97,6 +97,25 @@ export interface RecentSessionsSnapshot {
   sessions: RecentSession[];
 }
 
+export type VoiceTurnPhase =
+  | 'idle'
+  | 'recording'
+  | 'thinking'
+  | 'reply_ready'
+  | 'speaking'
+  | 'complete'
+  | 'error';
+
+export interface VoiceTurnSnapshot {
+  inFlight: boolean;
+  phase: VoiceTurnPhase;
+  latestEventId: number;
+  userText?: string;
+  replyText?: string;
+  error?: string;
+  ttsSampleRate?: number;
+}
+
 export type PhoneToDaemon =
   | {
       t: 'rendezvous.join';
@@ -120,7 +139,7 @@ export type PhoneToDaemon =
   | { t: 'stt.cancel' }
   | { t: 'reply.cancel' };
 
-export type DaemonToPhone =
+export type DaemonToPhoneEvent =
   | { t: 'rendezvous.accept'; roomId: string }
   | { t: 'rendezvous.error'; message: string }
   | { t: 'session.replaced'; reason: string }
@@ -139,6 +158,21 @@ export type DaemonToPhone =
   | { t: 'sessions.catalog'; catalog: RecentSessionsSnapshot }
   | { t: 'tts.done' }
   | { t: 'tts.error'; message: string };
+
+export interface ControlEventRecord {
+  id: number;
+  msg: DaemonToPhoneEvent;
+}
+
+export type DaemonToPhone =
+  | DaemonToPhoneEvent
+  | {
+      t: 'session.snapshot';
+      roomId: string;
+      latestEventId: number;
+      turn: VoiceTurnSnapshot;
+      events: ControlEventRecord[];
+    };
 
 export const phoneToDaemon = {
   rendezvousJoin: (input: RendezvousJoinInput & { settings?: VoiceSettings }): PhoneToDaemon => ({
@@ -200,6 +234,18 @@ export const daemonToPhone = {
   sessionsCatalog: (catalog: RecentSessionsSnapshot): DaemonToPhone => ({
     t: 'sessions.catalog',
     catalog,
+  }),
+  sessionSnapshot: (input: {
+    roomId: string;
+    latestEventId: number;
+    turn: VoiceTurnSnapshot;
+    events: ControlEventRecord[];
+  }): DaemonToPhone => ({
+    t: 'session.snapshot',
+    roomId: input.roomId,
+    latestEventId: input.latestEventId,
+    turn: input.turn,
+    events: input.events,
   }),
   ttsDone: (): DaemonToPhone => ({ t: 'tts.done' }),
   ttsError: (message: string): DaemonToPhone => ({ t: 'tts.error', message }),

@@ -106,9 +106,11 @@ describe('phone → daemon factories', () => {
     expect(phoneClient.sessionsListSubscribe()).toEqual({ t: 'sessions.list.subscribe' });
     expect(phoneClient.sessionsListUnsubscribe()).toEqual({ t: 'sessions.list.unsubscribe' });
     expect(phoneClient.sessionsCatalogRequest()).toEqual({ t: 'sessions.catalog.request' });
+    expect(phoneDaemon.sessionsCatalogRequest()).toEqual({ t: 'sessions.catalog.request' });
     expect(phoneClient.sessionsListRequest()).toEqual(phoneDaemon.sessionsListRequest());
     expect(phoneClient.sessionsListSubscribe()).toEqual(phoneDaemon.sessionsListSubscribe());
     expect(phoneClient.sessionsListUnsubscribe()).toEqual(phoneDaemon.sessionsListUnsubscribe());
+    expect(phoneClient.sessionsCatalogRequest()).toEqual(phoneDaemon.sessionsCatalogRequest());
   });
 
   it('includes canonical STT selection in settings.update', () => {
@@ -266,6 +268,31 @@ describe('daemon → phone factories', () => {
     };
     expect(daemonClient.ttsCatalog(catalog)).toEqual({ t: 'tts.catalog', catalog });
     expect(daemonClient.ttsCatalog(catalog)).toEqual(daemonDaemon.ttsCatalog(catalog));
+  });
+
+
+  it('emits reconnect catch-up snapshots with bounded event records', () => {
+    const turn = {
+      inFlight: false,
+      phase: 'complete' as const,
+      latestEventId: 3,
+      userText: 'hello',
+      replyText: 'spoken reply',
+    };
+    const events = [
+      { id: 2, msg: daemonClient.replyDone('spoken reply') },
+      { id: 3, msg: daemonClient.ttsDone() },
+    ];
+    expect(daemonClient.sessionSnapshot({ roomId: 'host:s1', latestEventId: 3, turn, events })).toEqual({
+      t: 'session.snapshot',
+      roomId: 'host:s1',
+      latestEventId: 3,
+      turn,
+      events,
+    });
+    expect(daemonClient.sessionSnapshot({ roomId: 'host:s1', latestEventId: 3, turn, events })).toEqual(
+      daemonDaemon.sessionSnapshot({ roomId: 'host:s1', latestEventId: 3, turn, events }),
+    );
   });
 
   it('matches the daemon copy of the protocol', () => {

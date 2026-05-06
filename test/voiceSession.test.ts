@@ -345,6 +345,19 @@ describe('voice session recent-session list runtime', () => {
     expect(recentSessionsProvider).toHaveBeenCalledTimes(1);
   });
 
+
+  it('answers legacy recent-session catalog requests with the catalog payload shape', async () => {
+    const snapshot: RecentSessionsSnapshot = { generatedAt: 'catalog-time', sessions: [] };
+    const recentSessionsProvider = vi.fn(async () => snapshot);
+    const { session, peer } = makeVoiceSession({ recentSessionsProvider });
+
+    sendControl(session, { t: 'sessions.catalog.request' });
+
+    await vi.waitFor(() => {
+      expect(sentJson(peer)).toContainEqual({ t: 'sessions.catalog', catalog: snapshot });
+    });
+  });
+
   it('subscribes to recent session list updates without closing the session on provider failure', async () => {
     vi.useFakeTimers();
     const first: RecentSessionsSnapshot = { generatedAt: 'first', sessions: [] };
@@ -935,4 +948,48 @@ describe('voice session OpenClaw infer STT runtime', () => {
     expect((session as unknown as { state: { turnInFlight: boolean } }).state.turnInFlight).toBe(false);
     expect(chatMocks.runChat).not.toHaveBeenCalled();
   });
+
+  it('keeps an accepted turn running after the phone peer closes and replays missed control events on reconnect', async () => {
+    let resolveChat!: (value: { text: string }) => void;
+    chatMocks.runChat.mockReturnValue(new Promise((resolve) => { resolveChat = resolve; }));
+    const onClose = vi.fn();
+    const { session, peer } = makeVoiceSession({ onClose });
+
+    sendControl(session, { t: 'stt.start' });
+    await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+    const fakeStt = sttMocks.inferCtor.mock.results[0].value;
+
+    fakeStt.cb.onDone('hello');
+    await vi.waitFor(() => expect(sentJson(peer)).toContainEqual({ t: 'reply.start', text: 'hello' }));
+
+    (session as unknown as { tearDownPeer(reason: string, peer?: unknown): void }).tearDownPeer('peer_closed', peer);
+    expect(onClose).not.toHaveBeenCalled();
+    expect((session as unknown as { state: { closed: boolean; turnInFlight: boolean } }).state.closed).toBe(false);
+    expect((session as unknown as { state: { closed: boolean; turnInFlight: boolean } }).state.turnInFlight).toBe(true);
+
+    resolveChat({ text: 'spoken reply' });
+    await vi.waitFor(() => expect(ttsMocks.inferTtsCtor).toHaveBeenCalledTimes(1));
+    const fakeTts = ttsMocks.inferTtsCtor.mock.results[0].value;
+    fakeTts.cb.onOpen();
+    fakeTts.cb.onDone();
+
+    expect((session as unknown as { state: { turnInFlight: boolean } }).state.turnInFlight).toBe(false);
+
+    const reconnectPeer = { send: vi.fn() };
+    (session as unknown as { sendCatchUpSnapshot(peer: unknown): void }).sendCatchUpSnapshot(reconnectPeer);
+    const snapshot = sentJson(reconnectPeer)[0] as { t: string; events: Array<{ id: number; msg: unknown }>; turn: unknown };
+    expect(snapshot.t).toBe('session.snapshot');
+    expect(snapshot.events.map((event) => event.msg)).toEqual([
+      { t: 'reply.done', text: 'spoken reply' },
+      { t: 'tts.start', sample_rate: 24000 },
+      { t: 'tts.done' },
+    ]);
+    expect(snapshot.turn).toMatchObject({
+      inFlight: false,
+      phase: 'complete',
+      userText: 'hello',
+      replyText: 'spoken reply',
+    });
+  });
+
 });

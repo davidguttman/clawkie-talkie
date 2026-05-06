@@ -15,7 +15,7 @@ import wrtc from '@roamhq/wrtc';
 import SimplePeer from 'simple-peer';
 import { runChat, ChatError, type DeliveryTarget as ChatDeliveryTarget } from './chatSession.js';
 import { OpenClawInferTtsSession, TTS_SAMPLE_RATE, type TtsSessionCallbacks, type TtsSessionOptions } from './ttsSession.js';
-import { daemonToPhone, type PhoneToDaemon, type RecentSessionsSnapshot, type SttCatalog, type SttSelection, type TtsCatalog, type TtsSelection, type VoiceSettings } from './protocol.js';
+import { daemonToPhone, type ControlEventRecord, type DaemonToPhone, type DaemonToPhoneEvent, type PhoneToDaemon, type RecentSessionsSnapshot, type SttCatalog, type SttSelection, type TtsCatalog, type TtsSelection, type VoiceSettings, type VoiceTurnSnapshot } from './protocol.js';
 import { OpenClawInferSttSession, type OpenClawInferSttSessionOptions } from './inferSttSession.js';
 import type { SttSessionCallbacks } from './sttTypes.js';
 import { createWasmVad, type SpeechDetector, type WasmVadOptions } from './vad.js';
@@ -27,6 +27,7 @@ import { createEmptyRecentSessionsSnapshot, defaultRecentSessionsCache } from '.
 
 const MAX_BUFFERED_CANDIDATES_PER_PEER = 32;
 const RECENT_SESSIONS_SUBSCRIPTION_INTERVAL_MS = 60_000;
+const MAX_CONTROL_HISTORY_EVENTS = 128;
 import {
   FRAME_10MS,
   WEBRTC_SAMPLE_RATE,
@@ -220,6 +221,14 @@ export class VoiceSession {
   private recentSessionsInterval: NodeJS.Timeout | null = null;
   private readonly replacedRemoteIds = new Set<string>();
   private readonly pendingCandidates = new Map<string, SignalPayload[]>();
+  private controlEventId = 0;
+  private lastPeerDetachEventId = 0;
+  private readonly controlHistory: ControlEventRecord[] = [];
+  private turnSnapshot: VoiceTurnSnapshot = {
+    inFlight: false,
+    phase: 'idle',
+    latestEventId: 0,
+  };
 
   constructor(private readonly opts: VoiceSessionRuntimeOptions) {
     this.roomId = opts.roomId;
@@ -412,6 +421,7 @@ export class VoiceSession {
       this.connected = true;
       console.error(`[voice ${this.roomId}] data channel connected`);
       this.startKeepalive();
+      this.sendCatchUpSnapshot(peer);
     });
 
     peer.on('data', (data: unknown) => {
@@ -456,7 +466,6 @@ export class VoiceSession {
     this.clearConnectionTimeout();
     this.stopKeepalive();
     this.stopRecentSessionsSubscription();
-    this.resetTurn(reason);
     this.closeOutboundAudio();
     this.peer = null;
     this.remoteId = null;
@@ -498,10 +507,10 @@ export class VoiceSession {
   private tearDownPeer(reason: string, peer?: SimplePeer.Instance): void {
     if (peer && this.peer !== peer) return;
     console.error(`[voice ${this.roomId}] tearDownPeer reason=${reason}`);
+    this.lastPeerDetachEventId = this.controlEventId;
     this.clearConnectionTimeout();
     this.stopKeepalive();
     this.stopRecentSessionsSubscription();
-    this.resetTurn(reason);
     try {
       this.peer?.destroy();
     } catch {
@@ -511,10 +520,6 @@ export class VoiceSession {
     this.peer = null;
     this.remoteId = null;
     this.connected = false;
-    // The voice room is bound for the lifetime of the session — when
-    // the phone drops, tear down the whole VoiceSession so the manager
-    // can release the room and signal-client subscription.
-    this.close();
   }
 
   private openOutboundAudio(): { stream: unknown | null } {
@@ -544,6 +549,7 @@ export class VoiceSession {
   }
 
   private closeOutboundAudio(): void {
+    const shouldCompletePendingTrackTts = this.audioPumpAwaitingDone && this.state.turnInFlight && !this.closing;
     this.stopAudioPump();
     this.audioPumpTurnToken = null;
     this.audioQueue = [];
@@ -551,6 +557,11 @@ export class VoiceSession {
     this.resampledRemainder = Buffer.alloc(0);
     this.audioSource = null;
     this.outboundStream = null;
+    if (shouldCompletePendingTrackTts) {
+      this.send(daemonToPhone.ttsDone());
+      this.tts = null;
+      this.resetTurn('tts_audio_transport_closed');
+    }
   }
 
   private enqueueTtsPcm(pcm: Uint8Array): void {
@@ -679,12 +690,16 @@ export class VoiceSession {
       return;
     }
     if (msg.t === 'sessions.list.request') {
-      void this.sendRecentSessions();
+      void this.sendRecentSessions('list');
+      return;
+    }
+    if (msg.t === 'sessions.catalog.request') {
+      void this.sendRecentSessions('catalog');
       return;
     }
     if (msg.t === 'sessions.list.subscribe') {
       this.startRecentSessionsSubscription();
-      void this.sendRecentSessions();
+      void this.sendRecentSessions('list');
       return;
     }
     if (msg.t === 'sessions.list.unsubscribe') {
@@ -740,7 +755,7 @@ export class VoiceSession {
   private startRecentSessionsSubscription(): void {
     if (this.recentSessionsInterval) return;
     this.recentSessionsInterval = setInterval(() => {
-      void this.sendRecentSessions();
+      void this.sendRecentSessions('list');
     }, RECENT_SESSIONS_SUBSCRIPTION_INTERVAL_MS);
     this.recentSessionsInterval.unref?.();
   }
@@ -751,12 +766,13 @@ export class VoiceSession {
     this.recentSessionsInterval = null;
   }
 
-  private async sendRecentSessions(): Promise<void> {
+  private async sendRecentSessions(format: 'list' | 'catalog' = 'list'): Promise<void> {
+    const toMessage = format === 'catalog' ? daemonToPhone.sessionsCatalog : daemonToPhone.sessionsList;
     try {
       const loadSessions = this.opts.recentSessionsProvider ?? (() => defaultRecentSessionsCache.get());
-      this.send(daemonToPhone.sessionsList(await loadSessions()));
+      this.send(toMessage(await loadSessions()));
     } catch {
-      this.send(daemonToPhone.sessionsList(createEmptyRecentSessionsSnapshot()));
+      this.send(toMessage(createEmptyRecentSessionsSnapshot()));
     }
   }
 
@@ -929,7 +945,7 @@ export class VoiceSession {
         onAudio: (pcm) => { if (!this.isTurnActive(token)) return; if (useTrack) this.enqueueTtsPcm(pcm); else this.sendBinary(pcm); },
         onDone: () => {
           if (!this.isTurnActive(token)) return;
-          if (!useTrack) { this.send(daemonToPhone.ttsDone()); this.tts = null; this.resetTurn('tts_done'); return; }
+          if (!useTrack || !this.audioSource) { this.send(daemonToPhone.ttsDone()); this.tts = null; this.resetTurn('tts_done'); return; }
           this.flushTtsTail(); this.audioPumpAwaitingDone = true; this.startAudioPump(token);
           if (this.audioQueue.length === 0) { this.audioPumpAwaitingDone = false; this.send(daemonToPhone.ttsDone()); this.tts = null; this.resetTurn('tts_done'); }
         },
@@ -954,6 +970,11 @@ export class VoiceSession {
     const token = ++this.turnToken;
     this.sttOpenToken = token;
     this.state.handleStartTurn();
+    this.turnSnapshot = {
+      inFlight: true,
+      phase: 'recording',
+      latestEventId: this.controlEventId,
+    };
     return token;
   }
 
@@ -986,10 +1007,68 @@ export class VoiceSession {
     this.chatAbort = null;
   }
 
-  private send(msg: unknown): void {
+  private send(msg: DaemonToPhone): void {
+    if (msg.t === 'session.snapshot') return;
+    const event = this.recordControlEvent(msg);
     const peer = this.peer;
     if (!peer || !this.connected) return;
-    this.sendToPeer(peer, msg);
+    this.sendToPeer(peer, event.msg);
+  }
+
+  private recordControlEvent(msg: DaemonToPhoneEvent): ControlEventRecord {
+    const event: ControlEventRecord = { id: ++this.controlEventId, msg };
+    this.controlHistory.push(event);
+    if (this.controlHistory.length > MAX_CONTROL_HISTORY_EVENTS) {
+      this.controlHistory.splice(0, this.controlHistory.length - MAX_CONTROL_HISTORY_EVENTS);
+    }
+    this.updateTurnSnapshotFromEvent(event);
+    return event;
+  }
+
+  private updateTurnSnapshotFromEvent(event: ControlEventRecord): void {
+    const msg = event.msg;
+    const base: VoiceTurnSnapshot = {
+      ...this.turnSnapshot,
+      inFlight: this.state.turnInFlight,
+      latestEventId: event.id,
+    };
+    if (msg.t === 'stt.done') {
+      this.turnSnapshot = { ...base, phase: 'thinking', userText: msg.text, error: undefined };
+      return;
+    }
+    if (msg.t === 'reply.start') {
+      this.turnSnapshot = { ...base, phase: 'thinking', userText: msg.text, error: undefined };
+      return;
+    }
+    if (msg.t === 'reply.done') {
+      this.turnSnapshot = { ...base, phase: 'reply_ready', replyText: msg.text, error: undefined };
+      return;
+    }
+    if (msg.t === 'tts.start') {
+      this.turnSnapshot = { ...base, phase: 'speaking', ttsSampleRate: msg.sample_rate, error: undefined };
+      return;
+    }
+    if (msg.t === 'tts.done') {
+      this.turnSnapshot = { ...base, inFlight: false, phase: 'complete', error: undefined };
+      return;
+    }
+    if (msg.t === 'stt.error' || msg.t === 'reply.error' || msg.t === 'tts.error') {
+      this.turnSnapshot = { ...base, inFlight: false, phase: 'error', error: msg.message };
+      return;
+    }
+    this.turnSnapshot = base;
+  }
+
+  private sendCatchUpSnapshot(peer: SimplePeer.Instance): void {
+    const events = this.controlHistory
+      .filter((event) => event.id > this.lastPeerDetachEventId)
+      .map((event) => ({ id: event.id, msg: event.msg }));
+    this.sendToPeer(peer, daemonToPhone.sessionSnapshot({
+      roomId: this.roomId,
+      latestEventId: this.controlEventId,
+      turn: { ...this.turnSnapshot, latestEventId: this.controlEventId },
+      events,
+    }));
   }
 
   private sendToPeer(peer: SimplePeer.Instance, msg: unknown): void {
