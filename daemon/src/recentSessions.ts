@@ -10,10 +10,12 @@ export interface RecentSessionsCacheOptions {
   loadSessions: () => Promise<RecentSessionsSnapshot>;
   ttlMs: number;
   now?: () => number;
+  refreshOnCreate?: boolean;
 }
 
 export interface RecentSessionsCache {
   get(): Promise<RecentSessionsSnapshot>;
+  refresh(): Promise<RecentSessionsSnapshot>;
 }
 
 export interface BuildRecentSessionsOptions {
@@ -45,21 +47,35 @@ export function createEmptyRecentSessionsSnapshot(generatedAt = new Date().toISO
 export function createRecentSessionsCache(options: RecentSessionsCacheOptions): RecentSessionsCache {
   let cached: RecentSessionsSnapshot | undefined;
   let expiresAt = 0;
+  let refreshPromise: Promise<RecentSessionsSnapshot> | undefined;
   const now = options.now ?? Date.now;
+
+  const refresh = (): Promise<RecentSessionsSnapshot> => {
+    if (refreshPromise) return refreshPromise;
+    const startedAt = now();
+    refreshPromise = (async () => {
+      try {
+        cached = await options.loadSessions();
+      } catch {
+        cached ??= createEmptyRecentSessionsSnapshot(new Date(startedAt).toISOString());
+      }
+      expiresAt = now() + options.ttlMs;
+      return cached;
+    })().finally(() => {
+      refreshPromise = undefined;
+    });
+    return refreshPromise;
+  };
+
+  if (options.refreshOnCreate) void refresh();
 
   return {
     async get(): Promise<RecentSessionsSnapshot> {
       const ts = now();
-      if (cached && ts < expiresAt) return cached;
-
-      try {
-        cached = await options.loadSessions();
-      } catch {
-        cached ??= createEmptyRecentSessionsSnapshot(new Date(ts).toISOString());
-      }
-      expiresAt = now() + options.ttlMs;
-      return cached;
+      if (cached && ts < expiresAt && !refreshPromise) return cached;
+      return refresh();
     },
+    refresh,
   };
 }
 

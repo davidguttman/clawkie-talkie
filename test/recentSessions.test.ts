@@ -556,4 +556,45 @@ describe('recent sessions cache', () => {
     await expect(cache.get()).resolves.toMatchObject({ generatedAt: 'second' });
     expect(loadSessions).toHaveBeenCalledTimes(2);
   });
+
+  it('shares one in-flight refresh across concurrent cache misses', async () => {
+    let resolveLoad!: (snapshot: { generatedAt: string; sessions: [] }) => void;
+    const loadSessions = vi.fn(
+      () => new Promise<{ generatedAt: string; sessions: [] }>((resolve) => {
+        resolveLoad = resolve;
+      }),
+    );
+    const cache = createRecentSessionsCache({ ttlMs: 60_000, now: () => 1_000, loadSessions });
+
+    const first = cache.get();
+    const second = cache.get();
+
+    expect(loadSessions).toHaveBeenCalledTimes(1);
+    resolveLoad({ generatedAt: 'loaded', sessions: [] });
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { generatedAt: 'loaded', sessions: [] },
+      { generatedAt: 'loaded', sessions: [] },
+    ]);
+  });
+
+  it('can start the first refresh immediately and lets get await that refresh', async () => {
+    let resolveLoad!: (snapshot: { generatedAt: string; sessions: [] }) => void;
+    const loadSessions = vi.fn(
+      () => new Promise<{ generatedAt: string; sessions: [] }>((resolve) => {
+        resolveLoad = resolve;
+      }),
+    );
+
+    const cache = createRecentSessionsCache({
+      ttlMs: 60_000,
+      now: () => 1_000,
+      loadSessions,
+      refreshOnCreate: true,
+    });
+    const pendingGet = cache.get();
+
+    expect(loadSessions).toHaveBeenCalledTimes(1);
+    resolveLoad({ generatedAt: 'boot-refresh', sessions: [] });
+    await expect(pendingGet).resolves.toEqual({ generatedAt: 'boot-refresh', sessions: [] });
+  });
 });

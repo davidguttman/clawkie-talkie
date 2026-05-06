@@ -21,9 +21,14 @@
 import { DaemonPeer } from './peer.js';
 import { parseCli } from './cli.js';
 import { formatDashboardJoinUrl } from './dashboardUrl.js';
+import { defaultRecentSessionsCache } from './recentSessions.js';
 
 async function main(): Promise<void> {
   const cli = parseCli();
+
+  // Prime the host dashboard session picker immediately. Requests that arrive
+  // while this first load is still running share the same in-flight refresh.
+  void defaultRecentSessionsCache.refresh();
 
   const peer = new DaemonPeer({
     sttLanguage: cli.sttLanguage,
