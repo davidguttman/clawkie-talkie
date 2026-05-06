@@ -275,6 +275,22 @@ describe('session snapshot replay', () => {
     expect(side).toEqual([{ kind: 'armTts' }]);
   });
 
+  it('treats missing disconnectedMs as auto-resumable for older snapshot payloads', () => {
+    const { next, side } = reduce(idle, {
+      type: 'session.snapshot',
+      phase: 'reply_ready',
+      inFlight: true,
+      userText: 'hello',
+      replyText: 'spoken reply',
+    });
+
+    expect(next.state).toBe('thinking');
+    expect(next.lastUserText).toBe('hello');
+    expect(next.pendingReplyText).toBe('spoken reply');
+    expect(next.liveReplyText).toBe('');
+    expect(side).toEqual([{ kind: 'armTts' }]);
+  });
+
   it('hydrates a stale reply-ready reconnect as idle replayable text without arming TTS', () => {
     const { next, side } = reduce(idle, {
       type: 'session.replay',

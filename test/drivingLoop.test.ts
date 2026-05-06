@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { act, createElement } from 'react';
+import type { Root } from 'react-dom/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AnalyserScratch } from '../client/src/voice/drivingLoop';
+import type { ControlMessage, RtcStatus } from '../client/src/rtc/client';
+import type { AnalyserScratch, DrivingLoop, DrivingLoopOptions } from '../client/src/voice/drivingLoop';
 
 const root = resolve(__dirname, '..');
 
@@ -16,7 +19,25 @@ vi.mock('../client/src/voice/audioSource', async (importActual) => ({
 
 vi.mock('../client/src/voice/tts', () => ({
   getActiveOutputAnalysers: () => activeOutputAnalysers,
-  playDaemonTts: vi.fn(),
+  playDaemonTts: vi.fn(() => ({
+    analyser: null,
+    done: new Promise<void>(() => undefined),
+    error: null,
+    stop: vi.fn(),
+  })),
+}));
+
+vi.mock('../client/src/voice/sttDaemon', () => ({
+  DaemonNotConnectedError: class DaemonNotConnectedError extends Error {},
+  MicPermissionError: class MicPermissionError extends Error {},
+  startDaemonSTT: vi.fn(async () => ({
+    stop: vi.fn(async () => ''),
+    cancel: vi.fn(),
+  })),
+}));
+
+vi.mock('../client/src/storage', () => ({
+  appendTranscriptTurn: vi.fn(),
 }));
 
 vi.mock('../client/src/voice/holdMusic', () => ({
@@ -51,10 +72,168 @@ class FakeAnalyser {
   }
 }
 
+function installMinimalDom(): void {
+  const raf = () => 1;
+  const caf = () => undefined;
+  Object.defineProperty(globalThis, 'requestAnimationFrame', { value: raf, configurable: true });
+  Object.defineProperty(globalThis, 'cancelAnimationFrame', { value: caf, configurable: true });
+
+  if (typeof document !== 'undefined' && document.createElement) return;
+
+  const doc: Document = {
+    nodeType: 9,
+    defaultView: null,
+    activeElement: null,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    createElement: (tagName: string) => ({
+      nodeType: 1,
+      nodeName: tagName.toUpperCase(),
+      tagName: tagName.toUpperCase(),
+      ownerDocument: doc,
+      style: {},
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      appendChild: () => undefined,
+      removeChild: () => undefined,
+      insertBefore: () => undefined,
+      setAttribute: () => undefined,
+    }),
+  } as unknown as Document;
+  const win = {
+    document: doc,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    HTMLElement: function HTMLElement() {},
+    HTMLIFrameElement: function HTMLIFrameElement() {},
+    requestAnimationFrame: raf,
+    cancelAnimationFrame: caf,
+  };
+  Object.defineProperty(doc, 'defaultView', { value: win, configurable: true });
+  Object.defineProperty(globalThis, 'window', { value: win, configurable: true });
+  Object.defineProperty(globalThis, 'document', { value: doc, configurable: true });
+  Object.defineProperty(globalThis, 'navigator', { value: { userAgent: 'node' }, configurable: true });
+  Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', { value: true, configurable: true });
+}
+
+type FakeDrivingRtc = DrivingLoopOptions['rtc'] & {
+  emitControl(msg: ControlMessage): void;
+  sentControl: ControlMessage[];
+};
+
+function createFakeDrivingRtc(): FakeDrivingRtc {
+  const controlListeners = new Set<(msg: ControlMessage) => void>();
+  const sentControl: ControlMessage[] = [];
+  return {
+    status: 'open' as RtcStatus,
+    hasClient: true,
+    sentControl,
+    sendControl(msg: ControlMessage): void {
+      sentControl.push(msg);
+    },
+    sendBinary: vi.fn(),
+    addControlListener(fn: (msg: ControlMessage) => void): () => void {
+      controlListeners.add(fn);
+      return () => controlListeners.delete(fn);
+    },
+    addBinaryListener: () => () => undefined,
+    emitControl(msg: ControlMessage): void {
+      for (const fn of [...controlListeners]) fn(msg);
+    },
+  };
+}
+
+async function renderDrivingLoopHarness(): Promise<{
+  loop(): DrivingLoop;
+  rtc: FakeDrivingRtc;
+  unmount(): Promise<void>;
+}> {
+  installMinimalDom();
+  const { createRoot } = await import('react-dom/client');
+  const { useDrivingLoop } = await import('../client/src/voice/drivingLoop');
+  const rtc = createFakeDrivingRtc();
+  const container = document.createElement('div');
+  const root: Root = createRoot(container);
+  let currentLoop: DrivingLoop | null = null;
+
+  function Probe(): null {
+    currentLoop = useDrivingLoop({
+      sessionId: 'session-1',
+      threadId: 'thread-1',
+      hostPeerId: 'host-1',
+      rtc,
+    });
+    return null;
+  }
+
+  await act(async () => {
+    root.render(createElement(Probe));
+  });
+
+  return {
+    loop: () => {
+      if (!currentLoop) throw new Error('driving loop not rendered');
+      return currentLoop;
+    },
+    rtc,
+    unmount: async () => {
+      await act(async () => {
+        root.unmount();
+      });
+    },
+  };
+}
+
 beforeEach(() => {
   activeMicAnalyser = null;
   activeHoldMusicAnalyser = null;
   activeOutputAnalysers = [];
+});
+
+
+describe('driving loop old-daemon compatibility', () => {
+  it('completes the legacy stt/reply/tts control sequence without a session snapshot', async () => {
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      expect(rendered.loop().state).toBe('idle');
+
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      expect(rendered.loop().state).toBe('recording');
+
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      expect(rendered.loop().state).toBe('thinking');
+
+      await act(async () => {
+        rendered.rtc.emitControl({ t: 'stt.done', text: 'hello' });
+      });
+      expect(rendered.loop().state).toBe('thinking');
+      expect(rendered.loop().liveText).toBe('hello');
+
+      await act(async () => {
+        rendered.rtc.emitControl({ t: 'reply.done', text: 'spoken reply' });
+      });
+      expect(rendered.loop().state).toBe('thinking');
+      expect(rendered.loop().liveText).toBe('hello');
+
+      await act(async () => {
+        rendered.rtc.emitControl({ t: 'tts.start', sample_rate: 24000 });
+      });
+      expect(rendered.loop().state).toBe('ai');
+      expect(rendered.loop().liveText).toBe('spoken reply');
+
+      await act(async () => {
+        rendered.rtc.emitControl({ t: 'tts.done' });
+      });
+      expect(rendered.loop().state).toBe('idle');
+      expect(rendered.loop().lastTurn).toEqual({ who: 'ai', text: 'spoken reply' });
+    } finally {
+      await rendered.unmount();
+    }
+  });
 });
 
 describe('driving loop visualization band selection', () => {

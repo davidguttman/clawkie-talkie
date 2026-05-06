@@ -734,6 +734,44 @@ describe('RtcProvider recent session picker sync', () => {
     expect(rendered.context().recentSessionsSupportStatus).toBe('unsupported');
   });
 
+  it('does not block ordinary old-daemon voice controls when recent-session probes are ignored', async () => {
+    vi.useFakeTimers();
+    const rendered = await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+    const seen: ControlMessage[] = [];
+    const detach = rendered.context().addControlListener((msg) => seen.push(msg));
+
+    await act(async () => {
+      voiceClient.emitStatus('open');
+    });
+
+    expect(sentOf(voiceClient, 'sessions.list.subscribe')).toEqual([{ t: 'sessions.list.subscribe' }]);
+    expect(sentOf(voiceClient, 'sessions.catalog.request')).toEqual([{ t: 'sessions.catalog.request' }]);
+
+    await act(async () => {
+      voiceClient.emitControl({ t: 'stt.done', text: 'hello' });
+      voiceClient.emitControl({ t: 'reply.done', text: 'spoken reply' });
+      voiceClient.emitControl({ t: 'tts.start', sample_rate: 24000 });
+      voiceClient.emitControl({ t: 'tts.done' });
+      vi.advanceTimersByTime(4000);
+    });
+
+    expect(rendered.context().status).toBe('open');
+    expect(rendered.context().recentSessionsSupportStatus).toBe('unsupported');
+    expect(seen.map((msg) => msg.t)).toEqual(['stt.done', 'reply.done', 'tts.start', 'tts.done']);
+
+    await act(async () => {
+      rendered.context().requestRecentSessions?.();
+    });
+    expect(sentOf(voiceClient, 'sessions.list.request')).toEqual([{ t: 'sessions.list.request' }]);
+    expect(sentOf(voiceClient, 'sessions.catalog.request')).toEqual([
+      { t: 'sessions.catalog.request' },
+      { t: 'sessions.catalog.request' },
+    ]);
+
+    detach();
+  });
+
   it('resets recent-session support when reconnecting to a new selected session', async () => {
     const rendered = await renderRtcProvider();
     const firstVoiceClient = await openRendezvousAndAccept('voice-room-1');
