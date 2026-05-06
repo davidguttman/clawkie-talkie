@@ -30,7 +30,7 @@ Never ask the user to paste provider API keys into chat. Never print keys in log
 - Do not treat an OpenClaw update/repair as optional. Stop Clawkie Talkie work until `openclaw status --json` works on 2026.4.25+.
 - Do not commit `.env`, generated host IDs, LaunchAgent plists with private paths, or systemd unit files with private paths.
 - Do not paste or print provider API keys.
-- Treat `DAEMON_PEER_ID` as private-ish: not a password, but do not publish it or post it in public channels.
+- Treat `DAEMON_PEER_ID` and the dashboard URL as bearer routing material. Anyone with it can open the host dashboard, enumerate/select recent sessions exposed by the daemon, and attempt voice handoff. Do not publish it or post it in public/shared chats; rotate `DAEMON_PEER_ID` and update the installed skill/config if exposed.
 - Use the public client origin: `https://clawkietalkie.app`.
 - Do not use local development shortcuts for an end-user install.
 - Do not start/stop unrelated OpenClaw, browser, Docker, or system services.

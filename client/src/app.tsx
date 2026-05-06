@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { HIFI } from './tokens';
 import { HiFiPhone } from './components/Phone';
 import { DrivingScreen } from './screens/Driving';
+import { DashboardScreen } from './screens/Dashboard';
 import { HistoryScreen } from './screens/History';
 import { TranscriptScreen } from './screens/Transcript';
 import { SettingsScreen } from './screens/Settings';
@@ -9,8 +10,10 @@ import { ErrorScreen, type ErrorKind } from './screens/ErrorScreen';
 import { normalizeVoiceSettingsForRtc, RtcProvider, useRtc } from './rtc/RtcContext';
 import {
   latestAssistantText,
+  loadLastDashboardHostPeerId,
   loadSettings,
   loadTranscriptSession,
+  saveLastDashboardHostPeerId,
   saveSettings,
   type Settings,
 } from './storage';
@@ -25,11 +28,11 @@ import {
   playBufferedReplyAudio,
   speakReplayText,
 } from './voice/tts';
-import { parseHandoffUrl, type HandoffRoute } from './voice/handoffUrl';
+import { formatHandoffHash, parseHandoffUrl, parseHostDashboardUrl, type HandoffRoute } from './voice/handoffUrl';
 import type { RecentSession, VoiceSettings } from './voice/protocol';
 import { computeIsNarrow } from './responsive';
 
-type ScreenId = 'driving' | 'transcript' | 'error';
+type ScreenId = 'dashboard' | 'driving' | 'transcript' | 'error';
 
 export function parseInitialSearch(search: string): {
   screen: ScreenId;
@@ -47,11 +50,15 @@ export function parseInitialSearch(search: string): {
   return { screen: 'error', errorKind, hostPeerId, sessionId, threadId };
 }
 
-export function parseInitialLocation(location: { search: string; hash: string }) {
+export function parseInitialLocation(
+  location: { pathname?: string; search: string; hash: string },
+  options: { savedDashboardHostPeerId?: string | null } = {},
+) {
   const legacy = parseInitialSearch(location.search);
+  const pathname = location.pathname || '/voice';
   // Hash-first handoff URLs (preferred) — keep identifiers off the wire.
   const handoff = parseHandoffUrl(
-    '/voice' + (location.search || '') + (location.hash || ''),
+    pathname + (location.search || '') + (location.hash || ''),
   );
   if (handoff) {
     return {
@@ -62,11 +69,40 @@ export function parseInitialLocation(location: { search: string; hash: string })
       handoff,
     };
   }
+  const dashboard = parseHostDashboardUrl(
+    pathname + (location.search || '') + (location.hash || ''),
+  );
+  if (dashboard) {
+    return {
+      ...legacy,
+      screen: 'dashboard' as ScreenId,
+      hostPeerId: dashboard.hostPeerId,
+      sessionId: undefined,
+      handoff: null as HandoffRoute | null,
+    };
+  }
+  const savedDashboardHostPeerId = options.savedDashboardHostPeerId?.trim();
+  const dashboardPath = pathname.replace(/\/$/, '') === '/dashboard';
+  if (dashboardPath && savedDashboardHostPeerId) {
+    return {
+      ...legacy,
+      screen: 'dashboard' as ScreenId,
+      hostPeerId: savedDashboardHostPeerId,
+      sessionId: undefined,
+      handoff: null as HandoffRoute | null,
+    };
+  }
   return { ...legacy, handoff: null as HandoffRoute | null };
 }
 
 function parseInitial() {
-  return parseInitialLocation(window.location);
+  const initial = parseInitialLocation(window.location, {
+    savedDashboardHostPeerId: loadLastDashboardHostPeerId(),
+  });
+  if (initial.hostPeerId && (initial.screen === 'dashboard' || initial.screen === 'driving')) {
+    saveLastDashboardHostPeerId(initial.hostPeerId);
+  }
+  return initial;
 }
 
 export function voiceSettingsForRtc(settings: Settings): VoiceSettings {
@@ -91,10 +127,12 @@ export function handoffToRendezvous(handoff: HandoffRoute) {
 export function selectHandoffFromRecentSession(
   current: HandoffRoute | null,
   session: RecentSession,
+  fallbackHostPeerId?: string | null,
 ): HandoffRoute | null {
-  if (!current?.hostPeerId) return current;
+  const hostPeerId = current?.hostPeerId ?? fallbackHostPeerId ?? null;
+  if (!hostPeerId) return current;
   return {
-    hostPeerId: current.hostPeerId,
+    hostPeerId,
     sessionId: session.sessionId,
     sessionKey: session.sessionKey,
     ...(session.channel ? { channel: session.channel } : {}),
@@ -143,14 +181,26 @@ export function App() {
   }, []);
 
   const compact = isNarrow;
+  const activeHostPeerId = activeHandoff?.hostPeerId ?? initial.hostPeerId;
   const currentSessionId =
     screen === 'driving' ? activeHandoff?.sessionId ?? initial.sessionId : openSession || activeHandoff?.sessionId || initial.sessionId;
 
   const rtcVoiceSettings = useMemo(() => voiceSettingsForRtc(settings), [settings]);
 
   const selectRecentSession = useCallback((session: RecentSession) => {
-    setActiveHandoff((current) => selectHandoffFromRecentSession(current ?? initial.handoff, session));
-  }, [initial.handoff]);
+    const next = selectHandoffFromRecentSession(
+      activeHandoff ?? initial.handoff,
+      session,
+      activeHostPeerId,
+    );
+    if (!next) return;
+    setActiveHandoff(next);
+    setOpenSession(next.sessionId);
+    setScreen('driving');
+    if (typeof window !== 'undefined' && window.history?.replaceState) {
+      window.history.replaceState(null, '', `/voice${formatHandoffHash(next)}`);
+    }
+  }, [activeHandoff, initial.handoff, activeHostPeerId]);
 
   const replayLastReply = useCallback(async () => {
     const session = currentSessionId ? loadTranscriptSession(currentSessionId) : null;
@@ -180,6 +230,14 @@ export function App() {
 
   const screenContent = (
     <>
+      {screen === 'dashboard' && (
+        <DashboardScreen
+          hostPeerId={activeHostPeerId}
+          onSelectSession={selectRecentSession}
+          onSettings={openSettings}
+          compact={compact}
+        />
+      )}
       {screen === 'driving' && (
         <DrivingScreen
           accent="amber"
@@ -194,7 +252,7 @@ export function App() {
           onSettings={openSettings}
           compact={compact}
           sessionId={activeHandoff?.sessionId ?? initial.sessionId}
-          hostPeerId={activeHandoff?.hostPeerId ?? initial.hostPeerId}
+          hostPeerId={activeHostPeerId}
           threadId={initial.threadId}
           onSelectSession={selectRecentSession}
         />
@@ -267,7 +325,7 @@ export function App() {
 
   return (
     <RtcProvider
-      hostPeerId={activeHandoff ? activeHandoff.hostPeerId : undefined}
+      hostPeerId={activeHostPeerId ?? undefined}
       rendezvous={activeHandoff ? handoffToRendezvous(activeHandoff) : null}
       voiceSettings={rtcVoiceSettings}
     >

@@ -128,9 +128,9 @@ Copy the printed `DAEMON_PEER_ID=...` line into `.env`.
 
 ### Why `DAEMON_PEER_ID` should be stable
 
-`DAEMON_PEER_ID` is the daemon's rendezvous room ID. If it is missing, the daemon generates a fresh ID every time it starts. That is fine for development, but bad for an installed daemon because old voice links stop pointing at the running daemon after every restart.
+`DAEMON_PEER_ID` is the daemon's rendezvous room ID. If it is missing, the daemon generates a fresh ID every time it starts. That is fine for development, but bad for an installed daemon because old voice links and remembered browser dashboard launches stop pointing at the running daemon after every restart.
 
-Treat the ID as private-ish: not a password, but it does identify the room your daemon listens on. Do not commit it, post it in public issues, or put it in screenshots. It is safe for Clawkie voice handoff links to include it. A stable ID also gives future browser pairing/resume features something durable to remember.
+Treat the daemon host ID and dashboard URL as bearer routing material. Anyone with it can open the host dashboard, enumerate/select recent sessions exposed by the daemon, and attempt voice handoff. Do not commit it, post it in public/shared chats or issues, or put it in screenshots. If it is exposed, rotate `DAEMON_PEER_ID` and update the installed OpenClaw skill/config to match.
 
 ## Run it manually once
 
@@ -147,13 +147,15 @@ A healthy startup prints lines like:
 [peer] subscribed to rendezvous room as <your-daemon-peer-id>
 Session:  dev-local
 Peer ID:  <your-daemon-peer-id>
-Join URL: https://clawkietalkie.app/?host=<your-daemon-peer-id>
+Join URL: https://clawkietalkie.app/dashboard#host=<your-daemon-peer-id>
 Waiting for phone…
 ```
 
 Leave this terminal running for the first manual test. Press `Ctrl-C` to stop it.
 
-The printed `Join URL` proves the daemon has a host ID and client origin. Real voice handoff links are usually created by OpenClaw and include the current session id plus optional session key and target routing metadata, for example:
+The printed `Join URL` proves the daemon has a host ID and client origin. It opens the host-scoped session dashboard.
+
+Real voice handoff links are usually created by OpenClaw and include the current session id plus optional session key and target routing metadata, for example:
 
 ```text
 https://clawkietalkie.app/voice#host=<host>&session=<sessionId>&sessionKey=<sessionKey>&channel=<channel>&target=<target>&accountId=<accountId>
@@ -405,7 +407,7 @@ This is usually a path or working-directory problem.
 
 ### The browser shows a bad-session error
 
-The link is missing required handoff fields. A real handoff URL needs `host` and `session`. The daemon's printed host-only URL is only a startup hint.
+The link is missing required handoff fields. A real voice handoff URL needs `host` and `session`. A host-only URL should route to the dashboard instead; use `/dashboard#host=<daemon-peer-id>` for the canonical dashboard entrypoint.
 
 ### Signaling or WebRTC never connects
 

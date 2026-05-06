@@ -15,7 +15,8 @@ describe('app HTML entry points', () => {
   it.each([
     ['client/voice.html', '/voice.html'],
     ['client/voice/index.html', '/voice/'],
-  ])('serves the voice app from %s for %s', (entryPath) => {
+    ['client/dashboard/index.html', '/dashboard/'],
+  ])('serves the runtime app from %s for %s', (entryPath) => {
     const path = resolve(root, entryPath);
     expect(existsSync(path)).toBe(true);
     const html = readFileSync(path, 'utf8');

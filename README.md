@@ -135,7 +135,7 @@ There is no inbound HTTP port for the daemon. It connects outbound to signaling 
 
 ## Session model
 
-There is one durable daemon per machine. Its `DAEMON_PEER_ID` is the stable rendezvous identity used in `host=...`.
+There is one durable daemon per machine. Its `DAEMON_PEER_ID` is the stable rendezvous identity used in `host=...`. Treat the daemon host ID and dashboard URL as bearer routing material: anyone who has it can connect to the host dashboard, enumerate recent sessions exposed by that daemon, and select one for voice handoff. Do not post it in public or shared chats; if it is exposed, rotate `DAEMON_PEER_ID` and update the installed OpenClaw skill/config to match.
 
 Each voice handoff is then scoped by OpenClaw session:
 
@@ -197,11 +197,11 @@ A healthy daemon prints something like:
 
 ```text
 Peer ID:  <daemon-peer-id>
-Join URL: https://clawkietalkie.app/?host=<daemon-peer-id>
+Join URL: https://clawkietalkie.app/dashboard#host=<daemon-peer-id>
 Waiting for phone…
 ```
 
-That host-only URL is a daemon connectivity hint. A real OpenClaw voice handoff uses `/voice#host=...&session=...`.
+That host-only URL opens the host-scoped session dashboard. A real OpenClaw voice handoff still uses `/voice#host=...&session=...`.
 
 ## Troubleshooting
 

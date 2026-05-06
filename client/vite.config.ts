@@ -30,6 +30,7 @@ export default defineConfig({
         main: resolve(__dirname, 'index.html'),
         voiceHtml: resolve(__dirname, 'voice.html'),
         voice: resolve(__dirname, 'voice/index.html'),
+        dashboard: resolve(__dirname, 'dashboard/index.html'),
       },
     },
   },

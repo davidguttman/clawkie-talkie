@@ -5,8 +5,9 @@ Local rendezvous daemon for Clawkie-Talkie.
 For end-user Mac/Linux installation, credentials, persistence, verification, and troubleshooting, see [Install the Clawkie Talkie daemon](../docs/install-daemon.md).
 
 The daemon subscribes to a rambly-style signaling server (SSE subscribe + HTTP
-POST signal) on a stable UUID room — the `host=H` rendezvous/control room. A
-browser landing on a `/voice#host=H&session=S` link joins that rendezvous
+POST signal) on a stable UUID room — the `host=H` rendezvous/control room. The
+daemon prints `/dashboard#host=H` for the host dashboard; a browser landing on a
+`/voice#host=H&session=S` link joins that rendezvous
 room first, sends a single `rendezvous.join` message, and is told which
 deterministic per-session voice room (`H:<safeSession>`) to move to.
 Actual WebRTC voice/STT/TTS/OpenClaw turns happen on the per-session room, so
@@ -84,8 +85,8 @@ Optional flags:
 - `--stt-language <lang>`
 
 `DAEMON_PEER_ID` can be set as a local development override. When it is not
-set, the daemon generates a fresh UUID peer id and prints a join URL containing
-`#host=<peerId>`.
+set, the daemon generates a fresh UUID peer id and prints a dashboard join URL
+containing `#host=<peerId>`.
 
 On startup the daemon prints:
 
@@ -98,6 +99,12 @@ On startup the daemon prints:
 - `/voice/` — canonical public user-facing handoff entrypoint.
 - `/voice` — clean public handoff URL used in generated links; static hosts
   resolve it to `/voice/`.
+- `/dashboard#host=H` — canonical host dashboard URL printed by the daemon. Add
+  this page to the home screen for host dashboard launches. The manifest
+  intentionally omits a static `start_url` so installed launches preserve the
+  chosen dashboard URL/hash.
+- `/dashboard/` — can recover the last browser-remembered host when available;
+  without a saved host it shows the missing/bad-session state.
 
 The agent constructs the URL directly:
 

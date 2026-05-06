@@ -43,6 +43,7 @@ export interface Settings extends ExportSettings {
 }
 
 const KEY = 'clawkie.settings.v1';
+const LAST_DASHBOARD_HOST_KEY = 'clawkie.dashboard.lastHost.v1';
 const TRANSCRIPTS_KEY = 'clawkie.transcripts.v1';
 
 export const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
@@ -56,6 +57,24 @@ export const DEFAULT_SETTINGS: Settings = {
   stt: {},
   ...DEFAULT_EXPORT_SETTINGS,
 };
+
+export function loadLastDashboardHostPeerId(): string | null {
+  try {
+    return normalizeHostPeerId(localStorage.getItem(LAST_DASHBOARD_HOST_KEY)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveLastDashboardHostPeerId(hostPeerId?: string | null): void {
+  const hostKey = normalizeHostPeerId(hostPeerId);
+  if (!hostKey) return;
+  try {
+    localStorage.setItem(LAST_DASHBOARD_HOST_KEY, hostKey);
+  } catch {
+    // storage disabled — PWA launch recovery simply won't remember the host.
+  }
+}
 
 export function loadSettings(hostPeerId?: string | null): Settings {
   return normalizeSettings(readRawSettings(), hostPeerId);

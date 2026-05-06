@@ -3,7 +3,7 @@
 // over WebRTC via simple-peer.
 //
 // The phone joins a "room" named after the daemon's UUID (passed as the
-// `?host=<uuid>` URL param). The daemon is already in that room; when
+// `host=<uuid>` URL param/hash value). The daemon is already in that room; when
 // the phone announces itself, the daemon initiates a simple-peer
 // connection. The DataChannel carries JSON control frames + binary
 // PCM16 audio.

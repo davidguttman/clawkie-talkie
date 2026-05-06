@@ -105,7 +105,7 @@ describe('PWA metadata and assets', () => {
     });
 
     // Do not set a static start_url: installed-app launch should default to
-    // the current install document URL so /voice/#handoff hashes are preserved.
+    // the current install document URL so /voice and /dashboard hash args are preserved.
     expect(manifest).not.toHaveProperty('start_url');
 
     expect(manifest.icons.map((icon) => icon.sizes)).toEqual(expect.arrayContaining(
@@ -151,7 +151,7 @@ describe('PWA metadata and assets', () => {
     }
   });
 
-  it.each(['client/index.html', 'client/voice.html', 'client/voice/index.html'])('%s receives PWA metadata and SW registration from the Vite transform', (entry) => {
+  it.each(['client/index.html', 'client/voice.html', 'client/voice/index.html', 'client/dashboard/index.html'])('%s receives PWA metadata and SW registration from the Vite transform', (entry) => {
     const sourceHtml = readFileSync(resolve(root, entry), 'utf8');
     const html = injectPwaHtml(sourceHtml);
     const document = new JSDOM(html).window.document;
@@ -179,7 +179,7 @@ describe('PWA metadata and assets', () => {
     const helpers = loadServiceWorkerHelpers();
     const url = (path: string) => new URL(path, 'https://clawkie.test');
 
-    expect(helpers.PRECACHE_ASSETS).toEqual(expect.arrayContaining(['/voice/', '/voice.html', '/manifest.json', '/sw.js']));
+    expect(helpers.PRECACHE_ASSETS).toEqual(expect.arrayContaining(['/voice/', '/voice.html', '/dashboard/', '/manifest.json', '/sw.js']));
 
     expect(helpers.shouldBypass(mockRequest('/voice/', { upgrade: 'websocket' }), url('/voice/'))).toBe(true);
     expect(helpers.shouldBypass(mockRequest('/voice/', { accept: 'text/event-stream' }), url('/voice/'))).toBe(true);

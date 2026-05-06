@@ -156,6 +156,7 @@ export function RtcProvider({
     setStatus('idle');
     setActiveRoomId(hostPeerId);
     setRecentSessionsSupportStatus('unknown');
+    setRecentSessionsSnapshot({ generatedAt: '', sessions: [] });
   }, [hostPeerId]);
 
   const clientRef = useRef<RtcClient | null>(null);
@@ -265,10 +266,10 @@ export function RtcProvider({
       sessionsSubscribedRoomRef.current = null;
       setRecentSessionsSupportStatus('unknown');
       setDetail(undefined);
-      setStatus('idle');
+      if (activeRoomId !== hostPeerId) setStatus('idle');
       setActiveRoomId(hostPeerId);
     }
-  }, [rendezvousKey, hostPeerId]);
+  }, [rendezvousKey, hostPeerId, activeRoomId]);
 
   // Rendezvous orchestration: when we are still on the rendezvous
   // (host) room and the data channel comes up, send rendezvous.join
@@ -333,17 +334,20 @@ export function RtcProvider({
   }, [activeRoomId, hostPeerId, status]);
 
   const requestRecentSessions = useCallback(() => {
-    if (!activeRoomId || activeRoomId === hostPeerId) return;
+    if (!activeRoomId) return;
+    if (rendezvous && activeRoomId === hostPeerId) return;
     if (status !== 'open') return;
     clientRef.current?.sendControl(phoneToDaemon.sessionsListRequest());
     clientRef.current?.sendControl(phoneToDaemon.sessionsCatalogRequest());
-  }, [activeRoomId, hostPeerId, status]);
+  }, [activeRoomId, hostPeerId, rendezvous, status]);
 
   useEffect(() => {
-    if (!rendezvous || !hostPeerId) return;
-    if (!activeRoomId || activeRoomId === hostPeerId) return;
+    if (!hostPeerId || !activeRoomId) return;
     if (status !== 'open') return;
-    if (catalogRequestedRoomRef.current !== activeRoomId) {
+    const onRendezvousLane = activeRoomId === hostPeerId;
+    if (rendezvous && onRendezvousLane) return;
+
+    if (rendezvous && !onRendezvousLane && catalogRequestedRoomRef.current !== activeRoomId) {
       catalogRequestedRoomRef.current = activeRoomId;
       requestTtsCatalog();
       requestSttCatalog();
@@ -363,19 +367,19 @@ export function RtcProvider({
       lastSentVoiceRef.current = null;
       catalogRequestedRoomRef.current = null;
       sessionsSubscribedRoomRef.current = null;
-      setRecentSessionsSupportStatus('unknown');
+      if (rendezvous) setRecentSessionsSupportStatus('unknown');
     }
-  }, [activeRoomId, hostPeerId]);
+  }, [activeRoomId, hostPeerId, rendezvous]);
 
   useEffect(() => {
-    if (!activeRoomId || activeRoomId === hostPeerId || status !== 'open') {
+    if (!activeRoomId || status !== 'open' || (rendezvous && activeRoomId === hostPeerId)) {
       setRecentSessionsSupportStatus('unknown');
     }
-  }, [activeRoomId, hostPeerId, status]);
+  }, [activeRoomId, hostPeerId, rendezvous, status]);
 
   useEffect(() => {
-    if (!rendezvous || !hostPeerId) return;
-    if (!activeRoomId || activeRoomId === hostPeerId) return;
+    if (!hostPeerId || !activeRoomId) return;
+    if (rendezvous && activeRoomId === hostPeerId) return;
     if (status !== 'open') return;
     if (recentSessionsSupportStatus !== 'probing') return;
 

@@ -101,8 +101,19 @@ disable that provider instead of falling back to global provider mutation.
   serve this from `/voice/index.html`.
 - `/voice` — clean public handoff URL used in generated links; static hosts
   resolve it to `/voice/`.
+- `/dashboard#host=H` — canonical host-scoped dashboard URL for daemon output
+  and home-screen install. Users should add this page to the home screen; the
+  manifest intentionally omits a static `start_url` so installed launches
+  preserve the chosen dashboard URL/hash. It connects to the daemon rendezvous
+  room, requests recent OpenClaw sessions, and sends `rendezvous.join` only
+  after the user selects a session.
+- `/dashboard/` with no `host` can recover the last dashboard host remembered
+  by the browser. Without a saved host, it shows the missing/bad-session state.
+- `/voice#host=H` host-only entries are accepted as dashboard-compatible links
+  for startup/connectivity flows. Root `/?host=H` is not a supported app
+  entrypoint because `/` is marketing-only.
 
-Required handoff args (accepted from hash fragment, then query string):
+Required voice handoff args (accepted from hash fragment, then query string):
 
 - `host` — daemon rendezvous/control room id.
 - `session` — OpenClaw session id/key, passed later to

@@ -1,4 +1,4 @@
-// Parse handoff parameters from a `/voice` URL. Hash fragments are
+// Parse handoff parameters from Clawkie-Talkie app URLs. Hash fragments are
 // preferred so identifiers (host, session, routing metadata) are not transmitted to web
 // servers; query params are accepted for compatibility. If a key is
 // present in both, the hash wins.
@@ -12,24 +12,39 @@ export interface HandoffRoute {
   accountId?: string;
 }
 
-export function parseHandoffUrl(raw: string): HandoffRoute | null {
+export interface HostDashboardRoute {
+  hostPeerId: string;
+}
+
+function parseAppUrl(raw: string): { pathname: string; query: URLSearchParams; hash: URLSearchParams } | null {
   let url: URL;
   try {
     url = new URL(raw, 'https://clawkietalkie.app');
   } catch {
     return null;
   }
-  const query = url.searchParams;
-  const hashText = url.hash.startsWith('#') ? url.hash.slice(1) : url.hash;
-  const hash = new URLSearchParams(hashText);
 
-  const get = (key: string) => hash.get(key) || query.get(key) || '';
-  const hostPeerId = get('host').trim();
-  const sessionId = get('session').trim();
-  const sessionKey = get('sessionKey').trim();
-  const channel = get('channel').trim();
-  const target = get('target').trim();
-  const accountId = get('accountId').trim() || get('account').trim();
+  const hashText = url.hash.startsWith('#') ? url.hash.slice(1) : url.hash;
+  return { pathname: url.pathname, query: url.searchParams, hash: new URLSearchParams(hashText) };
+}
+
+function readParam(parsed: { query: URLSearchParams; hash: URLSearchParams }, key: string): string {
+  return parsed.hash.get(key) || parsed.query.get(key) || '';
+}
+
+export function parseHandoffUrl(raw: string): HandoffRoute | null {
+  const parsed = parseAppUrl(raw);
+  if (!parsed) return null;
+
+  const pathname = parsed.pathname.replace(/\/$/, '') || '/';
+  if (pathname !== '/voice') return null;
+
+  const hostPeerId = readParam(parsed, 'host').trim();
+  const sessionId = readParam(parsed, 'session').trim();
+  const sessionKey = readParam(parsed, 'sessionKey').trim();
+  const channel = readParam(parsed, 'channel').trim();
+  const target = readParam(parsed, 'target').trim();
+  const accountId = readParam(parsed, 'accountId').trim() || readParam(parsed, 'account').trim();
 
   if (!hostPeerId || !sessionId) return null;
 
@@ -41,6 +56,30 @@ export function parseHandoffUrl(raw: string): HandoffRoute | null {
     ...(target ? { target } : {}),
     ...(accountId ? { accountId } : {}),
   };
+}
+
+export function parseHostDashboardUrl(raw: string): HostDashboardRoute | null {
+  const parsed = parseAppUrl(raw);
+  if (!parsed) return null;
+  const pathname = parsed.pathname.replace(/\/$/, '') || '/';
+  if (pathname !== '/dashboard' && pathname !== '/voice') return null;
+
+  const hostPeerId = readParam(parsed, 'host').trim();
+  const sessionId = readParam(parsed, 'session').trim();
+  if (!hostPeerId || sessionId) return null;
+
+  return { hostPeerId };
+}
+
+export function formatHandoffHash(handoff: HandoffRoute): string {
+  const params = new URLSearchParams();
+  params.set('host', handoff.hostPeerId);
+  params.set('session', handoff.sessionId);
+  if (handoff.sessionKey) params.set('sessionKey', handoff.sessionKey);
+  if (handoff.channel) params.set('channel', handoff.channel);
+  if (handoff.target) params.set('target', handoff.target);
+  if (handoff.accountId) params.set('accountId', handoff.accountId);
+  return `#${params.toString()}`;
 }
 
 export function parseHandoffFromLocation(location: { search: string; hash: string }): HandoffRoute | null {
