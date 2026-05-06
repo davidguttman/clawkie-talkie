@@ -2,7 +2,6 @@
   "name": "Clawkie-Talkie",
   "short_name": "Clawkie",
   "description": "Push-to-talk voice for thinking out loud into your OpenClaw session.",
-  "start_url": "/voice/",
   "scope": "/",
   "display": "standalone",
   "background_color": "#0a0a0b",

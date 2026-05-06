@@ -88,7 +88,6 @@ describe('PWA metadata and assets', () => {
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
       name: string;
       short_name: string;
-      start_url: string;
       scope: string;
       display: string;
       background_color: string;
@@ -99,12 +98,15 @@ describe('PWA metadata and assets', () => {
     expect(manifest).toMatchObject({
       name: 'Clawkie-Talkie',
       short_name: 'Clawkie',
-      start_url: '/voice/',
       scope: '/',
       display: 'standalone',
       background_color: '#0a0a0b',
       theme_color: '#0a0a0b',
     });
+
+    // Do not set a static start_url: installed-app launch should default to
+    // the current install document URL so /voice/#handoff hashes are preserved.
+    expect(manifest).not.toHaveProperty('start_url');
 
     expect(manifest.icons.map((icon) => icon.sizes)).toEqual(expect.arrayContaining(
       manifestIconSizes.map((size) => `${size}x${size}`),
