@@ -13,3 +13,10 @@
 - Do not run manual Docker commands.
 - Do not run or kill Node servers unless David explicitly asks.
 - Do not push unless David explicitly asks.
+
+## Compatibility invariant
+
+- The hosted browser client can update before a user's installed local daemon. Treat **new client + old daemon** as the primary compatibility direction.
+- Client changes must gracefully degrade when daemon-side protocol messages, fields, or capabilities are missing.
+- New daemon protocol additions should be additive/optional whenever possible; do not require a coordinated client+daemon upgrade for core voice flow.
+- When changing rendezvous, reconnect, session-list, STT, TTS, or playback protocol behavior, add or update tests that prove a newer client still works against an older daemon shape.
