@@ -56,6 +56,54 @@ describe('recent OpenClaw session parsing', () => {
     });
   });
 
+  it('resolves display labels concurrently while preserving sorted session order', async () => {
+    const rows = [
+      {
+        key: 'agent:main:discord:channel:first',
+        sessionId: 'first-session',
+        updatedAt: '2026-05-05T19:03:00.000Z',
+      },
+      {
+        key: 'agent:main:discord:channel:second',
+        sessionId: 'second-session',
+        updatedAt: '2026-05-05T19:02:00.000Z',
+      },
+      {
+        key: 'agent:main:discord:channel:third',
+        sessionId: 'third-session',
+        updatedAt: '2026-05-05T19:01:00.000Z',
+      },
+    ];
+    const resolvers: Array<(value: string) => void> = [];
+    const calls: string[] = [];
+
+    const pending = buildRecentSessionsFromRows(rows, {
+      generatedAt: 'now',
+      resolveDisplayLabel: (session) => {
+        calls.push(session.sessionId);
+        return new Promise<string>((resolve) => {
+          resolvers.push(resolve);
+        });
+      },
+    });
+
+    await Promise.resolve();
+    expect(calls).toEqual(['first-session', 'second-session', 'third-session']);
+    expect(resolvers).toHaveLength(3);
+
+    resolvers[2]('Third label');
+    resolvers[0]('First label');
+    resolvers[1]('Second label');
+
+    await expect(pending).resolves.toMatchObject({
+      sessions: [
+        { sessionId: 'first-session', displayLabel: 'First label' },
+        { sessionId: 'second-session', displayLabel: 'Second label' },
+        { sessionId: 'third-session', displayLabel: 'Third label' },
+      ],
+    });
+  });
+
   it('runs OpenClaw session and Discord label lookups with argv, not shell strings', async () => {
     const dangerousTarget = 'channel:abc$(touch /tmp/clawkie-pwned)"; echo owned #';
     childProcessMocks.execFile.mockImplementation((

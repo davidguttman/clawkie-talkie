@@ -109,11 +109,12 @@ export async function buildRecentSessionsFromRows(
     .sort((a, b) => compareLastActivityDesc(a.lastActivity, b.lastActivity))
     .slice(0, limit);
 
-  const sessions: RecentSession[] = [];
-  for (const session of parsed) {
-    const displayLabel = (await options.resolveDisplayLabel?.(session))?.trim() || session.displayLabel;
-    sessions.push({ ...session, displayLabel });
-  }
+  const sessions = await Promise.all(
+    parsed.map(async (session) => {
+      const displayLabel = (await options.resolveDisplayLabel?.(session))?.trim() || session.displayLabel;
+      return { ...session, displayLabel };
+    }),
+  );
 
   return {
     generatedAt: options.generatedAt ?? new Date().toISOString(),
