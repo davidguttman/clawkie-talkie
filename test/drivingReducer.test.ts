@@ -37,6 +37,27 @@ describe('idle', () => {
     expect(side).toEqual([{ kind: 'startMic' }]);
   });
 
+  it('buffered tts.start without text enters ai so playback can be silenced', () => {
+    const started = reduce(idle, { type: 'tts.start' });
+
+    expect(started.next.state).toBe('ai');
+    expect(started.next.lastReplyText).toBe('');
+    expect(started.next.liveReplyText).toBe('');
+    expect(started.side).toEqual([]);
+
+    const silenced = reduce(started.next, { type: 'silence' });
+    expect(silenced.next.state).toBe('idle');
+    expect(silenced.side).toEqual([{ kind: 'stopTts' }]);
+  });
+
+  it('buffered tts.start without text can also be stopped by tap', () => {
+    const started = reduce(idle, { type: 'tts.start' }).next;
+
+    const stopped = reduce(started, { type: 'tap' });
+    expect(stopped.next.state).toBe('idle');
+    expect(stopped.side).toEqual([{ kind: 'stopTts' }]);
+  });
+
   it('ignores unrelated events', () => {
     expect(reduce(idle, { type: 'silence' }).next.state).toBe('idle');
     expect(reduce(idle, { type: 'stt.done', text: 'x' }).next.state).toBe('idle');

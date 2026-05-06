@@ -82,9 +82,14 @@ export function reduce(ctx: DrivingContext, event: DrivingEvent): Reduction {
           side: [{ kind: 'startMic' }],
         };
       }
-      if (event.type === 'tts.start' && event.text) {
+      if (event.type === 'tts.start') {
         return {
-          next: { ...ctx, state: 'ai', lastReplyText: event.text, liveReplyText: event.text, error: null },
+          next: {
+            ...ctx,
+            state: 'ai',
+            ...(event.text ? { lastReplyText: event.text, liveReplyText: event.text } : {}),
+            error: null,
+          },
           side: [],
         };
       }

@@ -282,6 +282,38 @@ describe('driving loop old-daemon compatibility', () => {
     }
   });
 
+  it('shows daemon-buffered reconnect audio as active AI playback even without text', async () => {
+    const ttsModule = await import('../client/src/voice/tts');
+    const playDaemonTts = vi.mocked(ttsModule.playDaemonTts);
+    const stop = vi.fn();
+    playDaemonTts.mockReturnValueOnce({
+      analyser: null,
+      done: new Promise<void>(() => undefined),
+      error: null,
+      stop,
+    });
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      await act(async () => {
+        rendered.rtc.emitControl({ t: 'tts.start', sample_rate: 24000, buffered: true });
+      });
+
+      expect(playDaemonTts).toHaveBeenCalledWith(expect.objectContaining({
+        initialControlMessage: { t: 'tts.start', sample_rate: 24000, buffered: true },
+      }));
+      expect(rendered.loop().state).toBe('ai');
+      expect(rendered.loop().liveText).toBe('');
+
+      await act(async () => {
+        rendered.loop().silence();
+      });
+      expect(rendered.loop().state).toBe('idle');
+      expect(stop).toHaveBeenCalled();
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
 
   it('resets local TTS/UI state when switching sessions without sending remote reply.cancel', async () => {
     const ttsModule = await import('../client/src/voice/tts');
