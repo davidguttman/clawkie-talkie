@@ -1,6 +1,6 @@
 {
   "name": "Clawkie-Talkie",
-  "short_name": "Clawkie",
+  "short_name": "Clawkie-Talkie",
   "description": "Push-to-talk voice for thinking out loud into your OpenClaw session.",
   "scope": "/",
   "display": "standalone",

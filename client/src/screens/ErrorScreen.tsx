@@ -67,7 +67,7 @@ const ERRORS: Record<ErrorKind, ErrorDef> = {
     tone: 'blocked',
     pill: 'SESSION UNAVAILABLE',
     glyph: '⚠',
-    headline: 'Clawkie can’t join this session',
+    headline: 'Clawkie-Talkie can’t join this session',
     body: 'The handoff details are missing or unavailable. Go back to your chat and open the voice link again.',
     primaryLabel: 'GOT IT',
     primaryAction: 'dismiss',

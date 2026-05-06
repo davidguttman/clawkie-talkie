@@ -17,6 +17,11 @@ describe('Dashboard session discovery state guards', () => {
     expect(source).toContain("? 'Session discovery is unavailable for this daemon.'");
   });
 
+  it('uses the full product name in the dashboard label', () => {
+    expect(source).toContain('CLAWKIE-TALKIE DASHBOARD');
+    expect(source).not.toContain('CLAWKIE DASHBOARD');
+  });
+
   it('uses a slower startup timeout for the host dashboard refresh notice', () => {
     expect(source).toContain('const DASHBOARD_REFRESH_TIMEOUT_MS = 12_000;');
     expect(source).not.toContain('const DASHBOARD_REFRESH_TIMEOUT_MS = 3500;');

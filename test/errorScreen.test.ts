@@ -12,7 +12,7 @@ describe('ErrorScreen bad session copy', () => {
     );
 
     expect(source).toContain("pill: 'SESSION UNAVAILABLE'");
-    expect(source).toContain("headline: 'Clawkie can’t join this session'");
+    expect(source).toContain("headline: 'Clawkie-Talkie can’t join this session'");
     expect(source).toContain(
       "body: 'The handoff details are missing or unavailable. Go back to your chat and open the voice link again.'",
     );

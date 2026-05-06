@@ -97,7 +97,7 @@ export function DashboardScreen({
               color: HIFI.ink2,
             }}
           >
-            CLAWKIE DASHBOARD
+            CLAWKIE-TALKIE DASHBOARD
           </div>
           <h1
             style={{

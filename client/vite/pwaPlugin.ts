@@ -34,7 +34,7 @@ export function renderPwaHeadHtml(): string {
     renderTag('meta', { name: 'mobile-web-app-capable', content: 'yes' }),
     renderTag('meta', { name: 'apple-mobile-web-app-capable', content: 'yes' }),
     renderTag('meta', { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' }),
-    renderTag('meta', { name: 'apple-mobile-web-app-title', content: 'Clawkie' }),
+    renderTag('meta', { name: 'apple-mobile-web-app-title', content: 'Clawkie-Talkie' }),
     renderTag('meta', { name: 'application-name', content: 'Clawkie-Talkie' }),
     renderTag('meta', { name: 'format-detection', content: 'telephone=no' }),
     renderTag('link', { rel: 'manifest', href: '/manifest.json' }),

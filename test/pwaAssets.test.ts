@@ -83,7 +83,7 @@ function loadServiceWorkerHelpers(): ServiceWorkerHelpers {
 }
 
 describe('PWA metadata and assets', () => {
-  it('defines an installable Clawkie manifest with regular and maskable icons', () => {
+  it('defines an installable Clawkie-Talkie manifest with regular and maskable icons', () => {
     const manifestPath = resolve(publicDir, 'manifest.json');
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
       name: string;
@@ -97,7 +97,7 @@ describe('PWA metadata and assets', () => {
 
     expect(manifest).toMatchObject({
       name: 'Clawkie-Talkie',
-      short_name: 'Clawkie',
+      short_name: 'Clawkie-Talkie',
       scope: '/',
       display: 'standalone',
       background_color: '#0a0a0b',
@@ -121,7 +121,7 @@ describe('PWA metadata and assets', () => {
     }
   });
 
-  it('ships generated Clawkie icon and Apple splash PNG assets at the linked sizes', () => {
+  it('ships generated Clawkie-Talkie icon and Apple splash PNG assets at the linked sizes', () => {
     expect(existsSync(splashSourcePath), splashSourcePath).toBe(true);
     expect(readPngSize(splashSourcePath)).toEqual({ width: 926, height: 1698 });
 
@@ -163,7 +163,7 @@ describe('PWA metadata and assets', () => {
     expect(document.querySelector('link[rel="manifest"]')?.getAttribute('href')).toBe('/manifest.json');
     expect(document.querySelector('meta[name="mobile-web-app-capable"]')?.getAttribute('content')).toBe('yes');
     expect(document.querySelector('meta[name="apple-mobile-web-app-capable"]')?.getAttribute('content')).toBe('yes');
-    expect(document.querySelector('meta[name="apple-mobile-web-app-title"]')?.getAttribute('content')).toBe('Clawkie');
+    expect(document.querySelector('meta[name="apple-mobile-web-app-title"]')?.getAttribute('content')).toBe('Clawkie-Talkie');
     expect(document.querySelector('link[rel="apple-touch-icon"]')?.getAttribute('href')).toBe('/icons/apple-touch-icon.png');
     expect(document.querySelector('link[rel="icon"][sizes="192x192"]')?.getAttribute('href')).toBe('/icons/icon-192x192.png');
 
