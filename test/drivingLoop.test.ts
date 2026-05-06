@@ -177,6 +177,136 @@ describe('driving loop visualizer frame rendering', () => {
   });
 });
 
+
+describe('driving loop session snapshot reconnect hydration', () => {
+  it('builds an authoritative completed hydration even when missed events are present', async () => {
+    const { sessionSnapshotReplayPlanFromControlMessage } = await import('../client/src/voice/drivingLoop');
+
+    const plan = sessionSnapshotReplayPlanFromControlMessage({
+      t: 'session.snapshot',
+      snapshot: {
+        phase: 'completed',
+        lastUserText: 'What should I do?',
+        lastReplyText: 'Pull over safely.',
+      },
+      events: [
+        { t: 'reply.done', text: 'Pull over safely.' },
+        { t: 'tts.start', sample_rate: 24000 },
+        { t: 'tts.done' },
+      ],
+    });
+
+    expect(plan).toEqual({
+      event: {
+        type: 'session.replay',
+        events: [
+          { type: 'reply.done', text: 'Pull over safely.' },
+          { type: 'tts.start' },
+          { type: 'tts.done' },
+        ],
+        hydration: {
+          context: {
+            state: 'idle',
+            lastUserText: 'What should I do?',
+            lastReplyText: 'Pull over safely.',
+            pendingReplyText: '',
+            liveReplyText: '',
+            error: null,
+          },
+          armTts: false,
+        },
+      },
+      transcript: { active: false, sttDone: false, text: '' },
+    });
+  });
+
+  it('builds reply-ready hydration that can arm TTS for a fresh reconnect', async () => {
+    const { sessionSnapshotReplayPlanFromControlMessage } = await import('../client/src/voice/drivingLoop');
+
+    const plan = sessionSnapshotReplayPlanFromControlMessage({
+      t: 'session.snapshot',
+      snapshot: {
+        phase: 'reply-ready',
+        userText: 'Are you there?',
+        replyText: 'One moment.',
+      },
+      events: [{ t: 'reply.done', text: 'One moment.' }],
+    });
+
+    expect(plan?.event).toEqual({
+      type: 'session.replay',
+      events: [{ type: 'reply.done', text: 'One moment.' }],
+      hydration: {
+        context: {
+          state: 'thinking',
+          lastUserText: 'Are you there?',
+          lastReplyText: '',
+          pendingReplyText: 'One moment.',
+          liveReplyText: '',
+          error: null,
+        },
+        armTts: true,
+      },
+    });
+    expect(plan?.transcript).toEqual({ active: true, sttDone: true, text: 'Are you there?' });
+  });
+
+
+  it('hydrates an in-progress speaking snapshot as the active AI reply', async () => {
+    const { sessionSnapshotReplayPlanFromControlMessage } = await import('../client/src/voice/drivingLoop');
+
+    const plan = sessionSnapshotReplayPlanFromControlMessage({
+      t: 'session.snapshot',
+      snapshot: {
+        phase: 'speaking',
+        userText: 'Say hi',
+        replyText: 'Hi there.',
+      },
+      events: [{ t: 'tts.start', sample_rate: 24000 }],
+    });
+
+    expect(plan?.event.hydration).toEqual({
+      context: {
+        state: 'ai',
+        lastUserText: 'Say hi',
+        lastReplyText: 'Hi there.',
+        pendingReplyText: '',
+        liveReplyText: 'Hi there.',
+        error: null,
+      },
+      armTts: true,
+    });
+    expect(plan?.transcript).toEqual({ active: true, sttDone: true, text: 'Say hi' });
+  });
+
+  it('hydrates an error snapshot back to idle with the authoritative error text', async () => {
+    const { sessionSnapshotReplayPlanFromControlMessage } = await import('../client/src/voice/drivingLoop');
+
+    const plan = sessionSnapshotReplayPlanFromControlMessage({
+      t: 'session.snapshot',
+      snapshot: {
+        phase: 'error',
+        userText: 'Try again',
+        error: 'reply_failed',
+      },
+      events: [{ t: 'reply.error', message: 'reply_failed' }],
+    });
+
+    expect(plan?.event.hydration).toEqual({
+      context: {
+        state: 'idle',
+        lastUserText: 'Try again',
+        lastReplyText: '',
+        pendingReplyText: '',
+        liveReplyText: '',
+        error: 'reply_failed',
+      },
+      armTts: false,
+    });
+    expect(plan?.transcript).toEqual({ active: false, sttDone: false, text: '' });
+  });
+});
+
 describe('driving loop transcript finalization', () => {
   it('routes an empty authoritative final to empty_transcript even when a committed partial exists', async () => {
     const { resolveSttDone } = await import('../client/src/voice/drivingLoop');

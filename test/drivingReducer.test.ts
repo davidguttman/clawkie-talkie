@@ -224,6 +224,58 @@ describe('full happy-path sequence', () => {
   });
 });
 
+
+describe('session snapshot replay', () => {
+  it('hydrates a completed reconnect snapshot after missed reply/tts events from a fresh idle reducer', () => {
+    const { next, side } = reduce(idle, {
+      type: 'session.replay',
+      events: [
+        { type: 'reply.done', text: 'Pull over safely.' },
+        { type: 'tts.start' },
+        { type: 'tts.done' },
+      ],
+      hydration: {
+        context: {
+          ...initialContext,
+          state: 'idle',
+          lastUserText: 'What should I do?',
+          lastReplyText: 'Pull over safely.',
+        },
+      },
+    });
+
+    expect(next.state).toBe('idle');
+    expect(next.lastUserText).toBe('What should I do?');
+    expect(next.lastReplyText).toBe('Pull over safely.');
+    expect(next.pendingReplyText).toBe('');
+    expect(next.liveReplyText).toBe('');
+    expect(side).toEqual([]);
+  });
+
+  it('hydrates a reply-ready reconnect snapshot and arms TTS even when replayed events were ignored from idle', () => {
+    const { next, side } = reduce(idle, {
+      type: 'session.replay',
+      events: [{ type: 'reply.done', text: 'One moment.' }],
+      hydration: {
+        context: {
+          ...initialContext,
+          state: 'thinking',
+          lastUserText: 'Are you there?',
+          pendingReplyText: 'One moment.',
+        },
+        armTts: true,
+      },
+    });
+
+    expect(next.state).toBe('thinking');
+    expect(next.lastUserText).toBe('Are you there?');
+    expect(next.pendingReplyText).toBe('One moment.');
+    expect(next.lastReplyText).toBe('');
+    expect(next.liveReplyText).toBe('');
+    expect(side).toEqual([{ kind: 'armTts' }]);
+  });
+});
+
 describe('displayedCaptionText', () => {
   it('keeps the live transcript visible while thinking before final STT arrives', () => {
     expect(displayedCaptionText({ ...initialContext, state: 'thinking' }, 'Okay, how we doing?')).toBe(
