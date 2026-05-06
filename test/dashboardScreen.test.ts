@@ -27,6 +27,13 @@ describe('Dashboard session discovery state guards', () => {
     expect(source).toContain('const DASHBOARD_REFRESH_TIMEOUT_MS = 12_000;');
     expect(source).not.toContain('const DASHBOARD_REFRESH_TIMEOUT_MS = 3500;');
   });
+
+  it('exposes a reconnect control when the dashboard RTC connection can be retried', () => {
+    expect(source).toContain('rtc.canRetryConnection');
+    expect(source).toContain('rtc.retryConnection');
+    expect(source).toContain("{rtc.canRetryConnection ? 'RECONNECT' : waiting ? 'REFRESHING…' : 'REFRESH'}");
+    expect(source).toContain("disabled={!rtc.canRetryConnection && (waiting || rtc.status !== 'open')}");
+  });
 });
 
 

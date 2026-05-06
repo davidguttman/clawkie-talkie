@@ -16,6 +16,8 @@ interface FakeRtcClientInstance {
   close(): void;
   emitStatus(status: RtcStatus, detail?: string): void;
   emitControl(msg: ControlMessage): void;
+  emitBinary(bytes: ArrayBuffer): void;
+  emitRemoteStream(stream: MediaStream): void;
 }
 
 const rtcMock = vi.hoisted(() => ({
@@ -56,6 +58,14 @@ vi.mock('../client/src/rtc/client', () => {
 
     emitControl(msg: ControlMessage): void {
       this.opts.onControlMessage?.(msg);
+    }
+
+    emitBinary(bytes: ArrayBuffer): void {
+      this.opts.onBinaryMessage?.(bytes);
+    }
+
+    emitRemoteStream(stream: MediaStream): void {
+      this.opts.onRemoteStream?.(stream);
     }
   }
 
@@ -896,6 +906,172 @@ describe('RtcProvider recent session picker sync', () => {
         settings: initialSettings,
       },
     ]);
+  });
+});
+
+describe('RtcProvider connection retry', () => {
+  it('exposes a manual retry API that recreates a failed dashboard connection immediately', async () => {
+    const rendered = await renderRtcProvider({ rendezvous: null, voiceSettings: null });
+    const failedClient = rtcMock.instances[0];
+
+    await act(async () => {
+      failedClient.emitStatus('open');
+    });
+    expect(sentOf(failedClient, 'sessions.list.subscribe')).toEqual([{ t: 'sessions.list.subscribe' }]);
+    expect(sentOf(failedClient, 'sessions.catalog.request')).toEqual([{ t: 'sessions.catalog.request' }]);
+
+    await act(async () => {
+      failedClient.emitStatus('error', 'signal:network down');
+    });
+
+    expect(rendered.context().canRetryConnection).toBe(true);
+    expect(rendered.context().detail).toBe('signal:network down');
+
+    await act(async () => {
+      rendered.context().retryConnection();
+    });
+
+    expect(failedClient.closed).toBe(true);
+    expect(rtcMock.instances).toHaveLength(2);
+    const retryClient = rtcMock.instances[1];
+    expect(retryClient.hostPeerId).toBe('host-1');
+    expect(retryClient.connected).toBe(true);
+    expect(rendered.context().detail).toBeUndefined();
+
+    await act(async () => {
+      retryClient.emitStatus('open');
+    });
+    expect(sentOf(retryClient, 'sessions.list.subscribe')).toEqual([{ t: 'sessions.list.subscribe' }]);
+    expect(sentOf(retryClient, 'sessions.catalog.request')).toEqual([{ t: 'sessions.catalog.request' }]);
+  });
+
+  it('automatically retries connection failures with a bounded backoff instead of a tight loop', async () => {
+    vi.useFakeTimers();
+    await renderRtcProvider({ rendezvous: null, voiceSettings: null });
+    const failedClient = rtcMock.instances[0];
+
+    await act(async () => {
+      failedClient.emitStatus('error', 'signal:offline');
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(999);
+    });
+    expect(rtcMock.instances).toHaveLength(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(failedClient.closed).toBe(true);
+    expect(rtcMock.instances).toHaveLength(2);
+    expect(rtcMock.instances[1].hostPeerId).toBe('host-1');
+  });
+
+  it('resends voice-room catalog, session, and settings messages after a manual retry opens', async () => {
+    const rendered = await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept('voice-room-1');
+
+    await act(async () => {
+      voiceClient.emitStatus('open');
+    });
+    expect(sentOf(voiceClient, 'tts.catalog.request')).toEqual([{ t: 'tts.catalog.request' }]);
+    expect(sentOf(voiceClient, 'stt.catalog.request')).toEqual([{ t: 'stt.catalog.request' }]);
+    expect(sentOf(voiceClient, 'sessions.list.subscribe')).toEqual([{ t: 'sessions.list.subscribe' }]);
+    expect(sentOf(voiceClient, 'sessions.catalog.request')).toEqual([{ t: 'sessions.catalog.request' }]);
+    expect(sentOf(voiceClient, 'settings.update')).toEqual([
+      { t: 'settings.update', settings: initialSettings },
+    ]);
+
+    await act(async () => {
+      voiceClient.emitStatus('error', 'ice:failed');
+    });
+    await act(async () => {
+      rendered.context().retryConnection();
+    });
+
+    expect(voiceClient.closed).toBe(true);
+    expect(rtcMock.instances).toHaveLength(3);
+    const retryVoiceClient = rtcMock.instances[2];
+    expect(retryVoiceClient.hostPeerId).toBe('voice-room-1');
+
+    await act(async () => {
+      retryVoiceClient.emitStatus('open');
+    });
+
+    expect(sentOf(retryVoiceClient, 'tts.catalog.request')).toEqual([{ t: 'tts.catalog.request' }]);
+    expect(sentOf(retryVoiceClient, 'stt.catalog.request')).toEqual([{ t: 'stt.catalog.request' }]);
+    expect(sentOf(retryVoiceClient, 'sessions.list.subscribe')).toEqual([{ t: 'sessions.list.subscribe' }]);
+    expect(sentOf(retryVoiceClient, 'sessions.catalog.request')).toEqual([{ t: 'sessions.catalog.request' }]);
+    expect(sentOf(retryVoiceClient, 'settings.update')).toEqual([
+      { t: 'settings.update', settings: initialSettings },
+    ]);
+  });
+
+  it('does not recreate a healthy open connection when retryConnection is called directly', async () => {
+    const rendered = await renderRtcProvider({ rendezvous: null, voiceSettings: null });
+    const openClient = rtcMock.instances[0];
+
+    await act(async () => {
+      openClient.emitStatus('open');
+    });
+    expect(rendered.context().canRetryConnection).toBe(false);
+
+    await act(async () => {
+      rendered.context().retryConnection();
+    });
+
+    expect(openClient.closed).toBe(false);
+    expect(rtcMock.instances).toHaveLength(1);
+    expect(rendered.context().status).toBe('open');
+  });
+
+  it('ignores stale binary and remote-stream events from a cleaned-up retry client', async () => {
+    const rendered = await renderRtcProvider({ rendezvous: null, voiceSettings: null });
+    const staleClient = rtcMock.instances[0];
+    const seenBinary: ArrayBuffer[] = [];
+    const seenStreams: MediaStream[] = [];
+    const detachBinary = rendered.context().addBinaryListener((bytes) => seenBinary.push(bytes));
+    const detachStream = rendered.context().addRemoteStreamListener((stream) => seenStreams.push(stream));
+
+    await act(async () => {
+      staleClient.emitStatus('error', 'signal:network down');
+    });
+    await act(async () => {
+      rendered.context().retryConnection();
+    });
+
+    expect(staleClient.closed).toBe(true);
+    await act(async () => {
+      staleClient.emitBinary(new Uint8Array([1, 2, 3]).buffer);
+      staleClient.emitRemoteStream({ id: 'stale-stream' } as unknown as MediaStream);
+    });
+
+    expect(seenBinary).toEqual([]);
+    expect(seenStreams).toEqual([]);
+
+    detachBinary();
+    detachStream();
+  });
+
+  it('does not retry replaced sessions automatically or manually', async () => {
+    vi.useFakeTimers();
+    const rendered = await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+
+    await act(async () => {
+      voiceClient.emitControl({ t: 'session.replaced' });
+    });
+
+    expect(rendered.context().status).toBe('closed');
+    expect(rendered.context().detail).toBe('session_replaced');
+    expect(rendered.context().canRetryConnection).toBe(false);
+
+    await act(async () => {
+      rendered.context().retryConnection();
+      vi.advanceTimersByTime(60_000);
+    });
+
+    expect(rtcMock.instances).toHaveLength(2);
   });
 });
 

@@ -341,6 +341,8 @@ export function DrivingScreen({
           daemonConnected={daemonConnected}
           hasRtcClient={rtc.hasClient}
           rtcStatus={rtc.status}
+          canRetryConnection={rtc.canRetryConnection}
+          onRetryConnection={rtc.retryConnection}
           compact={compact}
         />
       </div>
@@ -925,6 +927,8 @@ function Caption({
   daemonConnected,
   hasRtcClient,
   rtcStatus,
+  canRetryConnection,
+  onRetryConnection,
   compact = false,
 }: {
   caption: CaptionData;
@@ -933,6 +937,8 @@ function Caption({
   daemonConnected: boolean;
   hasRtcClient: boolean;
   rtcStatus: string;
+  canRetryConnection: boolean;
+  onRetryConnection: () => void;
   compact?: boolean;
 }) {
   // Everything (STT, chat, TTS) terminates on the daemon. Surface the
@@ -1012,21 +1018,53 @@ function Caption({
         <div
           style={{
             marginTop: 10,
-            fontFamily: HIFI.fonts.mono,
-            fontSize: 10,
-            letterSpacing: 1,
-            color: '#ef6155',
-            fontWeight: 600,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
             minWidth: 0,
             maxWidth: '100%',
-            maxHeight: compact ? 32 : 36,
-            overflow: 'hidden',
-            overflowWrap: 'anywhere',
-            wordBreak: 'break-word',
             flexShrink: 0,
           }}
         >
-          {errorMessage}
+          <div
+            style={{
+              fontFamily: HIFI.fonts.mono,
+              fontSize: 10,
+              letterSpacing: 1,
+              color: '#ef6155',
+              fontWeight: 600,
+              minWidth: 0,
+              maxWidth: '100%',
+              maxHeight: compact ? 32 : 36,
+              overflow: 'hidden',
+              overflowWrap: 'anywhere',
+              wordBreak: 'break-word',
+              flex: '1 1 auto',
+            }}
+          >
+            {errorMessage}
+          </div>
+          {canRetryConnection && onRetryConnection && (
+            <button
+              type="button"
+              onClick={onRetryConnection}
+              style={{
+                border: `1px solid ${HIFI.accents.red.rec}66`,
+                borderRadius: 999,
+                background: `${HIFI.accents.red.rec}14`,
+                color: HIFI.accents.red.rec,
+                cursor: 'pointer',
+                fontFamily: HIFI.fonts.mono,
+                fontSize: 10,
+                fontWeight: 800,
+                letterSpacing: 1,
+                padding: compact ? '6px 8px' : '7px 10px',
+                flexShrink: 0,
+              }}
+            >
+              RECONNECT
+            </button>
+          )}
         </div>
       )}
     </div>

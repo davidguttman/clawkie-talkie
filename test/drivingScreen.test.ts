@@ -97,6 +97,17 @@ describe('DrivingScreen caption display', () => {
   });
 });
 
+describe('DrivingScreen connection retry control', () => {
+  it('passes the RTC retry API into the caption and renders a Reconnect button for PWA users', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    expect(source).toContain('canRetryConnection={rtc.canRetryConnection}');
+    expect(source).toContain('onRetryConnection={rtc.retryConnection}');
+    expect(source).toContain('canRetryConnection && onRetryConnection');
+    expect(source).toContain('RECONNECT');
+  });
+});
+
 describe('DrivingScreen voice error labels', () => {
   it('surfaces infer STT, infer TTS, and reply auth failures with distinct labels', () => {
     const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');

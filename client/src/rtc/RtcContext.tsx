@@ -18,6 +18,7 @@ import { phoneToDaemon, type DeliveryTarget, type RecentSession, type RecentSess
 export type RecentSessionsSupportStatus = 'unknown' | 'probing' | 'supported' | 'unsupported';
 
 const RECENT_SESSIONS_SUPPORT_TIMEOUT_MS = 12_000;
+const RTC_RETRY_BACKOFF_MS = [1_000, 2_500, 5_000, 10_000, 15_000] as const;
 
 export interface RtcContextValue {
   status: RtcStatus;
@@ -39,6 +40,8 @@ export interface RtcContextValue {
   recentSessionsResponseSeq: number;
   recentSessionsSupportStatus: RecentSessionsSupportStatus;
   requestRecentSessions: () => void;
+  retryConnection: () => void;
+  canRetryConnection: boolean;
   hasClient: boolean;
 }
 
@@ -61,6 +64,8 @@ const Ctx = createContext<RtcContextValue>({
   recentSessionsResponseSeq: 0,
   recentSessionsSupportStatus: 'unknown',
   requestRecentSessions: noop,
+  retryConnection: noop,
+  canRetryConnection: false,
   hasClient: false,
 });
 
@@ -95,6 +100,15 @@ function trimmedString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed || undefined;
+}
+
+function isRetryableConnectionState(status: RtcStatus, detail: string | undefined, activeRoomId: string | undefined): boolean {
+  return !!activeRoomId && detail !== 'session_replaced' && (status === 'error' || status === 'closed');
+}
+
+function retryBackoffMs(attempt: number): number {
+  const index = Math.max(0, Math.min(attempt, RTC_RETRY_BACKOFF_MS.length - 1));
+  return RTC_RETRY_BACKOFF_MS[index];
 }
 
 function voiceSelectionKey(voiceSettings?: VoiceSettings | null): string | null {
@@ -141,6 +155,8 @@ export function RtcProvider({
   const [recentSessionsResponseSeq, setRecentSessionsResponseSeq] = useState(0);
   const [recentSessionsSupportStatus, setRecentSessionsSupportStatus] =
     useState<RecentSessionsSupportStatus>('unknown');
+  const [retrySeq, setRetrySeq] = useState(0);
+  const [autoRetryAttempt, setAutoRetryAttempt] = useState(0);
   // The active room flips from the rendezvous host to the
   // deterministic per-session voice room after `rendezvous.accept`
   // arrives. Each flip re-creates the underlying RtcClient.
@@ -157,6 +173,7 @@ export function RtcProvider({
     setActiveRoomId(hostPeerId);
     setRecentSessionsSupportStatus('unknown');
     setRecentSessionsSnapshot({ generatedAt: '', sessions: [] });
+    setAutoRetryAttempt(0);
   }, [hostPeerId]);
 
   const clientRef = useRef<RtcClient | null>(null);
@@ -170,15 +187,25 @@ export function RtcProvider({
   const remoteStreamListenersRef = useRef<Set<(stream: MediaStream) => void>>(new Set());
   const remoteStreamRef = useRef<MediaStream | null>(null);
 
+  const resetRetryConnectionRefs = useCallback(() => {
+    lastSentVoiceRef.current = null;
+    catalogRequestedRoomRef.current = null;
+    sessionsSubscribedRoomRef.current = null;
+  }, []);
+
   useEffect(() => {
     if (!activeRoomId) return;
 
+    let active = true;
     let client: RtcClient;
     const deliverControlMessage = (msg: ControlMessage) => {
+      if (!active) return;
       if (msg.t === 'session.replaced') {
         setDetail('session_replaced');
         setStatus('closed');
-        setTimeout(() => client.close(), 0);
+        setTimeout(() => {
+          if (active) client.close();
+        }, 0);
       }
       if (msg.t === 'tts.catalog' && msg.catalog && typeof msg.catalog === 'object') {
         setTtsCatalog(msg.catalog as TtsCatalog);
@@ -213,6 +240,7 @@ export function RtcProvider({
     client = new RtcClient({
       hostPeerId: activeRoomId,
       onStatusChange: (s, d) => {
+        if (!active) return;
         setStatus(s);
         setDetail((prev) => d ?? (prev === 'session_replaced' ? prev : undefined));
       },
@@ -234,9 +262,11 @@ export function RtcProvider({
         deliverControlMessage(msg);
       },
       onBinaryMessage: (bytes) => {
+        if (!active) return;
         for (const fn of binaryListenersRef.current) fn(bytes);
       },
       onRemoteStream: (stream) => {
+        if (!active) return;
         remoteStreamRef.current = stream;
         // Attach to the hidden audio element immediately so playback
         // can start the moment the daemon's first audio frame arrives.
@@ -250,12 +280,13 @@ export function RtcProvider({
     client.connect();
 
     return () => {
+      active = false;
       client.close();
       clientRef.current = null;
       if (remoteStreamRef.current) detachDaemonRemoteStream(remoteStreamRef.current);
       remoteStreamRef.current = null;
     };
-  }, [activeRoomId]);
+  }, [activeRoomId, retrySeq]);
 
   useEffect(() => {
     if (previousRendezvousKeyRef.current !== rendezvousKey) {
@@ -266,10 +297,39 @@ export function RtcProvider({
       sessionsSubscribedRoomRef.current = null;
       setRecentSessionsSupportStatus('unknown');
       setDetail(undefined);
+      setAutoRetryAttempt(0);
       if (activeRoomId !== hostPeerId) setStatus('idle');
       setActiveRoomId(hostPeerId);
     }
   }, [rendezvousKey, hostPeerId, activeRoomId]);
+
+  const canRetryConnection = isRetryableConnectionState(status, detail, activeRoomId);
+
+  const retryConnection = useCallback(() => {
+    if (!isRetryableConnectionState(status, detail, activeRoomId)) return;
+    setAutoRetryAttempt(0);
+    setDetail(undefined);
+    setStatus('idle');
+    resetRetryConnectionRefs();
+    setRetrySeq((seq) => seq + 1);
+  }, [activeRoomId, detail, resetRetryConnectionRefs, status]);
+
+  useEffect(() => {
+    if (status === 'open') setAutoRetryAttempt(0);
+  }, [status]);
+
+  useEffect(() => {
+    if (!canRetryConnection) return;
+    const timeout = setTimeout(() => {
+      setAutoRetryAttempt((attempt) => Math.min(attempt + 1, RTC_RETRY_BACKOFF_MS.length - 1));
+      setDetail(undefined);
+      setStatus('idle');
+      resetRetryConnectionRefs();
+      setRetrySeq((seq) => seq + 1);
+    }, retryBackoffMs(autoRetryAttempt));
+
+    return () => clearTimeout(timeout);
+  }, [autoRetryAttempt, canRetryConnection, resetRetryConnectionRefs]);
 
   // Rendezvous orchestration: when we are still on the rendezvous
   // (host) room and the data channel comes up, send rendezvous.join
@@ -407,6 +467,7 @@ export function RtcProvider({
       }
       if (msg.t === 'rendezvous.error') {
         setDetail(typeof msg.message === 'string' ? msg.message : 'rendezvous_error');
+        setStatus('error');
       }
     };
     controlListenersRef.current.add(off);
@@ -469,6 +530,8 @@ export function RtcProvider({
       recentSessionsResponseSeq,
       recentSessionsSupportStatus,
       requestRecentSessions,
+      retryConnection,
+      canRetryConnection,
       hasClient: !!hostPeerId,
     }),
     [
@@ -487,6 +550,8 @@ export function RtcProvider({
       recentSessionsResponseSeq,
       recentSessionsSupportStatus,
       requestRecentSessions,
+      retryConnection,
+      canRetryConnection,
       hostPeerId,
     ],
   );

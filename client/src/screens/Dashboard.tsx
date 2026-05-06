@@ -148,14 +148,20 @@ export function DashboardScreen({
           <StatusPill status={rtc.status} label={connectionLabel} />
           <button
             type="button"
-            onClick={() => requestSessions(rtc.recentSessionsGeneratedAt ? 'refreshing' : 'loading')}
-            disabled={waiting || rtc.status !== 'open'}
+            onClick={() => {
+              if (rtc.canRetryConnection) {
+                rtc.retryConnection();
+                return;
+              }
+              requestSessions(rtc.recentSessionsGeneratedAt ? 'refreshing' : 'loading');
+            }}
+            disabled={!rtc.canRetryConnection && (waiting || rtc.status !== 'open')}
             style={{
               border: `1px solid ${HIFI.stroke}`,
               borderRadius: 999,
-              background: waiting ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.06)',
-              color: waiting || rtc.status !== 'open' ? HIFI.ink3 : HIFI.ink,
-              cursor: waiting || rtc.status !== 'open' ? 'default' : 'pointer',
+              background: waiting && !rtc.canRetryConnection ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.06)',
+              color: !rtc.canRetryConnection && (waiting || rtc.status !== 'open') ? HIFI.ink3 : HIFI.ink,
+              cursor: !rtc.canRetryConnection && (waiting || rtc.status !== 'open') ? 'default' : 'pointer',
               fontFamily: HIFI.fonts.mono,
               fontSize: 10,
               fontWeight: 800,
@@ -163,7 +169,7 @@ export function DashboardScreen({
               padding: '7px 10px',
             }}
           >
-            {waiting ? 'REFRESHING…' : 'REFRESH'}
+            {rtc.canRetryConnection ? 'RECONNECT' : waiting ? 'REFRESHING…' : 'REFRESH'}
           </button>
         </div>
         <div
