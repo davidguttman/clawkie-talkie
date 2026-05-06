@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { formatRelativeActivity } from '../client/src/screens/Dashboard';
 
 const source = readFileSync(new URL('../client/src/screens/Dashboard.tsx', import.meta.url), 'utf8');
 
@@ -25,5 +26,28 @@ describe('Dashboard session discovery state guards', () => {
   it('uses a slower startup timeout for the host dashboard refresh notice', () => {
     expect(source).toContain('const DASHBOARD_REFRESH_TIMEOUT_MS = 12_000;');
     expect(source).not.toContain('const DASHBOARD_REFRESH_TIMEOUT_MS = 3500;');
+  });
+});
+
+
+describe('Dashboard recent session row labels', () => {
+  it('orders the session info bar as agent, channel, relative time', () => {
+    const agentIndex = source.indexOf("<span>{session.agent || 'unknown'}</span>");
+    const channelIndex = source.indexOf("{session.channel && <span>{session.channel}</span>}");
+    const timeIndex = source.indexOf("{session.lastActivity && <span>{formatRelativeActivity(session.lastActivity)}</span>}");
+
+    expect(agentIndex).toBeGreaterThanOrEqual(0);
+    expect(channelIndex).toBeGreaterThan(agentIndex);
+    expect(timeIndex).toBeGreaterThan(channelIndex);
+    expect(source).not.toContain('formatActivity(session.lastActivity)');
+  });
+
+  it('formats row activity as short relative time only', () => {
+    const now = Date.parse('2026-05-06T17:31:00.000Z');
+
+    expect(formatRelativeActivity('2026-05-06T17:30:45.000Z', now)).toBe('just now');
+    expect(formatRelativeActivity('2026-05-06T17:26:00.000Z', now)).toBe('5m ago');
+    expect(formatRelativeActivity('2026-05-06T15:31:00.000Z', now)).toBe('2h ago');
+    expect(formatRelativeActivity('2026-05-03T17:31:00.000Z', now)).toBe('3d ago');
   });
 });

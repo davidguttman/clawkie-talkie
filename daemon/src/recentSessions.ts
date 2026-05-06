@@ -169,7 +169,7 @@ function parseOpenClawSessionRow(row: unknown): RecentSession | null {
     target,
     ...(accountId ? { accountId } : {}),
     lastActivity,
-    displayLabel: sessionKey,
+    displayLabel: buildFallbackDisplayLabel(sessionKey),
   };
 }
 
@@ -227,11 +227,13 @@ export function parseOpenClawSessionKey(sessionKey: string): {
   if (!channel) return { ...(agent ? { agent } : {}) };
 
   if (channel === 'discord') {
+    const kind = parts[3];
     const id = parts.at(-1);
+    const targetKind = kind === 'direct' ? 'user' : kind === 'channel' ? 'channel' : kind;
     return {
       ...(agent ? { agent } : {}),
       channel,
-      ...(id ? { target: `channel:${id}` } : {}),
+      ...(targetKind && id && id !== kind ? { target: `${targetKind}:${id}` } : {}),
     };
   }
 
@@ -246,11 +248,32 @@ export function parseOpenClawSessionKey(sessionKey: string): {
 
 async function resolveOpenClawDisplayLabel(session: RecentSession): Promise<string | undefined> {
   if (!session.channel || !session.target) return undefined;
+  if (session.channel === 'discord' && session.target.startsWith('user:')) {
+    return resolveDiscordDirectLabel(session.target);
+  }
   return resolveOpenClawChannelLabel(session.channel, session.target);
 }
 
 export async function resolveDiscordChannelLabel(target: string): Promise<string | undefined> {
   return resolveOpenClawChannelLabel('discord', target);
+}
+
+export async function resolveDiscordDirectLabel(target: string): Promise<string | undefined> {
+  const userId = target.startsWith('user:') ? target.slice('user:'.length).trim() : '';
+  if (!userId) return undefined;
+  const name = await resolveDiscordMemberLabel(userId);
+  return name ? `DM ${name}` : undefined;
+}
+
+async function resolveDiscordMemberLabel(userId: string): Promise<string | undefined> {
+  // Use OpenClaw's message member info lookup for Discord DMs; if a guild is required, fall back silently.
+  const args = ['message', 'member', 'info', '--channel', 'discord', '--user-id', userId, '--json'];
+  try {
+    const stdout = await execOpenClaw(args);
+    return extractDiscordMemberName(stdout);
+  } catch {
+    return undefined;
+  }
 }
 
 export async function resolveOpenClawChannelLabel(channel: string, target: string): Promise<string | undefined> {
@@ -280,6 +303,52 @@ export function extractOpenClawChannelName(stdout: string): string | undefined {
 
 export function extractDiscordChannelName(stdout: string): string | undefined {
   return extractOpenClawChannelName(stdout);
+}
+
+export function extractDiscordMemberName(stdout: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return undefined;
+  }
+
+  const username =
+    readPathString(parsed, ['payload', 'user', 'username']) ??
+    readPathString(parsed, ['payload', 'member', 'user', 'username']) ??
+    readPathString(parsed, ['user', 'username']) ??
+    readPathString(parsed, ['member', 'user', 'username']) ??
+    readPathString(parsed, ['payload', 'username']) ??
+    readPathString(parsed, ['username']);
+  if (username) return username;
+
+  const globalName =
+    readPathString(parsed, ['payload', 'user', 'global_name']) ??
+    readPathString(parsed, ['payload', 'member', 'user', 'global_name']) ??
+    readPathString(parsed, ['user', 'global_name']) ??
+    readPathString(parsed, ['member', 'user', 'global_name']) ??
+    readPathString(parsed, ['payload', 'global_name']) ??
+    readPathString(parsed, ['global_name']);
+  if (globalName) return globalName;
+
+  return (
+    readPathString(parsed, ['payload', 'member', 'nick']) ??
+    readPathString(parsed, ['member', 'nick']) ??
+    readPathString(parsed, ['payload', 'nick']) ??
+    readPathString(parsed, ['nick'])
+  );
+}
+
+export function buildFallbackDisplayLabel(sessionKey: string): string {
+  const parts = sessionKey.split(':').map((part) => part.trim()).filter(Boolean);
+  const visibleParts = parts[0] === 'agent' ? parts.slice(2) : parts;
+  if (visibleParts.length === 0) return sessionKey;
+
+  const [channel, kind, ...rest] = visibleParts;
+  const id = rest.at(-1);
+  if (channel === 'discord' && kind === 'direct' && id) return `DM ${id}`;
+  if (kind && id && id !== kind) return `${kind} ${id}`;
+  return visibleParts.join(' ');
 }
 
 function readPathString(value: unknown, path: string[]): string | undefined {

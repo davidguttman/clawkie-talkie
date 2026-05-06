@@ -312,8 +312,8 @@ function SessionButton({
         }}
       >
         <span>{session.agent || 'unknown'}</span>
-        {session.lastActivity && <span>{formatActivity(session.lastActivity)}</span>}
         {session.channel && <span>{session.channel}</span>}
+        {session.lastActivity && <span>{formatRelativeActivity(session.lastActivity)}</span>}
       </span>
     </button>
   );
@@ -394,8 +394,14 @@ function formatUpdatedAt(generatedAt?: string): string | null {
   return `updated ${new Date(updatedAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}`;
 }
 
-function formatActivity(value: string): string {
+export function formatRelativeActivity(value: string, now = Date.now()): string {
   const ts = Date.parse(value);
   if (!Number.isFinite(ts)) return value;
-  return new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const elapsedMs = Math.max(0, now - ts);
+  const elapsedMinutes = Math.floor(elapsedMs / 60_000);
+  if (elapsedMinutes < 1) return 'just now';
+  if (elapsedMinutes < 60) return `${elapsedMinutes}m ago`;
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 24) return `${elapsedHours}h ago`;
+  return `${Math.floor(elapsedHours / 24)}d ago`;
 }

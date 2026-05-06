@@ -8,12 +8,15 @@ vi.mock('node:child_process', () => ({
   execFile: childProcessMocks.execFile,
 }));
 import {
+  buildFallbackDisplayLabel,
   buildRecentSessionsFromRows,
   createRecentSessionsCache,
   extractDiscordChannelName,
+  extractDiscordMemberName,
   getRecentSessionsWithOpenClaw,
   parseOpenClawSessionKey,
   resolveDiscordChannelLabel,
+  resolveDiscordDirectLabel,
 } from '../daemon/src/recentSessions';
 
 beforeEach(() => {
@@ -54,6 +57,73 @@ describe('recent OpenClaw session parsing', () => {
         },
       ],
     });
+  });
+
+  it('parses Discord direct session keys as user targets with DM fallback labels', async () => {
+    const userId = '367727560869675018';
+    const snapshot = await buildRecentSessionsFromRows(
+      [
+        {
+          key: `agent:spec:discord:direct:${userId}`,
+          sessionId: 'dm-session',
+          updatedAt: '2026-05-05T19:26:00.000Z',
+        },
+      ],
+      { generatedAt: 'now' },
+    );
+
+    expect(snapshot.sessions[0]).toMatchObject({
+      agent: 'spec',
+      channel: 'discord',
+      target: `user:${userId}`,
+      displayLabel: `DM ${userId}`,
+    });
+  });
+
+  it('resolves Discord DM labels through member info username lookup', async () => {
+    childProcessMocks.execFile.mockImplementation((
+      file: string,
+      args: string[],
+      _options: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      if (file !== 'openclaw') throw new Error(`unexpected command: ${file}`);
+      if (args[0] === 'sessions') {
+        callback(
+          null,
+          JSON.stringify({
+            sessions: [
+              {
+                key: 'agent:spec:discord:direct:367727560869675018',
+                sessionId: 'dm-session',
+                updatedAt: '2026-05-05T19:26:00.000Z',
+              },
+            ],
+          }),
+          '',
+        );
+        return {};
+      }
+      if (args[0] === 'message' && args[1] === 'member' && args[2] === 'info') {
+        callback(null, JSON.stringify({ payload: { user: { username: 'foxbarrington' }, member: { nick: 'Fox' } } }), '');
+        return {};
+      }
+      throw new Error(`unexpected args: ${args.join(' ')}`);
+    });
+
+    const snapshot = await getRecentSessionsWithOpenClaw();
+
+    expect(snapshot.sessions[0]).toMatchObject({
+      target: 'user:367727560869675018',
+      displayLabel: 'DM foxbarrington',
+    });
+    expect(childProcessMocks.execFile).toHaveBeenNthCalledWith(
+      2,
+      'openclaw',
+      ['message', 'member', 'info', '--channel', 'discord', '--user-id', '367727560869675018', '--json'],
+      expect.objectContaining({ windowsHide: true }),
+      expect.any(Function),
+    );
   });
 
   it('resolves display labels concurrently while preserving sorted session order', async () => {
@@ -233,7 +303,7 @@ describe('recent OpenClaw session parsing', () => {
     );
   });
 
-  it('falls back to raw session keys when generic label lookup is unavailable or has no target', async () => {
+  it('falls back to prefix-stripped session labels when generic label lookup is unavailable or has no target', async () => {
     childProcessMocks.execFile.mockImplementation((
       file: string,
       args: string[],
@@ -269,8 +339,8 @@ describe('recent OpenClaw session parsing', () => {
     const snapshot = await getRecentSessionsWithOpenClaw();
 
     expect(snapshot.sessions.map((session) => session.displayLabel)).toEqual([
-      'agent:kamaji:unsupported:room:one',
-      'agent:kamaji:webchat',
+      'room one',
+      'webchat',
     ]);
     expect(childProcessMocks.execFile).toHaveBeenCalledTimes(2);
     expect(childProcessMocks.execFile).toHaveBeenNthCalledWith(
@@ -517,13 +587,60 @@ describe('recent OpenClaw session parsing', () => {
     ]);
   });
 
-  it('falls back to the raw session key when label lookup returns empty', async () => {
+  it('falls back to the prefix-stripped session label when label lookup returns empty', async () => {
     const snapshot = await buildRecentSessionsFromRows(
       [{ key: 'agent:main:discord:channel:t1', sessionId: 's1' }],
       { generatedAt: 'now', resolveDisplayLabel: async () => '   ' },
     );
 
-    expect(snapshot.sessions[0].displayLabel).toBe('agent:main:discord:channel:t1');
+    expect(snapshot.sessions[0].displayLabel).toBe('channel t1');
+  });
+
+  it('extracts Discord member usernames before global names and nicknames', () => {
+    expect(
+      extractDiscordMemberName(
+        JSON.stringify({ payload: { user: { username: 'foxbarrington', global_name: 'Fox Global' }, member: { nick: 'Fox Nick' } } }),
+      ),
+    ).toBe('foxbarrington');
+    expect(extractDiscordMemberName(JSON.stringify({ user: { global_name: 'Fox Global' }, member: { nick: 'Fox Nick' } }))).toBe('Fox Global');
+    expect(extractDiscordMemberName(JSON.stringify({ member: { nick: 'Fox Nick' } }))).toBe('Fox Nick');
+  });
+
+  it('resolves direct Discord labels to DM names and gracefully falls back on lookup failure', async () => {
+    childProcessMocks.execFile.mockImplementationOnce((
+      _file: string,
+      _args: string[],
+      _options: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      callback(null, JSON.stringify({ user: { username: 'foxbarrington' } }), '');
+      return {};
+    });
+
+    await expect(resolveDiscordDirectLabel('user:367727560869675018')).resolves.toBe('DM foxbarrington');
+    expect(childProcessMocks.execFile).toHaveBeenCalledWith(
+      'openclaw',
+      ['message', 'member', 'info', '--channel', 'discord', '--user-id', '367727560869675018', '--json'],
+      expect.objectContaining({ windowsHide: true }),
+      expect.any(Function),
+    );
+
+    childProcessMocks.execFile.mockImplementationOnce((
+      _file: string,
+      _args: string[],
+      _options: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      callback(new Error('guild id required'), '', '');
+      return {};
+    });
+    await expect(resolveDiscordDirectLabel('user:367727560869675018')).resolves.toBeUndefined();
+  });
+
+  it('builds prefix-stripped fallback labels for agent session keys', () => {
+    expect(buildFallbackDisplayLabel('agent:spec:discord:direct:367727560869675018')).toBe('DM 367727560869675018');
+    expect(buildFallbackDisplayLabel('agent:kamaji:discord:channel:1501301184101617886')).toBe('channel 1501301184101617886');
+    expect(buildFallbackDisplayLabel('agent:kamaji:webchat:session:web-1')).toBe('session web-1');
   });
 
   it('parses Discord channel-info names from supported JSON shapes', () => {
@@ -537,6 +654,11 @@ describe('recent OpenClaw session parsing', () => {
       agent: 'kamaji',
       channel: 'discord',
       target: 'channel:123',
+    });
+    expect(parseOpenClawSessionKey('agent:spec:discord:direct:367727560869675018')).toEqual({
+      agent: 'spec',
+      channel: 'discord',
+      target: 'user:367727560869675018',
     });
   });
 });
