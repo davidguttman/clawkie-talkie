@@ -100,9 +100,11 @@ export async function buildRecentSessionsFromRows(
   const limit = Math.max(0, Math.min(options.limit ?? DEFAULT_RECENT_SESSIONS_LIMIT, DEFAULT_RECENT_SESSIONS_LIMIT));
   const parsed = rows
     .filter((row) => !isSubagentSessionRow(row))
+    .filter((row) => !isCronSessionRow(row))
     .map(parseOpenClawSessionRow)
     .filter((session): session is RecentSession => !!session)
     .filter((session) => !isSubagentSession(session))
+    .filter((session) => !isCronSession(session))
     .sort((a, b) => compareLastActivityDesc(a.lastActivity, b.lastActivity))
     .slice(0, limit);
 
@@ -169,9 +171,30 @@ function isSubagentSession(session: RecentSession): boolean {
   return hasSubagentSessionKey(session.sessionKey);
 }
 
+function isCronSessionRow(row: unknown): boolean {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return false;
+  const source = row as Record<string, unknown>;
+  const kind = readString(source.kind)?.toLowerCase();
+  const channel = readString(source.channel)?.toLowerCase();
+  if (kind === 'cron' || channel === 'cron') return true;
+  const sessionKey = readString(source.key) ?? readString(source.sessionKey);
+  if (!sessionKey) return false;
+  return hasCronSessionKey(sessionKey);
+}
+
+function isCronSession(session: RecentSession): boolean {
+  if (session.channel === 'cron') return true;
+  return hasCronSessionKey(session.sessionKey);
+}
+
 function hasSubagentSessionKey(sessionKey: string): boolean {
   const parts = sessionKey.split(':').map((part) => part.trim()).filter(Boolean);
   return parts[0] === 'agent' && parts[2] === 'subagent';
+}
+
+function hasCronSessionKey(sessionKey: string): boolean {
+  const parts = sessionKey.split(':').map((part) => part.trim()).filter(Boolean);
+  return parts[0] === 'agent' && parts[2] === 'cron';
 }
 
 export function parseOpenClawSessionKey(sessionKey: string): {

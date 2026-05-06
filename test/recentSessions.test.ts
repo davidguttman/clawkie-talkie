@@ -201,6 +201,52 @@ describe('recent OpenClaw session parsing', () => {
     ]);
   });
 
+  it('excludes cron sessions while keeping user-facing group, webchat, and Discord sessions', async () => {
+    const snapshot = await buildRecentSessionsFromRows(
+      [
+        {
+          key: 'agent:kamaji:cron:f51c6f38-6081-487c-b880-75fdfe0f891d',
+          sessionId: 'cron-from-key',
+          updatedAt: '2026-05-05T19:36:00.000Z',
+        },
+        {
+          key: 'opaque-cron-kind-row',
+          sessionId: 'cron-from-kind',
+          kind: 'cron',
+          updatedAt: '2026-05-05T19:35:00.000Z',
+        },
+        {
+          key: 'opaque-cron-channel-row',
+          sessionId: 'cron-from-channel',
+          channel: 'cron',
+          updatedAt: '2026-05-05T19:34:00.000Z',
+        },
+        {
+          key: 'agent:kamaji:discord:channel:1501301184101617886',
+          sessionId: 'discord-session',
+          updatedAt: '2026-05-05T19:33:00.000Z',
+        },
+        {
+          key: 'agent:kamaji:webchat:session:web-1',
+          sessionId: 'webchat-session',
+          updatedAt: '2026-05-05T19:32:00.000Z',
+        },
+        {
+          key: 'agent:kamaji:group:room:group-1',
+          sessionId: 'group-session',
+          updatedAt: '2026-05-05T19:31:00.000Z',
+        },
+      ],
+      { generatedAt: 'now' },
+    );
+
+    expect(snapshot.sessions.map((session) => session.sessionId)).toEqual([
+      'discord-session',
+      'webchat-session',
+      'group-session',
+    ]);
+  });
+
   it('preserves accountId from OpenClaw rows for reconnect routing', async () => {
     const snapshot = await buildRecentSessionsFromRows(
       [
