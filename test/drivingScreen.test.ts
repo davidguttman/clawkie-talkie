@@ -105,13 +105,39 @@ describe('DrivingScreen session picker control', () => {
   it('renders a compact SESSIONS footer picker backed by RTC recent sessions', () => {
     const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
 
+    const sessionsFooterButton = source.slice(
+      Math.max(0, source.indexOf('ariaLabel="Sessions"') - 160),
+      source.indexOf('ariaLabel="Sessions"') + 80,
+    );
+
     expect(source).toContain('rtc.recentSessions');
     expect(source).toContain('SessionPicker');
-    expect(source).toContain('label={activeSession ? compactSessionLabel(activeSession.displayLabel) : \'SESSIONS\'}');
+    expect(sessionsFooterButton).toContain('label="SESSIONS"');
+    expect(sessionsFooterButton).not.toContain('activeSession');
+    expect(source).not.toContain('compactSessionLabel');
     expect(source).toContain('rtc.requestRecentSessions();');
     expect(source).toContain('onSelectSession?.(session);');
   });
 
+  it('uses the active recent session display label and agent in the header without UUID fallbacks', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    const activeSessionLookup = source.match(/const activeSession = recentSessions\.find\([\s\S]*?\);/)?.[0] ?? '';
+    const buildHeaderLabel = source.match(/function buildHeaderLabel\(activeSession\?: RecentSession\): string \{[\s\S]*?\n\}/)?.[0] ?? '';
+
+    expect(activeSessionLookup).toContain('session.sessionId === sessionId');
+    expect(activeSessionLookup).toContain('session.sessionKey === sessionId');
+    expect(source).toContain('const headerLabel = buildHeaderLabel(activeSession);');
+
+    expect(buildHeaderLabel).toContain('trimString(activeSession?.displayLabel)');
+    expect(buildHeaderLabel).toContain('trimString(activeSession?.agent)');
+    expect(buildHeaderLabel).toContain('return `${displayLabel} · ${agent}`;');
+    expect(buildHeaderLabel).toContain("return 'VOICE SESSION';");
+    expect(buildHeaderLabel).not.toContain('sessionId');
+    expect(buildHeaderLabel).not.toContain('hostPeerId');
+    expect(source).not.toContain('compactValue');
+    expect(source).not.toContain('compactSessionLabel');
+  });
 
   it('hides the Sessions footer and picker until recent-session support is confirmed', () => {
     const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');

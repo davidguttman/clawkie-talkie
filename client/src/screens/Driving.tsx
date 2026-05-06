@@ -177,7 +177,6 @@ export function DrivingScreen({
     accentRec: accentCfg.rec,
   });
 
-  const headerLabel = buildHeaderLabel({ sessionId, hostPeerId });
   const rowGap = compact ? 8 : 10;
   const replayEnabled = !!onReplay && canReplay;
   const recentSessions = rtc.recentSessions;
@@ -185,6 +184,7 @@ export function DrivingScreen({
   const activeSession = recentSessions.find(
     (session) => session.sessionId === sessionId || session.sessionKey === sessionId,
   );
+  const headerLabel = buildHeaderLabel(activeSession);
   const requestRecentSessionList = useCallback(() => {
     setSessionListRequest((current) => ({
       phase: recentSessionsGeneratedAt ? 'refreshing' : 'loading',
@@ -426,7 +426,7 @@ export function DrivingScreen({
         {recentSessionsSupported && (
           <FooterButton
             icon="▦"
-            label={activeSession ? compactSessionLabel(activeSession.displayLabel) : 'SESSIONS'}
+            label="SESSIONS"
             ariaLabel="Sessions"
             onClick={() => {
               setSessionPickerOpen((open) => {
@@ -648,13 +648,6 @@ function formatRecentSessionsUpdatedAt(generatedAt?: string): string | null {
   const elapsedHours = Math.floor(elapsedMinutes / 60);
   if (elapsedHours < 24) return `Updated ${elapsedHours}h ago`;
   return `Updated ${new Date(updatedAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}`;
-}
-
-function compactSessionLabel(label: string): string {
-  const trimmed = label.trim();
-  if (!trimmed) return 'SESSIONS';
-  if (trimmed.length <= 10) return trimmed.toUpperCase();
-  return `${trimmed.slice(0, 8).toUpperCase()}…`;
 }
 
 function useDebugMode(): boolean {
@@ -902,25 +895,17 @@ function pickCaption({
   };
 }
 
-function buildHeaderLabel({
-  sessionId,
-  hostPeerId,
-}: {
-  sessionId?: string;
-  hostPeerId?: string | null;
-}): string {
-  const parts: string[] = [];
-  if (sessionId) parts.push(compactValue(sessionId));
-  if (hostPeerId) parts.push(compactValue(hostPeerId));
-  const parsedApp = sessionId?.split(':')[2]?.trim();
-  if (parsedApp) parts.push(parsedApp);
-  return parts.join(' · ');
+function buildHeaderLabel(activeSession?: RecentSession): string {
+  const displayLabel = trimString(activeSession?.displayLabel);
+  const agent = trimString(activeSession?.agent);
+  if (displayLabel && agent) return `${displayLabel} · ${agent}`;
+  if (displayLabel) return displayLabel;
+  if (agent) return `VOICE SESSION · ${agent}`;
+  return 'VOICE SESSION';
 }
 
-function compactValue(value: string): string {
-  const trimmed = value.trim();
-  if (trimmed.length <= 12) return trimmed;
-  return `${trimmed.slice(0, 6)}…${trimmed.slice(-4)}`;
+function trimString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 function Caption({
