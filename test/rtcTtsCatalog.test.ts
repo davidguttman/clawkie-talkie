@@ -607,6 +607,36 @@ describe('RtcProvider recent session picker sync', () => {
     ]);
   });
 
+  it('increments a recent-session response sequence for repeated list responses with the same generatedAt', async () => {
+    const rendered = await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+    await act(async () => {
+      voiceClient.emitStatus('open');
+    });
+
+    expect(rendered.context().recentSessionsResponseSeq).toBe(0);
+
+    await act(async () => {
+      voiceClient.emitControl({
+        t: 'sessions.list',
+        generatedAt: '2026-05-05T19:00:00.000Z',
+        sessions,
+      });
+    });
+    expect(rendered.context().recentSessionsResponseSeq).toBe(1);
+
+    await act(async () => {
+      voiceClient.emitControl({
+        t: 'sessions.list',
+        generatedAt: '2026-05-05T19:00:00.000Z',
+        sessions,
+      });
+    });
+    expect(rendered.context().recentSessionsResponseSeq).toBe(2);
+    expect(rendered.context().recentSessionsGeneratedAt).toBe('2026-05-05T19:00:00.000Z');
+    expect(rendered.context().recentSessions).toEqual(sessions);
+  });
+
   it('accepts legacy recent-session catalog responses from older daemons', async () => {
     const rendered = await renderRtcProvider();
     const voiceClient = await openRendezvousAndAccept();
@@ -624,6 +654,33 @@ describe('RtcProvider recent session picker sync', () => {
     expect(rendered.context().recentSessions).toEqual(sessions);
     expect(rendered.context().recentSessionsGeneratedAt).toBe('2026-05-05T19:01:00.000Z');
     expect(rendered.context().recentSessionsSupportStatus).toBe('supported');
+  });
+
+  it('increments the response sequence for repeated legacy catalog responses', async () => {
+    const rendered = await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+    await act(async () => {
+      voiceClient.emitStatus('open');
+      voiceClient.emitControl({
+        t: 'sessions.catalog',
+        catalog: {
+          generatedAt: '2026-05-05T19:01:00.000Z',
+          sessions,
+        },
+      });
+    });
+    expect(rendered.context().recentSessionsResponseSeq).toBe(1);
+
+    await act(async () => {
+      voiceClient.emitControl({
+        t: 'sessions.catalog',
+        catalog: {
+          generatedAt: '2026-05-05T19:01:00.000Z',
+          sessions,
+        },
+      });
+    });
+    expect(rendered.context().recentSessionsResponseSeq).toBe(2);
   });
 
   it('marks recent-session support unsupported after a quiet probe timeout', async () => {

@@ -103,13 +103,13 @@ export function DrivingScreen({
   }, [recentSessionsSupported]);
 
   useEffect(() => {
-    if (!rtc.recentSessionsGeneratedAt) return;
+    if (rtc.recentSessionsResponseSeq <= 0) return;
     setSessionListRequest((current) =>
       current.phase === 'idle' && !current.timedOut
         ? current
         : { phase: 'idle', requestId: current.requestId, timedOut: false },
     );
-  }, [rtc.recentSessionsGeneratedAt]);
+  }, [rtc.recentSessionsResponseSeq]);
 
   useEffect(() => {
     if (sessionListRequest.phase === 'idle') return;

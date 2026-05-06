@@ -90,8 +90,10 @@ export async function buildRecentSessionsFromRows(
 ): Promise<RecentSessionsSnapshot> {
   const limit = Math.max(0, Math.min(options.limit ?? DEFAULT_RECENT_SESSIONS_LIMIT, DEFAULT_RECENT_SESSIONS_LIMIT));
   const parsed = rows
+    .filter((row) => !isSubagentSessionRow(row))
     .map(parseOpenClawSessionRow)
     .filter((session): session is RecentSession => !!session)
+    .filter((session) => !isSubagentSession(session))
     .sort((a, b) => compareLastActivityDesc(a.lastActivity, b.lastActivity))
     .slice(0, limit);
 
@@ -138,6 +140,27 @@ function parseOpenClawSessionRow(row: unknown): RecentSession | null {
     lastActivity,
     displayLabel: sessionKey,
   };
+}
+
+function isSubagentSessionRow(row: unknown): boolean {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return false;
+  const source = row as Record<string, unknown>;
+  const kind = readString(source.kind);
+  const channel = readString(source.channel);
+  if (kind === 'subagent' || channel === 'subagent') return true;
+  const sessionKey = readString(source.key) ?? readString(source.sessionKey);
+  if (!sessionKey) return false;
+  return hasSubagentSessionKey(sessionKey);
+}
+
+function isSubagentSession(session: RecentSession): boolean {
+  if (session.channel === 'subagent') return true;
+  return hasSubagentSessionKey(session.sessionKey);
+}
+
+function hasSubagentSessionKey(sessionKey: string): boolean {
+  const parts = sessionKey.split(':').map((part) => part.trim()).filter(Boolean);
+  return parts[0] === 'agent' && parts[2] === 'subagent';
 }
 
 export function parseOpenClawSessionKey(sessionKey: string): {

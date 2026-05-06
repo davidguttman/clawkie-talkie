@@ -66,6 +66,46 @@ describe('recent OpenClaw session parsing', () => {
     ]);
   });
 
+  it('excludes sub-agent sessions while keeping user-facing group, webchat, and Discord sessions', async () => {
+    const snapshot = await buildRecentSessionsFromRows(
+      [
+        {
+          key: 'agent:kamaji:subagent:3f6b8b82-8c94-4c80-83fd-2dfe395050e8',
+          sessionId: 'subagent-from-key',
+          updatedAt: '2026-05-05T19:33:00.000Z',
+        },
+        {
+          key: 'agent:kamaji:discord:channel:1501301184101617886',
+          sessionId: 'discord-session',
+          updatedAt: '2026-05-05T19:32:00.000Z',
+        },
+        {
+          key: 'agent:kamaji:webchat:session:web-1',
+          sessionId: 'webchat-session',
+          updatedAt: '2026-05-05T19:31:00.000Z',
+        },
+        {
+          key: 'agent:kamaji:group:room:group-1',
+          sessionId: 'group-session',
+          updatedAt: '2026-05-05T19:30:00.000Z',
+        },
+        {
+          key: 'opaque-subagent-row',
+          sessionId: 'subagent-from-kind',
+          kind: 'subagent',
+          updatedAt: '2026-05-05T19:34:00.000Z',
+        },
+      ],
+      { generatedAt: 'now' },
+    );
+
+    expect(snapshot.sessions.map((session) => session.sessionId)).toEqual([
+      'discord-session',
+      'webchat-session',
+      'group-session',
+    ]);
+  });
+
   it('preserves numeric updatedAt timestamps as ISO last activity', async () => {
     const snapshot = await buildRecentSessionsFromRows(
       [

@@ -36,6 +36,7 @@ export interface RtcContextValue {
   requestSttCatalog: () => void;
   recentSessions: RecentSession[];
   recentSessionsGeneratedAt?: string;
+  recentSessionsResponseSeq: number;
   recentSessionsSupportStatus: RecentSessionsSupportStatus;
   requestRecentSessions: () => void;
   hasClient: boolean;
@@ -57,6 +58,7 @@ const Ctx = createContext<RtcContextValue>({
   requestSttCatalog: noop,
   recentSessions: [],
   recentSessionsGeneratedAt: undefined,
+  recentSessionsResponseSeq: 0,
   recentSessionsSupportStatus: 'unknown',
   requestRecentSessions: noop,
   hasClient: false,
@@ -136,6 +138,7 @@ export function RtcProvider({
     generatedAt: '',
     sessions: [],
   });
+  const [recentSessionsResponseSeq, setRecentSessionsResponseSeq] = useState(0);
   const [recentSessionsSupportStatus, setRecentSessionsSupportStatus] =
     useState<RecentSessionsSupportStatus>('unknown');
   // The active room flips from the rendezvous host to the
@@ -190,6 +193,7 @@ export function RtcProvider({
         }
         if (msg.t === 'sessions.list' && Array.isArray(msg.sessions)) {
           setRecentSessionsSupportStatus('supported');
+          setRecentSessionsResponseSeq((seq) => seq + 1);
           setRecentSessionsSnapshot({
             generatedAt: typeof msg.generatedAt === 'string' ? msg.generatedAt : '',
             sessions: msg.sessions as RecentSession[],
@@ -203,6 +207,7 @@ export function RtcProvider({
         ) {
           const catalog = msg.catalog as Partial<RecentSessionsSnapshot>;
           setRecentSessionsSupportStatus('supported');
+          setRecentSessionsResponseSeq((seq) => seq + 1);
           setRecentSessionsSnapshot({
             generatedAt: typeof catalog.generatedAt === 'string' ? catalog.generatedAt : '',
             sessions: catalog.sessions as RecentSession[],
@@ -435,6 +440,7 @@ export function RtcProvider({
       requestSttCatalog,
       recentSessions: recentSessionsSnapshot.sessions,
       recentSessionsGeneratedAt: recentSessionsSnapshot.generatedAt || undefined,
+      recentSessionsResponseSeq,
       recentSessionsSupportStatus,
       requestRecentSessions,
       hasClient: !!hostPeerId,
@@ -452,6 +458,7 @@ export function RtcProvider({
       sttCatalog,
       requestSttCatalog,
       recentSessionsSnapshot,
+      recentSessionsResponseSeq,
       recentSessionsSupportStatus,
       requestRecentSessions,
       hostPeerId,

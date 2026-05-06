@@ -135,4 +135,12 @@ describe('DrivingScreen session picker control', () => {
     expect(source).toContain('disabled={waiting}');
     expect(source).toContain('formatRecentSessionsUpdatedAt');
   });
+
+  it('clears pending refresh state from response sequence changes instead of generatedAt changes', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    expect(source).toContain('rtc.recentSessionsResponseSeq <= 0');
+    expect(source).toContain('}, [rtc.recentSessionsResponseSeq]);');
+    expect(source).not.toContain('}, [rtc.recentSessionsGeneratedAt]);');
+  });
 });
