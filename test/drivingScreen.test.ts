@@ -30,14 +30,20 @@ describe('DrivingScreen settings button', () => {
     expect(source).not.toContain('!compact && onSettings');
     const settingsButton = source.slice(
       Math.max(0, source.indexOf('aria-label="Settings"') - 760),
-      source.indexOf('aria-label="Settings"') + 80,
+      source.indexOf('aria-label="Settings"') + 420,
     );
 
     expect(source).toContain('{onSettings && (');
     expect(source).toContain('aria-label="Settings"');
-    expect(settingsButton).toContain('width: 38');
-    expect(settingsButton).toContain('height: 38');
-    expect(settingsButton).toContain('fontSize: 21');
+    expect(settingsButton).toContain('width: 48');
+    expect(settingsButton).toContain('height: 48');
+    expect(settingsButton).toContain('fontSize: 32');
+    expect(settingsButton).toContain('lineHeight: 1');
+    expect(settingsButton).toContain('aria-hidden="true"');
+    expect(settingsButton).toContain('⚙︎');
+    expect(settingsButton).not.toContain('width: 38');
+    expect(settingsButton).not.toContain('height: 38');
+    expect(settingsButton).not.toContain('fontSize: 21');
     expect(settingsButton).not.toContain('width: 30');
     expect(settingsButton).not.toContain('height: 30');
     expect(settingsButton).not.toContain('fontSize: 15');

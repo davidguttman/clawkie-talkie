@@ -287,15 +287,13 @@ export function DrivingScreen({
           <button
             onClick={onSettings}
             style={{
-              width: 38,
-              height: 38,
-              borderRadius: 12,
+              width: 48,
+              height: 48,
+              borderRadius: 15,
               background: 'transparent',
               border: `1px solid ${HIFI.stroke}`,
               color: HIFI.ink2,
               cursor: 'pointer',
-              fontFamily: HIFI.fonts.mono,
-              fontSize: 21,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -304,10 +302,22 @@ export function DrivingScreen({
               appearance: 'none',
               WebkitAppearance: 'none',
               padding: 0,
+              lineHeight: 1,
             }}
             aria-label="Settings"
           >
-            ⚙
+            <span
+              aria-hidden="true"
+              style={{
+                display: 'block',
+                fontFamily: 'Times New Roman, Noto Serif Symbols, serif',
+                fontSize: 32,
+                lineHeight: 1,
+                transform: 'translateY(-1px)',
+              }}
+            >
+              ⚙︎
+            </span>
           </button>
         )}
       </div>
