@@ -4,6 +4,7 @@ import type { RecentSession, RecentSessionsSnapshot } from './protocol.js';
 export const DEFAULT_RECENT_SESSIONS_TTL_MS = 60_000;
 export const DEFAULT_RECENT_SESSIONS_LIMIT = 10;
 const RECENT_SESSIONS_ACTIVE_MINUTES = 10_080;
+const RECENT_SESSIONS_FETCH_MULTIPLIER = 3;
 
 export interface RecentSessionsCacheOptions {
   loadSessions: () => Promise<RecentSessionsSnapshot>;
@@ -70,7 +71,7 @@ export async function getRecentSessionsWithOpenClaw(): Promise<RecentSessionsSna
     '--active',
     String(RECENT_SESSIONS_ACTIVE_MINUTES),
     '--limit',
-    String(DEFAULT_RECENT_SESSIONS_LIMIT),
+    String(DEFAULT_RECENT_SESSIONS_LIMIT * RECENT_SESSIONS_FETCH_MULTIPLIER),
   ];
   const stdout = await execOpenClaw(args);
   return buildRecentSessionsFromOpenClawJson(stdout, {
@@ -227,21 +228,25 @@ export function parseOpenClawSessionKey(sessionKey: string): {
 }
 
 async function resolveOpenClawDisplayLabel(session: RecentSession): Promise<string | undefined> {
-  if (session.channel !== 'discord' || !session.target?.startsWith('channel:')) return undefined;
-  return resolveDiscordChannelLabel(session.target);
+  if (!session.channel || !session.target) return undefined;
+  return resolveOpenClawChannelLabel(session.channel, session.target);
 }
 
 export async function resolveDiscordChannelLabel(target: string): Promise<string | undefined> {
-  const args = ['message', 'channel', 'info', '--channel', 'discord', '--target', target, '--json'];
+  return resolveOpenClawChannelLabel('discord', target);
+}
+
+export async function resolveOpenClawChannelLabel(channel: string, target: string): Promise<string | undefined> {
+  const args = ['message', 'channel', 'info', '--channel', channel, '--target', target, '--json'];
   try {
     const stdout = await execOpenClaw(args);
-    return extractDiscordChannelName(stdout);
+    return extractOpenClawChannelName(stdout);
   } catch {
     return undefined;
   }
 }
 
-export function extractDiscordChannelName(stdout: string): string | undefined {
+export function extractOpenClawChannelName(stdout: string): string | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
@@ -254,6 +259,10 @@ export function extractDiscordChannelName(stdout: string): string | undefined {
   const channel = readPathString(parsed, ['channel', 'name']);
   const name = readPathString(parsed, ['name']);
   return payloadThread ?? thread ?? payloadChannel ?? channel ?? name;
+}
+
+export function extractDiscordChannelName(stdout: string): string | undefined {
+  return extractOpenClawChannelName(stdout);
 }
 
 function readPathString(value: unknown, path: string[]): string | undefined {

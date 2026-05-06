@@ -103,7 +103,7 @@ describe('recent OpenClaw session parsing', () => {
     expect(childProcessMocks.execFile).toHaveBeenNthCalledWith(
       1,
       'openclaw',
-      ['sessions', '--json', '--all-agents', '--active', '10080', '--limit', '10'],
+      ['sessions', '--json', '--all-agents', '--active', '10080', '--limit', '30'],
       expect.objectContaining({ windowsHide: true }),
       expect.any(Function),
     );
@@ -137,6 +137,103 @@ describe('recent OpenClaw session parsing', () => {
     );
   });
 
+  it('uses generic OpenClaw channel-info lookups for non-Discord session labels', async () => {
+    childProcessMocks.execFile.mockImplementation((
+      file: string,
+      args: string[],
+      _options: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      if (file !== 'openclaw') throw new Error(`unexpected command: ${file}`);
+      if (args[0] === 'sessions') {
+        callback(
+          null,
+          JSON.stringify({
+            sessions: [
+              {
+                key: 'agent:kamaji:signal:chat:alice',
+                sessionId: 'signal-session',
+                updatedAt: '2026-05-05T19:26:00.000Z',
+              },
+            ],
+          }),
+          '',
+        );
+        return {};
+      }
+      if (args[0] === 'message') {
+        callback(null, JSON.stringify({ payload: { channel: { name: 'Alice on Signal' } } }), '');
+        return {};
+      }
+      throw new Error(`unexpected args: ${args.join(' ')}`);
+    });
+
+    const snapshot = await getRecentSessionsWithOpenClaw();
+
+    expect(snapshot.sessions[0]).toMatchObject({
+      sessionId: 'signal-session',
+      channel: 'signal',
+      target: 'chat:alice',
+      displayLabel: 'Alice on Signal',
+    });
+    expect(childProcessMocks.execFile).toHaveBeenNthCalledWith(
+      2,
+      'openclaw',
+      ['message', 'channel', 'info', '--channel', 'signal', '--target', 'chat:alice', '--json'],
+      expect.objectContaining({ windowsHide: true }),
+      expect.any(Function),
+    );
+  });
+
+  it('falls back to raw session keys when generic label lookup is unavailable or has no target', async () => {
+    childProcessMocks.execFile.mockImplementation((
+      file: string,
+      args: string[],
+      _options: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      if (file !== 'openclaw') throw new Error(`unexpected command: ${file}`);
+      if (args[0] === 'sessions') {
+        callback(
+          null,
+          JSON.stringify({
+            sessions: [
+              {
+                key: 'agent:kamaji:unsupported:room:one',
+                sessionId: 'unsupported-session',
+                updatedAt: '2026-05-05T19:27:00.000Z',
+              },
+              {
+                key: 'agent:kamaji:webchat',
+                sessionId: 'no-target-session',
+                updatedAt: '2026-05-05T19:26:00.000Z',
+              },
+            ],
+          }),
+          '',
+        );
+        return {};
+      }
+      callback(new Error(`unsupported channel: ${args[4]}`), '', '');
+      return {};
+    });
+
+    const snapshot = await getRecentSessionsWithOpenClaw();
+
+    expect(snapshot.sessions.map((session) => session.displayLabel)).toEqual([
+      'agent:kamaji:unsupported:room:one',
+      'agent:kamaji:webchat',
+    ]);
+    expect(childProcessMocks.execFile).toHaveBeenCalledTimes(2);
+    expect(childProcessMocks.execFile).toHaveBeenNthCalledWith(
+      2,
+      'openclaw',
+      ['message', 'channel', 'info', '--channel', 'unsupported', '--target', 'room:one', '--json'],
+      expect.objectContaining({ windowsHide: true }),
+      expect.any(Function),
+    );
+  });
+
   it('sorts by last activity and caps to the 10 most recent sessions', async () => {
     const rows = Array.from({ length: 12 }, (_, index) => ({
       key: `agent:main:discord:channel:${index}`,
@@ -159,6 +256,65 @@ describe('recent OpenClaw session parsing', () => {
       'session-3',
       'session-2',
     ]);
+  });
+
+  it('oversamples OpenClaw sessions so filtered top rows do not reduce the final 10-session cap', async () => {
+    const validRows = Array.from({ length: 10 }, (_, index) => ({
+      key: `agent:main:discord:channel:valid-${index}`,
+      sessionId: `valid-${index}`,
+      updatedAt: `2026-05-05T19:${String(50 - index).padStart(2, '0')}:00.000Z`,
+    }));
+
+    childProcessMocks.execFile.mockImplementation((
+      file: string,
+      args: string[],
+      _options: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      if (file !== 'openclaw') throw new Error(`unexpected command: ${file}`);
+      if (args[0] === 'sessions') {
+        callback(
+          null,
+          JSON.stringify({
+            sessions: [
+              {
+                key: 'agent:main:cron:f51c6f38-6081-487c-b880-75fdfe0f891d',
+                sessionId: 'cron-newest',
+                updatedAt: '2026-05-05T19:59:00.000Z',
+              },
+              {
+                key: 'agent:main:subagent:3f6b8b82-8c94-4c80-83fd-2dfe395050e8',
+                sessionId: 'subagent-newer',
+                updatedAt: '2026-05-05T19:58:00.000Z',
+              },
+              {
+                key: 'opaque-cron-channel-row',
+                sessionId: 'cron-channel-new',
+                channel: 'cron',
+                updatedAt: '2026-05-05T19:57:00.000Z',
+              },
+              ...validRows,
+            ],
+          }),
+          '',
+        );
+        return {};
+      }
+      callback(new Error('label lookup unavailable'), '', '');
+      return {};
+    });
+
+    const snapshot = await getRecentSessionsWithOpenClaw();
+
+    expect(snapshot.sessions).toHaveLength(10);
+    expect(snapshot.sessions.map((session) => session.sessionId)).toEqual(validRows.map((row) => row.sessionId));
+    expect(childProcessMocks.execFile).toHaveBeenNthCalledWith(
+      1,
+      'openclaw',
+      ['sessions', '--json', '--all-agents', '--active', '10080', '--limit', '30'],
+      expect.objectContaining({ windowsHide: true }),
+      expect.any(Function),
+    );
   });
 
   it('excludes sub-agent sessions while keeping user-facing group, webchat, and Discord sessions', async () => {
