@@ -3,7 +3,7 @@ import { HIFI } from '../tokens';
 import { useRtc } from '../rtc/RtcContext';
 import type { RecentSession } from '../voice/protocol';
 
-const DASHBOARD_REFRESH_TIMEOUT_MS = 3500;
+const DASHBOARD_REFRESH_TIMEOUT_MS = 12_000;
 
 type RefreshPhase = 'idle' | 'loading' | 'refreshing';
 
@@ -65,7 +65,9 @@ export function DashboardScreen({
   const connectionLabel = formatConnectionLabel(rtc.status, rtc.detail);
   const updatedLabel = formatUpdatedAt(rtc.recentSessionsGeneratedAt);
   const supportStatus = rtc.recentSessionsSupportStatus;
-  const showUnsupported = supportStatus === 'unsupported';
+  const hasRecentSessionResponse = rtc.recentSessions.length > 0 || !!rtc.recentSessionsGeneratedAt;
+  const showUnsupported = supportStatus === 'unsupported' && !hasRecentSessionResponse;
+  const showTimedOut = refresh.timedOut && !hasRecentSessionResponse;
   const showError = rtc.detail && rtc.detail !== 'session_replaced' && rtc.status !== 'open';
 
   return (
@@ -180,7 +182,7 @@ export function DashboardScreen({
           host {hostPeerId || 'missing'}{updatedLabel ? ` · ${updatedLabel}` : ''}
         </div>
         {showError && <Notice tone="error">Daemon rendezvous error: {rtc.detail}</Notice>}
-        {refresh.timedOut && <Notice tone="warn">No recent-session response yet. The daemon may still be starting.</Notice>}
+        {showTimedOut && <Notice tone="warn">No recent-session response yet. The daemon may still be starting.</Notice>}
         {showUnsupported && <Notice tone="warn">This daemon does not support host dashboard session discovery.</Notice>}
       </section>
 

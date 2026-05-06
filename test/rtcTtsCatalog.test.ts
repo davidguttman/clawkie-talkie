@@ -748,7 +748,7 @@ describe('RtcProvider recent session picker sync', () => {
     expect(rendered.context().recentSessionsSupportStatus).toBe('probing');
 
     await act(async () => {
-      vi.advanceTimersByTime(3999);
+      vi.advanceTimersByTime(11_999);
     });
     expect(rendered.context().recentSessionsSupportStatus).toBe('probing');
 
@@ -756,6 +756,67 @@ describe('RtcProvider recent session picker sync', () => {
       vi.advanceTimersByTime(1);
     });
     expect(rendered.context().recentSessionsSupportStatus).toBe('unsupported');
+  });
+
+
+  it('recovers recent-session support when a valid response arrives after the probe timeout', async () => {
+    vi.useFakeTimers();
+    const rendered = await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+    await act(async () => {
+      voiceClient.emitStatus('open');
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(12_000);
+    });
+
+    expect(rendered.context().recentSessionsSupportStatus).toBe('unsupported');
+
+    await act(async () => {
+      voiceClient.emitControl({
+        t: 'sessions.list',
+        generatedAt: '2026-05-05T19:00:00.000Z',
+        sessions,
+      });
+    });
+
+    expect(rendered.context().recentSessions).toEqual(sessions);
+    expect(rendered.context().recentSessionsGeneratedAt).toBe('2026-05-05T19:00:00.000Z');
+    expect(rendered.context().recentSessionsSupportStatus).toBe('supported');
+  });
+
+  it('lets manual refresh retry from unsupported before a later response marks support', async () => {
+    vi.useFakeTimers();
+    const rendered = await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+    await act(async () => {
+      voiceClient.emitStatus('open');
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(12_000);
+    });
+
+    expect(rendered.context().recentSessionsSupportStatus).toBe('unsupported');
+
+    await act(async () => {
+      rendered.context().requestRecentSessions?.();
+    });
+
+    expect(rendered.context().recentSessionsSupportStatus).toBe('probing');
+    expect(sentOf(voiceClient, 'sessions.list.request')).toEqual([{ t: 'sessions.list.request' }]);
+
+    await act(async () => {
+      voiceClient.emitControl({
+        t: 'sessions.catalog',
+        catalog: {
+          generatedAt: '2026-05-05T19:01:00.000Z',
+          sessions,
+        },
+      });
+    });
+
+    expect(rendered.context().recentSessionsSupportStatus).toBe('supported');
+    expect(rendered.context().recentSessionsGeneratedAt).toBe('2026-05-05T19:01:00.000Z');
   });
 
   it('does not block ordinary old-daemon voice controls when recent-session probes are ignored', async () => {
@@ -777,7 +838,7 @@ describe('RtcProvider recent session picker sync', () => {
       voiceClient.emitControl({ t: 'reply.done', text: 'spoken reply' });
       voiceClient.emitControl({ t: 'tts.start', sample_rate: 24000 });
       voiceClient.emitControl({ t: 'tts.done' });
-      vi.advanceTimersByTime(4000);
+      vi.advanceTimersByTime(12_000);
     });
 
     expect(rendered.context().status).toBe('open');

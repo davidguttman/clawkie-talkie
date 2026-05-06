@@ -17,7 +17,7 @@ import { phoneToDaemon, type DeliveryTarget, type RecentSession, type RecentSess
 
 export type RecentSessionsSupportStatus = 'unknown' | 'probing' | 'supported' | 'unsupported';
 
-const RECENT_SESSIONS_SUPPORT_TIMEOUT_MS = 4000;
+const RECENT_SESSIONS_SUPPORT_TIMEOUT_MS = 12_000;
 
 export interface RtcContextValue {
   status: RtcStatus;
@@ -337,6 +337,9 @@ export function RtcProvider({
     if (!activeRoomId) return;
     if (rendezvous && activeRoomId === hostPeerId) return;
     if (status !== 'open') return;
+    setRecentSessionsSupportStatus((current) =>
+      current === 'supported' ? current : 'probing',
+    );
     clientRef.current?.sendControl(phoneToDaemon.sessionsListRequest());
     clientRef.current?.sendControl(phoneToDaemon.sessionsCatalogRequest());
   }, [activeRoomId, hostPeerId, rendezvous, status]);
@@ -384,13 +387,15 @@ export function RtcProvider({
     if (recentSessionsSupportStatus !== 'probing') return;
 
     const timeout = setTimeout(() => {
-      setRecentSessionsSupportStatus((current) =>
-        current === 'probing' ? 'unsupported' : current,
-      );
+      setRecentSessionsSupportStatus((current) => {
+        const hasRecentSessionResponse =
+          recentSessionsSnapshot.sessions.length > 0 || !!recentSessionsSnapshot.generatedAt;
+        return current === 'probing' && !hasRecentSessionResponse ? 'unsupported' : current;
+      });
     }, RECENT_SESSIONS_SUPPORT_TIMEOUT_MS);
 
     return () => clearTimeout(timeout);
-  }, [rendezvous, hostPeerId, activeRoomId, status, recentSessionsSupportStatus]);
+  }, [rendezvous, hostPeerId, activeRoomId, status, recentSessionsSupportStatus, recentSessionsSnapshot]);
 
   useEffect(() => {
     if (!rendezvous) return;
