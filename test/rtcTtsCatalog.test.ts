@@ -3,7 +3,7 @@ import type { Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ControlMessage, RtcClientOptions, RtcStatus } from '../client/src/rtc/client';
 import type { RtcContextValue, RtcRendezvous } from '../client/src/rtc/RtcContext';
-import type { SttCatalog, TtsCatalog, VoiceSettings } from '../client/src/voice/protocol';
+import type { RecentSession, SttCatalog, TtsCatalog, VoiceSettings } from '../client/src/voice/protocol';
 
 interface FakeRtcClientInstance {
   hostPeerId: string;
@@ -130,6 +130,9 @@ type RenderedRtc = {
     requestTtsCatalog?: () => void;
     sttCatalog?: SttCatalog | null;
     requestSttCatalog?: () => void;
+    recentSessions?: RecentSession[];
+    recentSessionsSupportStatus?: RtcContextValue['recentSessionsSupportStatus'];
+    requestRecentSessions?: () => void;
   };
   rerender(props?: Partial<RtcProviderProps>): Promise<void>;
   unmount(): Promise<void>;
@@ -218,6 +221,7 @@ afterEach(async () => {
   activeRender = null;
   rtcMock.instances.length = 0;
   vi.clearAllMocks();
+  vi.useRealTimers();
 });
 
 describe('RtcProvider TTS catalog and settings sync', () => {
@@ -539,6 +543,148 @@ describe('RtcProvider TTS catalog and settings sync', () => {
 
     expect(sentOf(secondVoiceClient, 'settings.update')).toEqual([
       { t: 'settings.update', settings: initialSettings },
+    ]);
+  });
+});
+
+
+describe('RtcProvider recent session picker sync', () => {
+  const sessions: RecentSession[] = [
+    {
+      sessionId: 'session-2',
+      sessionKey: 'agent:kamaji:discord:channel:t2',
+      agent: 'kamaji',
+      channel: 'discord',
+      target: 'channel:t2',
+      lastActivity: '2026-05-05T19:00:00.000Z',
+      displayLabel: 'planning',
+    },
+  ];
+
+  it('subscribes to recent sessions once after the voice room opens', async () => {
+    await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+    await act(async () => {
+      voiceClient.emitStatus('open');
+    });
+
+    expect(sentOf(voiceClient, 'sessions.list.subscribe')).toEqual([{ t: 'sessions.list.subscribe' }]);
+    expect(sentOf(voiceClient, 'sessions.catalog.request')).toEqual([{ t: 'sessions.catalog.request' }]);
+    expect(activeRender!.context().recentSessionsSupportStatus).toBe('probing');
+
+    await activeRender!.rerender({ voiceSettings: { ...initialSettings } });
+    expect(sentOf(voiceClient, 'sessions.list.subscribe')).toHaveLength(1);
+    expect(sentOf(voiceClient, 'sessions.catalog.request')).toHaveLength(1);
+  });
+
+  it('exposes received recent sessions, marks support, and allows manual refresh in an open voice room', async () => {
+    const rendered = await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+    await act(async () => {
+      voiceClient.emitStatus('open');
+    });
+    expect(rendered.context().recentSessionsSupportStatus).toBe('probing');
+
+    await act(async () => {
+      voiceClient.emitControl({
+        t: 'sessions.list',
+        generatedAt: '2026-05-05T19:00:00.000Z',
+        sessions,
+      });
+    });
+
+    expect(rendered.context().recentSessions).toEqual(sessions);
+    expect(rendered.context().recentSessionsGeneratedAt).toBe('2026-05-05T19:00:00.000Z');
+    expect(rendered.context().recentSessionsSupportStatus).toBe('supported');
+
+    await act(async () => {
+      rendered.context().requestRecentSessions?.();
+    });
+    expect(sentOf(voiceClient, 'sessions.list.request')).toEqual([{ t: 'sessions.list.request' }]);
+    expect(sentOf(voiceClient, 'sessions.catalog.request')).toEqual([
+      { t: 'sessions.catalog.request' },
+      { t: 'sessions.catalog.request' },
+    ]);
+  });
+
+  it('accepts legacy recent-session catalog responses from older daemons', async () => {
+    const rendered = await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+    await act(async () => {
+      voiceClient.emitStatus('open');
+      voiceClient.emitControl({
+        t: 'sessions.catalog',
+        catalog: {
+          generatedAt: '2026-05-05T19:01:00.000Z',
+          sessions,
+        },
+      });
+    });
+
+    expect(rendered.context().recentSessions).toEqual(sessions);
+    expect(rendered.context().recentSessionsGeneratedAt).toBe('2026-05-05T19:01:00.000Z');
+    expect(rendered.context().recentSessionsSupportStatus).toBe('supported');
+  });
+
+  it('marks recent-session support unsupported after a quiet probe timeout', async () => {
+    vi.useFakeTimers();
+    const rendered = await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+    await act(async () => {
+      voiceClient.emitStatus('open');
+    });
+
+    expect(rendered.context().recentSessionsSupportStatus).toBe('probing');
+
+    await act(async () => {
+      vi.advanceTimersByTime(3999);
+    });
+    expect(rendered.context().recentSessionsSupportStatus).toBe('probing');
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(rendered.context().recentSessionsSupportStatus).toBe('unsupported');
+  });
+
+  it('resets recent-session support when reconnecting to a new selected session', async () => {
+    const rendered = await renderRtcProvider();
+    const firstVoiceClient = await openRendezvousAndAccept('voice-room-1');
+    await act(async () => {
+      firstVoiceClient.emitStatus('open');
+      firstVoiceClient.emitControl({
+        t: 'sessions.list',
+        generatedAt: '2026-05-05T19:00:00.000Z',
+        sessions,
+      });
+    });
+    expect(rendered.context().recentSessionsSupportStatus).toBe('supported');
+
+    await activeRender!.rerender({ rendezvous: { sessionId: 'session-2' } });
+    expect(rendered.context().recentSessionsSupportStatus).toBe('unknown');
+  });
+
+  it('returns to the rendezvous room when the selected session changes on the same host', async () => {
+    await renderRtcProvider();
+    const firstVoiceClient = await openRendezvousAndAccept('voice-room-1');
+    await act(async () => {
+      firstVoiceClient.emitStatus('open');
+    });
+
+    await activeRender!.rerender({ rendezvous: { sessionId: 'session-2' } });
+    const secondRendezvousClient = rtcMock.instances.at(-1)!;
+    expect(secondRendezvousClient.hostPeerId).toBe('host-1');
+    expect(secondRendezvousClient).not.toBe(firstVoiceClient);
+
+    await act(async () => {
+      secondRendezvousClient.emitStatus('open');
+    });
+    expect(sentOf(secondRendezvousClient, 'rendezvous.join')).toEqual([
+      {
+        t: 'rendezvous.join',
+        sessionId: 'session-2',
+        settings: initialSettings,
+      },
     ]);
   });
 });

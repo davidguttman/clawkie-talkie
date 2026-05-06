@@ -12,8 +12,11 @@ describe('app HTML entry points', () => {
     expect(html).not.toContain('/src/main.tsx');
   });
 
-  it('serves the voice app from /voice/index.html', () => {
-    const path = resolve(root, 'client/voice/index.html');
+  it.each([
+    ['client/voice.html', '/voice.html'],
+    ['client/voice/index.html', '/voice/'],
+  ])('serves the voice app from %s for %s', (entryPath) => {
+    const path = resolve(root, entryPath);
     expect(existsSync(path)).toBe(true);
     const html = readFileSync(path, 'utf8');
     expect(html).toContain('/src/main.tsx');

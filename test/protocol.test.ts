@@ -101,9 +101,14 @@ describe('phone → daemon factories', () => {
     expect(phoneDaemon.sttCatalogRequest()).toEqual({ t: 'stt.catalog.request' });
   });
 
-  it('requests the daemon recent session catalog', () => {
+  it('requests and subscribes to the daemon recent session list', () => {
+    expect(phoneClient.sessionsListRequest()).toEqual({ t: 'sessions.list.request' });
+    expect(phoneClient.sessionsListSubscribe()).toEqual({ t: 'sessions.list.subscribe' });
+    expect(phoneClient.sessionsListUnsubscribe()).toEqual({ t: 'sessions.list.unsubscribe' });
     expect(phoneClient.sessionsCatalogRequest()).toEqual({ t: 'sessions.catalog.request' });
-    expect(phoneDaemon.sessionsCatalogRequest()).toEqual({ t: 'sessions.catalog.request' });
+    expect(phoneClient.sessionsListRequest()).toEqual(phoneDaemon.sessionsListRequest());
+    expect(phoneClient.sessionsListSubscribe()).toEqual(phoneDaemon.sessionsListSubscribe());
+    expect(phoneClient.sessionsListUnsubscribe()).toEqual(phoneDaemon.sessionsListUnsubscribe());
   });
 
   it('includes canonical STT selection in settings.update', () => {
@@ -131,7 +136,6 @@ describe('phone → daemon factories', () => {
     expect(phoneClient.sttAudioDone()).toEqual(phoneDaemon.sttAudioDone());
     expect(phoneClient.sttCancel()).toEqual(phoneDaemon.sttCancel());
     expect(phoneClient.replyCancel()).toEqual(phoneDaemon.replyCancel());
-    expect(phoneClient.sessionsCatalogRequest()).toEqual(phoneDaemon.sessionsCatalogRequest());
     expect(
       phoneClient.rendezvousJoin({
         sessionId: 's',
@@ -194,10 +198,6 @@ describe('daemon → phone factories', () => {
     expect(daemonClient.replyDone('a')).toEqual({ t: 'reply.done', text: 'a' });
     expect(daemonClient.replyError('r')).toEqual({ t: 'reply.error', message: 'r' });
     expect(daemonClient.ttsStart(24000)).toEqual({ t: 'tts.start', sample_rate: 24000 });
-    expect(daemonClient.sessionsCatalog({ generatedAt: '2026-05-05T00:00:00.000Z', sessions: [] })).toEqual({
-      t: 'sessions.catalog',
-      catalog: { generatedAt: '2026-05-05T00:00:00.000Z', sessions: [] },
-    });
     expect(daemonClient.ttsDone()).toEqual({ t: 'tts.done' });
     expect(daemonClient.ttsError('nope')).toEqual({ t: 'tts.error', message: 'nope' });
   });
@@ -219,6 +219,33 @@ describe('daemon → phone factories', () => {
     };
     expect(daemonClient.sttCatalog(catalog)).toEqual({ t: 'stt.catalog', catalog });
     expect(daemonClient.sttCatalog(catalog)).toEqual(daemonDaemon.sttCatalog(catalog));
+  });
+
+  it('emits recent session-list payloads', () => {
+    const snapshot = {
+      generatedAt: '2026-05-05T19:00:00.000Z',
+      sessions: [
+        {
+          sessionId: 'session-uuid',
+          sessionKey: 'agent:kamaji:discord:channel:thread-1',
+          agent: 'kamaji',
+          channel: 'discord',
+          target: 'channel:thread-1',
+          lastActivity: '2026-05-05T18:59:00.000Z',
+          displayLabel: 'Thread name',
+        },
+      ],
+    };
+    expect(daemonClient.sessionsList(snapshot)).toEqual({
+      t: 'sessions.list',
+      generatedAt: snapshot.generatedAt,
+      sessions: snapshot.sessions,
+    });
+    expect(daemonClient.sessionsList(snapshot)).toEqual(daemonDaemon.sessionsList(snapshot));
+    expect(daemonClient.sessionsCatalog(snapshot)).toEqual({
+      t: 'sessions.catalog',
+      catalog: snapshot,
+    });
   });
 
   it('emits TTS catalog payloads', () => {
@@ -254,9 +281,6 @@ describe('daemon → phone factories', () => {
     expect(daemonClient.replyDone('a')).toEqual(daemonDaemon.replyDone('a'));
     expect(daemonClient.replyError('r')).toEqual(daemonDaemon.replyError('r'));
     expect(daemonClient.ttsStart(24000)).toEqual(daemonDaemon.ttsStart(24000));
-    expect(daemonClient.sessionsCatalog({ generatedAt: 'now', sessions: [] })).toEqual(
-      daemonDaemon.sessionsCatalog({ generatedAt: 'now', sessions: [] }),
-    );
     expect(daemonClient.ttsDone()).toEqual(daemonDaemon.ttsDone());
     expect(daemonClient.ttsError('n')).toEqual(daemonDaemon.ttsError('n'));
   });

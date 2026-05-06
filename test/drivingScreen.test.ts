@@ -70,6 +70,16 @@ describe('DrivingScreen response scroll timing', () => {
   });
 });
 
+describe('DrivingScreen caption display', () => {
+  it('does not render a visible caption-state label above the transcript', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    expect(source).toContain('isAiResponseCaption');
+    expect(source).not.toContain('{caption.label}</span>');
+    expect(source).not.toContain('animation: \'pulseDot 1.2s ease-in-out infinite\'');
+  });
+});
+
 describe('DrivingScreen voice error labels', () => {
   it('surfaces infer STT, infer TTS, and reply auth failures with distinct labels', () => {
     const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
@@ -88,5 +98,41 @@ describe('DrivingScreen audio debug surface', () => {
     expect(source).toContain('REMOTE TTS');
     expect(source).toContain('remoteTtsAudio');
     expect(source).toContain('sttChunking');
+  });
+});
+
+describe('DrivingScreen session picker control', () => {
+  it('renders a compact SESSIONS footer picker backed by RTC recent sessions', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    expect(source).toContain('rtc.recentSessions');
+    expect(source).toContain('SessionPicker');
+    expect(source).toContain('label={activeSession ? compactSessionLabel(activeSession.displayLabel) : \'SESSIONS\'}');
+    expect(source).toContain('rtc.requestRecentSessions();');
+    expect(source).toContain('onSelectSession?.(session);');
+  });
+
+
+  it('hides the Sessions footer and picker until recent-session support is confirmed', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    expect(source).toContain("const recentSessionsSupported = rtc.recentSessionsSupportStatus === 'supported';");
+    expect(source).toContain("{recentSessionsSupported && sessionPickerOpen && (");
+    expect(source).toContain("gridTemplateColumns: recentSessionsSupported ? '1fr 1fr 1fr' : '1fr 1fr'");
+    expect(source).toContain('{recentSessionsSupported && (');
+    expect(source).toContain('if (!recentSessionsSupported) setSessionPickerOpen(false);');
+  });
+
+  it('surfaces loading, refreshing, timeout, and updated-at feedback in the session picker', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    expect(source).toContain('SessionListRequestPhase');
+    expect(source).toContain('RECENT_SESSIONS_REFRESH_TIMEOUT_MS');
+    expect(source).toContain('Loading recent sessions…');
+    expect(source).toContain('REFRESHING…');
+    expect(source).toContain('No refresh response yet');
+    expect(source).toContain('Updated just now');
+    expect(source).toContain('disabled={waiting}');
+    expect(source).toContain('formatRecentSessionsUpdatedAt');
   });
 });

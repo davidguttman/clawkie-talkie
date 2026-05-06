@@ -81,22 +81,19 @@ export interface SttCatalog {
   providers: SttCatalogProvider[];
 }
 
-export interface RecentSessionEntry {
-  id: string;
-  label: string;
+export interface RecentSession {
   sessionId: string;
-  sessionKey?: string;
-  agentId?: string;
+  sessionKey: string;
+  agent: string;
   channel?: string;
   target?: string;
-  accountId?: string;
-  kind?: string;
   lastActivity?: string;
+  displayLabel: string;
 }
 
 export interface RecentSessionsSnapshot {
   generatedAt: string;
-  sessions: RecentSessionEntry[];
+  sessions: RecentSession[];
 }
 
 export type PhoneToDaemon =
@@ -111,9 +108,12 @@ export type PhoneToDaemon =
       settings?: VoiceSettings;
     }
   | { t: 'settings.update'; settings: VoiceSettings }
-  | { t: 'sessions.catalog.request' }
   | { t: 'tts.catalog.request' }
   | { t: 'stt.catalog.request' }
+  | { t: 'sessions.list.request' }
+  | { t: 'sessions.catalog.request' }
+  | { t: 'sessions.list.subscribe' }
+  | { t: 'sessions.list.unsubscribe' }
   | { t: 'stt.start' }
   | { t: 'stt.audio.done' }
   | { t: 'stt.cancel' }
@@ -134,6 +134,7 @@ export type DaemonToPhone =
   | { t: 'tts.start'; sample_rate: number }
   | { t: 'tts.catalog'; catalog: TtsCatalog }
   | { t: 'stt.catalog'; catalog: SttCatalog }
+  | { t: 'sessions.list'; generatedAt: string; sessions: RecentSession[] }
   | { t: 'sessions.catalog'; catalog: RecentSessionsSnapshot }
   | { t: 'tts.done' }
   | { t: 'tts.error'; message: string };
@@ -153,9 +154,12 @@ export const phoneToDaemon = {
     t: 'settings.update',
     settings,
   }),
-  sessionsCatalogRequest: (): PhoneToDaemon => ({ t: 'sessions.catalog.request' }),
   ttsCatalogRequest: (): PhoneToDaemon => ({ t: 'tts.catalog.request' }),
   sttCatalogRequest: (): PhoneToDaemon => ({ t: 'stt.catalog.request' }),
+  sessionsListRequest: (): PhoneToDaemon => ({ t: 'sessions.list.request' }),
+  sessionsCatalogRequest: (): PhoneToDaemon => ({ t: 'sessions.catalog.request' }),
+  sessionsListSubscribe: (): PhoneToDaemon => ({ t: 'sessions.list.subscribe' }),
+  sessionsListUnsubscribe: (): PhoneToDaemon => ({ t: 'sessions.list.unsubscribe' }),
   sttStart: (): PhoneToDaemon => ({ t: 'stt.start' }),
   sttAudioDone: (): PhoneToDaemon => ({ t: 'stt.audio.done' }),
   sttCancel: (): PhoneToDaemon => ({ t: 'stt.cancel' }),
@@ -187,7 +191,15 @@ export const daemonToPhone = {
   }),
   ttsCatalog: (catalog: TtsCatalog): DaemonToPhone => ({ t: 'tts.catalog', catalog }),
   sttCatalog: (catalog: SttCatalog): DaemonToPhone => ({ t: 'stt.catalog', catalog }),
-  sessionsCatalog: (catalog: RecentSessionsSnapshot): DaemonToPhone => ({ t: 'sessions.catalog', catalog }),
+  sessionsList: (snapshot: RecentSessionsSnapshot): DaemonToPhone => ({
+    t: 'sessions.list',
+    generatedAt: snapshot.generatedAt,
+    sessions: snapshot.sessions,
+  }),
+  sessionsCatalog: (catalog: RecentSessionsSnapshot): DaemonToPhone => ({
+    t: 'sessions.catalog',
+    catalog,
+  }),
   ttsDone: (): DaemonToPhone => ({ t: 'tts.done' }),
   ttsError: (message: string): DaemonToPhone => ({ t: 'tts.error', message }),
 };

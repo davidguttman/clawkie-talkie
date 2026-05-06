@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { HIFI } from './tokens';
 import { HiFiPhone } from './components/Phone';
 import { DrivingScreen } from './screens/Driving';
@@ -26,7 +26,7 @@ import {
   speakReplayText,
 } from './voice/tts';
 import { parseHandoffUrl, type HandoffRoute } from './voice/handoffUrl';
-import type { RecentSessionEntry, VoiceSettings } from './voice/protocol';
+import type { RecentSession, VoiceSettings } from './voice/protocol';
 import { computeIsNarrow } from './responsive';
 
 type ScreenId = 'driving' | 'transcript' | 'error';
@@ -77,14 +77,38 @@ export function voiceSettingsForRtc(settings: Settings): VoiceSettings {
   }) ?? {};
 }
 
+
+export function handoffToRendezvous(handoff: HandoffRoute) {
+  return {
+    sessionId: handoff.sessionId,
+    ...(handoff.sessionKey ? { sessionKey: handoff.sessionKey } : {}),
+    ...(handoff.channel ? { channel: handoff.channel } : {}),
+    ...(handoff.target ? { target: handoff.target } : {}),
+    ...(handoff.accountId ? { accountId: handoff.accountId } : {}),
+  };
+}
+
+export function selectHandoffFromRecentSession(
+  current: HandoffRoute | null,
+  session: RecentSession,
+): HandoffRoute | null {
+  if (!current?.hostPeerId) return current;
+  return {
+    hostPeerId: current.hostPeerId,
+    sessionId: session.sessionId,
+    sessionKey: session.sessionKey,
+    ...(session.channel ? { channel: session.channel } : {}),
+    ...(session.target ? { target: session.target } : {}),
+  };
+}
+
 export function App() {
   const initial = useMemo(parseInitial, []);
   const [screen, setScreen] = useState<ScreenId>(initial.screen);
+  const [activeHandoff, setActiveHandoff] = useState<HandoffRoute | null>(initial.handoff);
   const [openSession, setOpenSession] = useState<string | undefined>(initial.sessionId);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [sessionsOpen, setSessionsOpen] = useState(false);
-  const [activeHandoff, setActiveHandoff] = useState<HandoffRoute | null>(initial.handoff);
   const [settings, setSettingsState] = useState<Settings>(() => loadSettings(initial.hostPeerId));
   const [replayAvailabilityTick, setReplayAvailabilityTick] = useState(0);
   const [isNarrow, setIsNarrow] = useState(computeIsNarrow);
@@ -110,25 +134,22 @@ export function App() {
   }, []);
   const openSettings = useCallback(() => {
     setHistoryOpen(false);
-    setSessionsOpen(false);
     setSettingsOpen(true);
   }, []);
   const openHistory = useCallback(() => {
     setSettingsOpen(false);
-    setSessionsOpen(false);
     setHistoryOpen(true);
-  }, []);
-  const openSessions = useCallback(() => {
-    setSettingsOpen(false);
-    setHistoryOpen(false);
-    setSessionsOpen(true);
   }, []);
 
   const compact = isNarrow;
   const currentSessionId =
-    screen === 'driving' ? activeHandoff?.sessionId || initial.sessionId : openSession || activeHandoff?.sessionId || initial.sessionId;
+    screen === 'driving' ? activeHandoff?.sessionId ?? initial.sessionId : openSession || activeHandoff?.sessionId || initial.sessionId;
 
   const rtcVoiceSettings = useMemo(() => voiceSettingsForRtc(settings), [settings]);
+
+  const selectRecentSession = useCallback((session: RecentSession) => {
+    setActiveHandoff((current) => selectHandoffFromRecentSession(current ?? initial.handoff, session));
+  }, [initial.handoff]);
 
   const replayLastReply = useCallback(async () => {
     const session = currentSessionId ? loadTranscriptSession(currentSessionId) : null;
@@ -169,12 +190,12 @@ export function App() {
           }
           canReplay={canReplayLastReply}
           onHistory={openHistory}
-          onSessions={openSessions}
           onSettings={openSettings}
           compact={compact}
-          sessionId={activeHandoff?.sessionId || initial.sessionId}
-          hostPeerId={activeHandoff?.hostPeerId || initial.hostPeerId}
+          sessionId={activeHandoff?.sessionId ?? initial.sessionId}
+          hostPeerId={activeHandoff?.hostPeerId ?? initial.hostPeerId}
           threadId={initial.threadId}
+          onSelectSession={selectRecentSession}
         />
       )}
       {screen === 'transcript' && (
@@ -205,7 +226,7 @@ export function App() {
     </>
   );
 
-  const overlayOpen = settingsOpen || historyOpen || sessionsOpen;
+  const overlayOpen = settingsOpen || historyOpen;
   const baseContentIsolationProps: { 'aria-hidden'?: true; inert?: '' } = overlayOpen
     ? { 'aria-hidden': true, inert: '' }
     : {};
@@ -232,21 +253,6 @@ export function App() {
           compact={compact}
         />
       )}
-      {sessionsOpen && (
-        <SessionsOverlay
-          onClose={() => setSessionsOpen(false)}
-          onPick={(session) => {
-            if (!activeHandoff) return;
-            const next = handoffFromSession(activeHandoff, session);
-            setActiveHandoff(next);
-            setSessionsOpen(false);
-            go('driving');
-            replaceHandoffHash(next);
-          }}
-          activeSessionId={activeHandoff?.sessionId}
-          compact={compact}
-        />
-      )}
       {settingsOpen && (
         <SettingsOverlay
           setSettingsOpen={setSettingsOpen}
@@ -261,17 +267,7 @@ export function App() {
   return (
     <RtcProvider
       hostPeerId={activeHandoff ? activeHandoff.hostPeerId : undefined}
-      rendezvous={
-        activeHandoff
-          ? {
-              sessionId: activeHandoff.sessionId,
-              ...(activeHandoff.sessionKey ? { sessionKey: activeHandoff.sessionKey } : {}),
-              ...(activeHandoff.channel ? { channel: activeHandoff.channel } : {}),
-              ...(activeHandoff.target ? { target: activeHandoff.target } : {}),
-              ...(activeHandoff.accountId ? { accountId: activeHandoff.accountId } : {}),
-            }
-          : null
-      }
+      rendezvous={activeHandoff ? handoffToRendezvous(activeHandoff) : null}
       voiceSettings={rtcVoiceSettings}
     >
       <RtcDisconnectGate isNarrow={isNarrow}>
@@ -279,185 +275,6 @@ export function App() {
       </RtcDisconnectGate>
     </RtcProvider>
   );
-}
-
-function handoffFromSession(current: HandoffRoute, session: RecentSessionEntry): HandoffRoute {
-  return {
-    hostPeerId: current.hostPeerId,
-    sessionId: session.sessionId,
-    ...(session.sessionKey ? { sessionKey: session.sessionKey } : {}),
-    ...(session.channel ? { channel: session.channel } : {}),
-    ...(session.target ? { target: session.target } : {}),
-    ...(session.accountId ? { accountId: session.accountId } : {}),
-  };
-}
-
-function replaceHandoffHash(handoff: HandoffRoute): void {
-  const params = new URLSearchParams();
-  params.set('host', handoff.hostPeerId);
-  params.set('session', handoff.sessionId);
-  if (handoff.sessionKey) params.set('sessionKey', handoff.sessionKey);
-  if (handoff.channel) params.set('channel', handoff.channel);
-  if (handoff.target) params.set('target', handoff.target);
-  if (handoff.accountId) params.set('accountId', handoff.accountId);
-  window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${params.toString()}`);
-}
-
-function SessionsOverlay({
-  onClose,
-  onPick,
-  activeSessionId,
-  compact,
-}: {
-  onClose: () => void;
-  onPick: (session: RecentSessionEntry) => void;
-  activeSessionId?: string;
-  compact: boolean;
-}) {
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const { sessionsCatalog, requestSessionsCatalog, status } = useRtc();
-
-  useEffect(() => {
-    dialogRef.current?.focus();
-    requestSessionsCatalog();
-    const timer = window.setInterval(requestSessionsCatalog, 60_000);
-    return () => window.clearInterval(timer);
-  }, [requestSessionsCatalog]);
-
-  const sessions = sessionsCatalog?.sessions ?? [];
-
-  return (
-    <div
-      style={{
-        position: 'absolute',
-        inset: 0,
-        zIndex: 100,
-        minHeight: 0,
-        overflow: 'hidden',
-      }}
-    >
-      <div
-        aria-hidden="true"
-        onClick={() => undefined}
-        onPointerDown={() => undefined}
-        onTouchStart={() => undefined}
-        style={{
-          position: 'absolute',
-          inset: 0,
-          zIndex: 0,
-          background: 'rgba(0, 0, 0, 0.42)',
-          pointerEvents: 'auto',
-          touchAction: 'none',
-        }}
-      />
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Sessions"
-        tabIndex={-1}
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') {
-            event.stopPropagation();
-            onClose();
-          }
-        }}
-        style={{
-          position: 'relative',
-          zIndex: 1,
-          height: '100%',
-          minHeight: 0,
-          outline: 'none',
-          background: HIFI.bg,
-          color: HIFI.ink,
-          fontFamily: HIFI.fonts.mono,
-          pointerEvents: 'auto',
-          display: 'flex',
-          flexDirection: 'column',
-          boxSizing: 'border-box',
-          padding: compact ? 16 : 22,
-          gap: 14,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <button
-            onClick={onClose}
-            aria-label="Back"
-            style={sessionButtonStyle({ compact, subtle: true })}
-          >
-            ←
-          </button>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: 1.4 }}>SESSIONS</div>
-            <div style={{ color: HIFI.ink3, fontSize: 11, marginTop: 3 }}>
-              {status === 'open' ? '10 most recent OpenClaw sessions' : 'Waiting for daemon…'}
-            </div>
-          </div>
-          <button
-            onClick={requestSessionsCatalog}
-            style={sessionButtonStyle({ compact, subtle: true })}
-          >
-            ↻
-          </button>
-        </div>
-        <div style={{ display: 'grid', gap: 8, overflow: 'auto', minHeight: 0 }}>
-          {sessions.length === 0 && (
-            <div style={{ color: HIFI.ink3, fontSize: 13, padding: '18px 4px' }}>
-              No recent sessions yet.
-            </div>
-          )}
-          {sessions.map((session) => {
-            const selected = session.sessionId === activeSessionId;
-            return (
-              <button
-                key={`${session.id}:${session.sessionKey ?? ''}`}
-                onClick={() => onPick(session)}
-                style={{
-                  textAlign: 'left',
-                  border: `1px solid ${selected ? HIFI.ai : HIFI.stroke}`,
-                  background: selected ? `${HIFI.ai}16` : 'rgba(255,255,255,0.03)',
-                  color: HIFI.ink,
-                  borderRadius: 14,
-                  padding: compact ? '11px 12px' : '13px 14px',
-                  cursor: 'pointer',
-                  fontFamily: HIFI.fonts.mono,
-                  minWidth: 0,
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 800 }}>
-                    {session.label}
-                  </span>
-                  {selected && <span style={{ color: HIFI.ai, fontSize: 11 }}>ACTIVE</span>}
-                </div>
-                <div style={{ marginTop: 5, color: HIFI.ink3, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {session.agentId ? `${session.agentId} · ` : ''}{session.channel || session.kind || 'session'}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function sessionButtonStyle({ compact, subtle }: { compact: boolean; subtle?: boolean }): CSSProperties {
-  return {
-    width: compact ? 34 : 38,
-    height: compact ? 34 : 38,
-    borderRadius: 12,
-    background: subtle ? 'transparent' : `${HIFI.ai}14`,
-    border: `1px solid ${HIFI.stroke}`,
-    color: HIFI.ink2,
-    cursor: 'pointer',
-    fontFamily: HIFI.fonts.mono,
-    fontSize: 16,
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  };
 }
 
 function HistoryOverlay({

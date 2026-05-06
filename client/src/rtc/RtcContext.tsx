@@ -13,7 +13,11 @@ import {
 } from 'react';
 import { RtcClient, type ControlMessage, type RtcStatus } from './client';
 import { attachDaemonRemoteStream, detachDaemonRemoteStream } from '../voice/tts';
-import { phoneToDaemon, type DeliveryTarget, type RecentSessionsSnapshot, type SttCatalog, type TtsCatalog, type VoiceSettings } from '../voice/protocol';
+import { phoneToDaemon, type DeliveryTarget, type RecentSession, type RecentSessionsSnapshot, type SttCatalog, type TtsCatalog, type VoiceSettings } from '../voice/protocol';
+
+export type RecentSessionsSupportStatus = 'unknown' | 'probing' | 'supported' | 'unsupported';
+
+const RECENT_SESSIONS_SUPPORT_TIMEOUT_MS = 4000;
 
 export interface RtcContextValue {
   status: RtcStatus;
@@ -30,8 +34,10 @@ export interface RtcContextValue {
   requestTtsCatalog: () => void;
   sttCatalog: SttCatalog | null;
   requestSttCatalog: () => void;
-  sessionsCatalog: RecentSessionsSnapshot | null;
-  requestSessionsCatalog: () => void;
+  recentSessions: RecentSession[];
+  recentSessionsGeneratedAt?: string;
+  recentSessionsSupportStatus: RecentSessionsSupportStatus;
+  requestRecentSessions: () => void;
   hasClient: boolean;
 }
 
@@ -49,8 +55,10 @@ const Ctx = createContext<RtcContextValue>({
   requestTtsCatalog: noop,
   sttCatalog: null,
   requestSttCatalog: noop,
-  sessionsCatalog: null,
-  requestSessionsCatalog: noop,
+  recentSessions: [],
+  recentSessionsGeneratedAt: undefined,
+  recentSessionsSupportStatus: 'unknown',
+  requestRecentSessions: noop,
   hasClient: false,
 });
 
@@ -124,7 +132,12 @@ export function RtcProvider({
   const [detail, setDetail] = useState<string | undefined>(undefined);
   const [ttsCatalog, setTtsCatalog] = useState<TtsCatalog | null>(null);
   const [sttCatalog, setSttCatalog] = useState<SttCatalog | null>(null);
-  const [sessionsCatalog, setSessionsCatalog] = useState<RecentSessionsSnapshot | null>(null);
+  const [recentSessionsSnapshot, setRecentSessionsSnapshot] = useState<RecentSessionsSnapshot>({
+    generatedAt: '',
+    sessions: [],
+  });
+  const [recentSessionsSupportStatus, setRecentSessionsSupportStatus] =
+    useState<RecentSessionsSupportStatus>('unknown');
   // The active room flips from the rendezvous host to the
   // deterministic per-session voice room after `rendezvous.accept`
   // arrives. Each flip re-creates the underlying RtcClient.
@@ -139,12 +152,14 @@ export function RtcProvider({
   useEffect(() => {
     setStatus('idle');
     setActiveRoomId(hostPeerId);
+    setRecentSessionsSupportStatus('unknown');
   }, [hostPeerId]);
 
   const clientRef = useRef<RtcClient | null>(null);
   const appliedVoiceSettingsRef = useRef<{ rendezvousKey: string; key: string } | null>(null);
   const lastSentVoiceRef = useRef<string | null>(null);
   const catalogRequestedRoomRef = useRef<string | null>(null);
+  const sessionsSubscribedRoomRef = useRef<string | null>(null);
   const previousRendezvousKeyRef = useRef<string | null>(rendezvousKey);
   const controlListenersRef = useRef<Set<(msg: ControlMessage) => void>>(new Set());
   const binaryListenersRef = useRef<Set<(bytes: ArrayBuffer) => void>>(new Set());
@@ -173,8 +188,25 @@ export function RtcProvider({
         if (msg.t === 'stt.catalog' && msg.catalog && typeof msg.catalog === 'object') {
           setSttCatalog(msg.catalog as SttCatalog);
         }
-        if (msg.t === 'sessions.catalog' && msg.catalog && typeof msg.catalog === 'object') {
-          setSessionsCatalog(msg.catalog as RecentSessionsSnapshot);
+        if (msg.t === 'sessions.list' && Array.isArray(msg.sessions)) {
+          setRecentSessionsSupportStatus('supported');
+          setRecentSessionsSnapshot({
+            generatedAt: typeof msg.generatedAt === 'string' ? msg.generatedAt : '',
+            sessions: msg.sessions as RecentSession[],
+          });
+        }
+        if (
+          msg.t === 'sessions.catalog' &&
+          msg.catalog &&
+          typeof msg.catalog === 'object' &&
+          Array.isArray((msg.catalog as { sessions?: unknown }).sessions)
+        ) {
+          const catalog = msg.catalog as Partial<RecentSessionsSnapshot>;
+          setRecentSessionsSupportStatus('supported');
+          setRecentSessionsSnapshot({
+            generatedAt: typeof catalog.generatedAt === 'string' ? catalog.generatedAt : '',
+            sessions: catalog.sessions as RecentSession[],
+          });
         }
         for (const fn of controlListenersRef.current) fn(msg);
       },
@@ -208,6 +240,9 @@ export function RtcProvider({
       appliedVoiceSettingsRef.current = null;
       lastSentVoiceRef.current = null;
       catalogRequestedRoomRef.current = null;
+      sessionsSubscribedRoomRef.current = null;
+      setRecentSessionsSupportStatus('unknown');
+      setDetail(undefined);
       setStatus('idle');
       setActiveRoomId(hostPeerId);
     }
@@ -275,9 +310,10 @@ export function RtcProvider({
     clientRef.current?.sendControl(phoneToDaemon.sttCatalogRequest());
   }, [activeRoomId, hostPeerId, status]);
 
-  const requestSessionsCatalog = useCallback(() => {
+  const requestRecentSessions = useCallback(() => {
     if (!activeRoomId || activeRoomId === hostPeerId) return;
     if (status !== 'open') return;
+    clientRef.current?.sendControl(phoneToDaemon.sessionsListRequest());
     clientRef.current?.sendControl(phoneToDaemon.sessionsCatalogRequest());
   }, [activeRoomId, hostPeerId, status]);
 
@@ -285,19 +321,50 @@ export function RtcProvider({
     if (!rendezvous || !hostPeerId) return;
     if (!activeRoomId || activeRoomId === hostPeerId) return;
     if (status !== 'open') return;
-    if (catalogRequestedRoomRef.current === activeRoomId) return;
-    catalogRequestedRoomRef.current = activeRoomId;
-    requestTtsCatalog();
-    requestSttCatalog();
-    requestSessionsCatalog();
-  }, [rendezvous, hostPeerId, activeRoomId, status, requestTtsCatalog, requestSttCatalog, requestSessionsCatalog]);
+    if (catalogRequestedRoomRef.current !== activeRoomId) {
+      catalogRequestedRoomRef.current = activeRoomId;
+      requestTtsCatalog();
+      requestSttCatalog();
+    }
+    if (sessionsSubscribedRoomRef.current !== activeRoomId) {
+      sessionsSubscribedRoomRef.current = activeRoomId;
+      setRecentSessionsSupportStatus((current) =>
+        current === 'supported' ? current : 'probing',
+      );
+      clientRef.current?.sendControl(phoneToDaemon.sessionsListSubscribe());
+      clientRef.current?.sendControl(phoneToDaemon.sessionsCatalogRequest());
+    }
+  }, [rendezvous, hostPeerId, activeRoomId, status, requestTtsCatalog, requestSttCatalog]);
 
   useEffect(() => {
     if (activeRoomId === hostPeerId) {
       lastSentVoiceRef.current = null;
       catalogRequestedRoomRef.current = null;
+      sessionsSubscribedRoomRef.current = null;
+      setRecentSessionsSupportStatus('unknown');
     }
   }, [activeRoomId, hostPeerId]);
+
+  useEffect(() => {
+    if (!activeRoomId || activeRoomId === hostPeerId || status !== 'open') {
+      setRecentSessionsSupportStatus('unknown');
+    }
+  }, [activeRoomId, hostPeerId, status]);
+
+  useEffect(() => {
+    if (!rendezvous || !hostPeerId) return;
+    if (!activeRoomId || activeRoomId === hostPeerId) return;
+    if (status !== 'open') return;
+    if (recentSessionsSupportStatus !== 'probing') return;
+
+    const timeout = setTimeout(() => {
+      setRecentSessionsSupportStatus((current) =>
+        current === 'probing' ? 'unsupported' : current,
+      );
+    }, RECENT_SESSIONS_SUPPORT_TIMEOUT_MS);
+
+    return () => clearTimeout(timeout);
+  }, [rendezvous, hostPeerId, activeRoomId, status, recentSessionsSupportStatus]);
 
   useEffect(() => {
     if (!rendezvous) return;
@@ -366,8 +433,10 @@ export function RtcProvider({
       requestTtsCatalog,
       sttCatalog,
       requestSttCatalog,
-      sessionsCatalog,
-      requestSessionsCatalog,
+      recentSessions: recentSessionsSnapshot.sessions,
+      recentSessionsGeneratedAt: recentSessionsSnapshot.generatedAt || undefined,
+      recentSessionsSupportStatus,
+      requestRecentSessions,
       hasClient: !!hostPeerId,
     }),
     [
@@ -382,8 +451,9 @@ export function RtcProvider({
       requestTtsCatalog,
       sttCatalog,
       requestSttCatalog,
-      sessionsCatalog,
-      requestSessionsCatalog,
+      recentSessionsSnapshot,
+      recentSessionsSupportStatus,
+      requestRecentSessions,
       hostPeerId,
     ],
   );

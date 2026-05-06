@@ -27,6 +27,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html'),
+        voiceHtml: resolve(__dirname, 'voice.html'),
         voice: resolve(__dirname, 'voice/index.html'),
       },
     },

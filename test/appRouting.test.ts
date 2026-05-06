@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseInitialLocation, parseInitialSearch } from '../client/src/app';
+import { handoffToRendezvous, parseInitialLocation, parseInitialSearch, selectHandoffFromRecentSession } from '../client/src/app';
 import { parseHandoffUrl } from '../client/src/voice/handoffUrl';
 
 describe('client URL parsing (legacy query)', () => {
@@ -127,6 +127,54 @@ describe('initial handoff routing', () => {
       screen: 'error',
       errorKind: 'bad_session',
       handoff: null,
+    });
+  });
+});
+
+
+describe('session picker handoff selection', () => {
+  it('keeps OpenClaw discovery details in daemon-provided session metadata', () => {
+    expect(
+      selectHandoffFromRecentSession(
+        {
+          hostPeerId: 'host-1',
+          sessionId: 'old-session',
+          sessionKey: 'agent:main:discord:channel:old',
+          channel: 'discord',
+          target: 'channel:old',
+        },
+        {
+          sessionId: 'new-session-uuid',
+          sessionKey: 'agent:kamaji:discord:channel:new-thread',
+          agent: 'kamaji',
+          channel: 'discord',
+          target: 'channel:new-thread',
+          displayLabel: 'New thread',
+        },
+      ),
+    ).toEqual({
+      hostPeerId: 'host-1',
+      sessionId: 'new-session-uuid',
+      sessionKey: 'agent:kamaji:discord:channel:new-thread',
+      channel: 'discord',
+      target: 'channel:new-thread',
+    });
+  });
+
+  it('maps a selected handoff to rendezvous props without a full reload', () => {
+    expect(
+      handoffToRendezvous({
+        hostPeerId: 'host-1',
+        sessionId: 'session-uuid',
+        sessionKey: 'agent:main:discord:channel:t1',
+        channel: 'discord',
+        target: 'channel:t1',
+      }),
+    ).toEqual({
+      sessionId: 'session-uuid',
+      sessionKey: 'agent:main:discord:channel:t1',
+      channel: 'discord',
+      target: 'channel:t1',
     });
   });
 });

@@ -88,7 +88,7 @@ vi.mock('../daemon/src/vad.js', () => ({
 }));
 
 import { ChatError } from '../daemon/src/chatSession.js';
-import type { SttCatalog, TtsCatalog, VoiceSettings } from '../daemon/src/protocol.js';
+import type { RecentSessionsSnapshot, SttCatalog, TtsCatalog, VoiceSettings } from '../daemon/src/protocol.js';
 import {
   createVoiceSessionState,
   decidePhoneConnection,
@@ -105,6 +105,7 @@ function makeVoiceSession(overrides: {
   createSpeechDetector?: SpeechDetectorFactory;
   ttsCatalogProvider?: () => Promise<TtsCatalog>;
   sttCatalogProvider?: () => Promise<SttCatalog>;
+  recentSessionsProvider?: () => Promise<RecentSessionsSnapshot>;
   voiceSettings?: VoiceSettings;
   ttsSessionFactory?: TtsSessionFactory;
   onClose?: (roomId: string) => void;
@@ -135,6 +136,7 @@ function makeVoiceSession(overrides: {
     ...(overrides.voiceSettings ? { voiceSettings: overrides.voiceSettings } : {}),
     ttsCatalogProvider: overrides.ttsCatalogProvider ?? defaultTtsCatalogProvider,
     ...(overrides.sttCatalogProvider ? { sttCatalogProvider: overrides.sttCatalogProvider } : {}),
+    ...(overrides.recentSessionsProvider ? { recentSessionsProvider: overrides.recentSessionsProvider } : {}),
     ...(overrides.ttsSessionFactory ? { ttsSessionFactory: overrides.ttsSessionFactory } : {}),
     onClose: overrides.onClose ?? vi.fn(),
   });
@@ -308,6 +310,63 @@ describe('voice session TTS catalog runtime', () => {
     });
     expect(onClose).not.toHaveBeenCalled();
     expect((session as unknown as { state: { closed: boolean } }).state.closed).toBe(false);
+  });
+});
+
+
+describe('voice session recent-session list runtime', () => {
+  it('sends the recent session list when the phone requests it', async () => {
+    const snapshot: RecentSessionsSnapshot = {
+      generatedAt: '2026-05-05T19:00:00.000Z',
+      sessions: [
+        {
+          sessionId: 'session-uuid',
+          sessionKey: 'agent:kamaji:discord:channel:t1',
+          agent: 'kamaji',
+          channel: 'discord',
+          target: 'channel:t1',
+          lastActivity: '2026-05-05T18:59:00.000Z',
+          displayLabel: 'planning',
+        },
+      ],
+    };
+    const recentSessionsProvider = vi.fn(async () => snapshot);
+    const { session, peer } = makeVoiceSession({ recentSessionsProvider });
+
+    sendControl(session, { t: 'sessions.list.request' });
+
+    await vi.waitFor(() => {
+      expect(sentJson(peer)).toContainEqual({
+        t: 'sessions.list',
+        generatedAt: snapshot.generatedAt,
+        sessions: snapshot.sessions,
+      });
+    });
+    expect(recentSessionsProvider).toHaveBeenCalledTimes(1);
+  });
+
+  it('subscribes to recent session list updates without closing the session on provider failure', async () => {
+    vi.useFakeTimers();
+    const first: RecentSessionsSnapshot = { generatedAt: 'first', sessions: [] };
+    const recentSessionsProvider = vi
+      .fn()
+      .mockResolvedValueOnce(first)
+      .mockRejectedValueOnce(new Error('sessions failed'));
+    const onClose = vi.fn();
+    const { session, peer } = makeVoiceSession({ recentSessionsProvider, onClose });
+
+    sendControl(session, { t: 'sessions.list.subscribe' });
+
+    await vi.waitFor(() => {
+      expect(sentJson(peer)).toContainEqual({ t: 'sessions.list', generatedAt: 'first', sessions: [] });
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await vi.waitFor(() => {
+      expect(sentJson(peer).filter((msg) => msg.t === 'sessions.list')).toHaveLength(2);
+    });
+    expect(onClose).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 });
 

@@ -1,338 +1,237 @@
-import { execFile } from 'node:child_process';
+import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
+import type { RecentSession, RecentSessionsSnapshot } from './protocol.js';
 
-const execFileAsync = promisify(execFile);
+const execAsync = promisify(exec);
 
-export const DEFAULT_RECENT_SESSION_LIMIT = 10;
-export const DEFAULT_RECENT_SESSION_POLL_MS = 60_000;
-const DEFAULT_ACTIVE_MINUTES = 10_080;
-const DISCORD_CHANNEL_INFO_TIMEOUT_MS = 2_500;
-const ROUTABLE_MESSAGE_CHANNELS = new Set([
-  'telegram', 'whatsapp', 'discord', 'irc', 'googlechat', 'slack', 'signal',
-  'imessage', 'feishu', 'nostr', 'msteams', 'mattermost', 'nextcloud-talk',
-  'matrix', 'bluebubbles', 'line', 'zalo', 'zalouser', 'synology-chat',
-  'tlon', 'qa-channel', 'qqbot', 'twitch',
-]);
-
-export interface RecentSessionEntry {
-  id: string;
-  label: string;
-  sessionId: string;
-  sessionKey?: string;
-  agentId?: string;
-  channel?: string;
-  target?: string;
-  accountId?: string;
-  kind?: string;
-  lastActivity?: string;
-}
-
-export interface RecentSessionsSnapshot {
-  generatedAt: string;
-  sessions: RecentSessionEntry[];
-}
+export const DEFAULT_RECENT_SESSIONS_TTL_MS = 60_000;
+export const DEFAULT_RECENT_SESSIONS_LIMIT = 10;
+const RECENT_SESSIONS_ACTIVE_MINUTES = 10_080;
 
 export interface RecentSessionsCacheOptions {
-  limit?: number;
-  pollMs?: number;
-  activeMinutes?: number;
-  autoStart?: boolean;
-  loadSessions?: () => Promise<RecentSessionEntry[]>;
+  loadSessions: () => Promise<RecentSessionsSnapshot>;
+  ttlMs: number;
+  now?: () => number;
 }
 
-export class RecentSessionsCache {
-  private readonly limit: number;
-  private readonly pollMs: number;
-  private readonly activeMinutes: number;
-  private readonly loadSessionsOverride?: () => Promise<RecentSessionEntry[]>;
-  private interval: NodeJS.Timeout | null = null;
-  private refreshInFlight: Promise<void> | null = null;
-  private snapshot: RecentSessionsSnapshot = {
-    generatedAt: new Date(0).toISOString(),
-    sessions: [],
-  };
+export interface RecentSessionsCache {
+  get(): Promise<RecentSessionsSnapshot>;
+}
 
-  constructor(opts: RecentSessionsCacheOptions = {}) {
-    this.limit = opts.limit ?? DEFAULT_RECENT_SESSION_LIMIT;
-    this.pollMs = opts.pollMs ?? DEFAULT_RECENT_SESSION_POLL_MS;
-    this.activeMinutes = opts.activeMinutes ?? DEFAULT_ACTIVE_MINUTES;
-    this.loadSessionsOverride = opts.loadSessions;
-    if (opts.autoStart !== false) this.start();
-  }
+export interface BuildRecentSessionsOptions {
+  limit?: number;
+  generatedAt?: string;
+  resolveDisplayLabel?: (session: RecentSession) => Promise<string | undefined>;
+}
 
-  start(): void {
-    if (this.interval) return;
-    void this.refresh();
-    this.interval = setInterval(() => {
-      void this.refresh();
-    }, this.pollMs);
-    this.interval.unref?.();
-  }
+interface OpenClawSessionsJson {
+  sessions?: unknown[];
+}
 
-  stop(): void {
-    if (!this.interval) return;
-    clearInterval(this.interval);
-    this.interval = null;
-  }
+export function createEmptyRecentSessionsSnapshot(generatedAt = new Date().toISOString()): RecentSessionsSnapshot {
+  return { generatedAt, sessions: [] };
+}
 
-  getSnapshot(): RecentSessionsSnapshot {
-    return {
-      generatedAt: this.snapshot.generatedAt,
-      sessions: this.snapshot.sessions.map((session) => ({ ...session })),
-    };
-  }
+export function createRecentSessionsCache(options: RecentSessionsCacheOptions): RecentSessionsCache {
+  let cached: RecentSessionsSnapshot | undefined;
+  let expiresAt = 0;
+  const now = options.now ?? Date.now;
 
-  async refresh(): Promise<void> {
-    if (this.refreshInFlight) return this.refreshInFlight;
-    this.refreshInFlight = (async () => {
+  return {
+    async get(): Promise<RecentSessionsSnapshot> {
+      const ts = now();
+      if (cached && ts < expiresAt) return cached;
+
       try {
-        const sessions = this.loadSessionsOverride
-          ? await this.loadSessionsOverride()
-          : await loadRecentOpenClawSessions({ limit: this.limit, activeMinutes: this.activeMinutes });
-        this.snapshot = {
-          generatedAt: new Date().toISOString(),
-          sessions: sessions.slice(0, this.limit),
-        };
-      } catch (err) {
-        console.error(`[sessions] recent session refresh failed: ${safeErrorMessage(err)}`);
-      } finally {
-        this.refreshInFlight = null;
+        cached = await options.loadSessions();
+      } catch {
+        cached ??= createEmptyRecentSessionsSnapshot(new Date(ts).toISOString());
       }
-    })();
-    return this.refreshInFlight;
-  }
+      expiresAt = now() + options.ttlMs;
+      return cached;
+    },
+  };
 }
 
-export async function loadRecentOpenClawSessions(opts: {
-  limit?: number;
-  activeMinutes?: number;
-} = {}): Promise<RecentSessionEntry[]> {
-  const limit = opts.limit ?? DEFAULT_RECENT_SESSION_LIMIT;
-  const activeMinutes = opts.activeMinutes ?? DEFAULT_ACTIVE_MINUTES;
-  const stdout = await execOpenClaw([
+export async function getRecentSessionsWithOpenClaw(): Promise<RecentSessionsSnapshot> {
+  const args = [
     'sessions',
     '--json',
     '--all-agents',
     '--active',
-    String(activeMinutes),
+    String(RECENT_SESSIONS_ACTIVE_MINUTES),
     '--limit',
-    String(Math.max(limit * 3, limit)),
-  ]);
-  const rows = parseOpenClawSessions(stdout)
-    .filter(isSelectableSessionRow)
-    .sort(compareSessionRowsByLastActivityDesc);
-
-  const entries: RecentSessionEntry[] = [];
-  for (const row of rows) {
-    const entry = await sessionRowToEntry(row);
-    if (!entry) continue;
-    entries.push(entry);
-    if (entries.length >= limit) break;
-  }
-  return entries;
+    String(DEFAULT_RECENT_SESSIONS_LIMIT),
+  ];
+  const { stdout } = await execAsync(`openclaw ${args.map((arg) => JSON.stringify(arg)).join(' ')}`);
+  return buildRecentSessionsFromOpenClawJson(stdout, {
+    limit: DEFAULT_RECENT_SESSIONS_LIMIT,
+    resolveDisplayLabel: resolveOpenClawDisplayLabel,
+  });
 }
 
-export interface OpenClawSessionRow {
-  key?: unknown;
-  sessionId?: unknown;
-  agentId?: unknown;
-  kind?: unknown;
-  updatedAt?: unknown;
-  lastActivity?: unknown;
-  lastActivityAt?: unknown;
-}
-
-function parseOpenClawSessions(stdout: string): OpenClawSessionRow[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    return [];
-  }
+export async function buildRecentSessionsFromOpenClawJson(
+  stdout: string,
+  options: BuildRecentSessionsOptions = {},
+): Promise<RecentSessionsSnapshot> {
+  const parsed = parseOpenClawSessionsJson(stdout);
   const rows = Array.isArray(parsed)
     ? parsed
-    : parsed && typeof parsed === 'object' && Array.isArray((parsed as { sessions?: unknown }).sessions)
-      ? (parsed as { sessions: unknown[] }).sessions
+    : parsed && typeof parsed === 'object' && Array.isArray((parsed as OpenClawSessionsJson).sessions)
+      ? (parsed as OpenClawSessionsJson).sessions!
       : [];
-  return rows.filter((row): row is OpenClawSessionRow => !!row && typeof row === 'object');
+
+  return buildRecentSessionsFromRows(rows, options);
 }
 
-export async function sessionRowToEntry(
-  row: OpenClawSessionRow,
-  lookupChannelLabel: (target: string, accountId?: string) => Promise<string | undefined> = lookupDiscordChannelLabel,
-): Promise<RecentSessionEntry | null> {
-  const sessionId = readTrimmed(row.sessionId);
-  const sessionKey = readTrimmed(row.key);
-  if (!sessionId && !sessionKey) return null;
+export async function buildRecentSessionsFromRows(
+  rows: unknown[],
+  options: BuildRecentSessionsOptions = {},
+): Promise<RecentSessionsSnapshot> {
+  const limit = Math.max(0, Math.min(options.limit ?? DEFAULT_RECENT_SESSIONS_LIMIT, DEFAULT_RECENT_SESSIONS_LIMIT));
+  const parsed = rows
+    .map(parseOpenClawSessionRow)
+    .filter((session): session is RecentSession => !!session)
+    .sort((a, b) => compareLastActivityDesc(a.lastActivity, b.lastActivity))
+    .slice(0, limit);
 
-  const route = deriveRouteFromSessionKey(sessionKey);
-  const discordLabel = route.channel === 'discord' && route.target
-    ? await lookupChannelLabel(route.target, route.accountId)
-    : undefined;
-  const fallbackLabel = sessionKey || sessionId || 'OpenClaw session';
-  const label = discordLabel || buildFallbackLabel({
-    sessionKey,
-    sessionId,
-    agentId: readTrimmed(row.agentId),
-    kind: readTrimmed(row.kind),
-  });
-  const lastActivity = readLastActivity(row);
+  const sessions: RecentSession[] = [];
+  for (const session of parsed) {
+    const displayLabel = (await options.resolveDisplayLabel?.(session))?.trim() || session.displayLabel;
+    sessions.push({ ...session, displayLabel });
+  }
 
   return {
-    id: sessionId || sessionKey!,
-    label: label || fallbackLabel,
-    sessionId: sessionId || sessionKey!,
-    ...(sessionKey ? { sessionKey } : {}),
-    ...(readTrimmed(row.agentId) ? { agentId: readTrimmed(row.agentId) } : {}),
-    ...(route.channel ? { channel: route.channel } : {}),
-    ...(route.target ? { target: route.target } : {}),
-    ...(route.accountId ? { accountId: route.accountId } : {}),
-    ...(readTrimmed(row.kind) ? { kind: readTrimmed(row.kind) } : {}),
-    ...(lastActivity ? { lastActivity } : {}),
+    generatedAt: options.generatedAt ?? new Date().toISOString(),
+    sessions,
   };
 }
 
-export function compareSessionRowsByLastActivityDesc(a: OpenClawSessionRow, b: OpenClawSessionRow): number {
-  return readLastActivityMillis(b) - readLastActivityMillis(a);
+function parseOpenClawSessionsJson(stdout: string): unknown {
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    return null;
+  }
 }
 
-function readLastActivity(row: OpenClawSessionRow): string | undefined {
-  return readTimestamp(row.lastActivity)?.text
-    ?? readTimestamp(row.lastActivityAt)?.text
-    ?? readTimestamp(row.updatedAt)?.text;
+function parseOpenClawSessionRow(row: unknown): RecentSession | null {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
+  const source = row as Record<string, unknown>;
+  const sessionKey = readString(source.key) ?? readString(source.sessionKey);
+  if (!sessionKey) return null;
+
+  const parsedKey = parseOpenClawSessionKey(sessionKey);
+  const sessionId = readString(source.sessionId) ?? readString(source.id) ?? sessionKey;
+  const agent = readString(source.agentId) ?? parsedKey.agent;
+  const lastActivity =
+    readTimestamp(source.updatedAt) ?? readTimestamp(source.lastActivity) ?? readTimestamp(source.lastActivityAt);
+  const channel = readString(source.channel) ?? parsedKey.channel;
+  const target = readString(source.target) ?? parsedKey.target;
+
+  return {
+    sessionId,
+    sessionKey,
+    agent: agent || 'unknown',
+    channel,
+    target,
+    lastActivity,
+    displayLabel: sessionKey,
+  };
 }
 
-function readLastActivityMillis(row: OpenClawSessionRow): number {
-  return readTimestamp(row.lastActivity)?.millis
-    ?? readTimestamp(row.lastActivityAt)?.millis
-    ?? readTimestamp(row.updatedAt)?.millis
-    ?? 0;
-}
-
-function readTimestamp(value: unknown): { text: string; millis: number } | undefined {
-  if (typeof value === 'number') return readNumericTimestamp(value);
-
-  const text = readTrimmed(value);
-  if (!text) return undefined;
-
-  const numeric = Number(text);
-  if (Number.isFinite(numeric)) return readNumericTimestamp(numeric);
-
-  const millis = Date.parse(text);
-  if (!Number.isFinite(millis)) return { text, millis: 0 };
-  return { text, millis };
-}
-
-function readNumericTimestamp(value: number): { text: string; millis: number } | undefined {
-  if (!Number.isFinite(value)) return undefined;
-  const date = new Date(value);
-  const millis = date.getTime();
-  if (!Number.isFinite(millis)) return undefined;
-  return { text: date.toISOString(), millis };
-}
-
-export function deriveRouteFromSessionKey(sessionKey: string | undefined): {
+export function parseOpenClawSessionKey(sessionKey: string): {
+  agent?: string;
   channel?: string;
   target?: string;
-  accountId?: string;
 } {
-  if (!sessionKey?.startsWith('agent:')) return {};
   const parts = sessionKey.split(':').map((part) => part.trim()).filter(Boolean);
+  if (parts[0] !== 'agent') return {};
+  const agent = parts[1];
   const channel = parts[2];
-  if (!channel || !ROUTABLE_MESSAGE_CHANNELS.has(channel)) return {};
+  if (!channel) return { ...(agent ? { agent } : {}) };
 
-  const channelIndex = parts.indexOf('channel', 3);
-  if (channelIndex >= 0 && parts[channelIndex + 1]) {
-    return { channel, target: `channel:${parts[channelIndex + 1]}` };
+  if (channel === 'discord') {
+    const id = parts.at(-1);
+    return {
+      ...(agent ? { agent } : {}),
+      channel,
+      ...(id ? { target: `channel:${id}` } : {}),
+    };
   }
 
-  const threadIndex = parts.indexOf('thread', 3);
-  if (threadIndex >= 0 && parts[threadIndex + 1]) {
-    return { channel, target: `channel:${parts[threadIndex + 1]}` };
-  }
-
-  if (parts[3] && !['direct', 'subagent', 'cron', 'main'].includes(parts[3])) {
-    return { channel, target: `channel:${parts[3]}` };
-  }
-
-  return { channel };
+  const kind = parts[3];
+  const id = parts.at(-1);
+  return {
+    ...(agent ? { agent } : {}),
+    channel,
+    ...(kind && id && id !== kind ? { target: `${kind}:${id}` } : {}),
+  };
 }
 
-function isSelectableSessionRow(row: OpenClawSessionRow): boolean {
-  const kind = readTrimmed(row.kind);
-  if (kind === 'cron') return false;
-  const key = readTrimmed(row.key);
-  if (!key) return !!readTrimmed(row.sessionId);
-  const route = deriveRouteFromSessionKey(key);
-  return !!route.channel;
+async function resolveOpenClawDisplayLabel(session: RecentSession): Promise<string | undefined> {
+  if (session.channel !== 'discord' || !session.target?.startsWith('channel:')) return undefined;
+  return resolveDiscordChannelLabel(session.target);
 }
 
-async function lookupDiscordChannelLabel(target: string, accountId?: string): Promise<string | undefined> {
+export async function resolveDiscordChannelLabel(target: string): Promise<string | undefined> {
+  const args = ['message', 'channel', 'info', '--channel', 'discord', '--target', target, '--json'];
   try {
-    const args = [
-      'message', 'channel', 'info',
-      '--channel', 'discord',
-      '--target', target,
-      '--json',
-      ...(accountId ? ['--account', accountId] : []),
-    ];
-    const stdout = await execOpenClaw(args, { timeout: DISCORD_CHANNEL_INFO_TIMEOUT_MS });
-    return parseDiscordChannelLabel(stdout);
+    const { stdout } = await execAsync(`openclaw ${args.map((arg) => JSON.stringify(arg)).join(' ')}`);
+    return extractDiscordChannelName(stdout);
   } catch {
     return undefined;
   }
 }
 
-export function parseDiscordChannelLabel(stdout: string): string | undefined {
+export function extractDiscordChannelName(stdout: string): string | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
   } catch {
     return undefined;
   }
-  const payload = parsed && typeof parsed === 'object'
-    ? (parsed as { payload?: unknown }).payload
-    : undefined;
-  const channel = payload && typeof payload === 'object'
-    ? (payload as { channel?: unknown }).channel
-    : undefined;
-  if (!channel || typeof channel !== 'object') return undefined;
-  const name = readTrimmed((channel as { name?: unknown }).name);
-  return name;
+  const payloadThread = readPathString(parsed, ['payload', 'thread', 'name']);
+  const thread = readPathString(parsed, ['thread', 'name']);
+  const payloadChannel = readPathString(parsed, ['payload', 'channel', 'name']);
+  const channel = readPathString(parsed, ['channel', 'name']);
+  const name = readPathString(parsed, ['name']);
+  return payloadThread ?? thread ?? payloadChannel ?? channel ?? name;
 }
 
-function buildFallbackLabel(input: {
-  sessionKey?: string;
-  sessionId?: string;
-  agentId?: string;
-  kind?: string;
-}): string {
-  const key = input.sessionKey;
-  if (key?.startsWith('agent:')) {
-    const parts = key.split(':').map((part) => part.trim()).filter(Boolean);
-    const agent = parts[1] || input.agentId || 'agent';
-    const channel = parts[2];
-    const id = parts.at(-1);
-    if (channel && id && id !== channel) return `${agent} · ${channel} · ${id}`;
-    if (channel) return `${agent} · ${channel}`;
+function readPathString(value: unknown, path: string[]): string | undefined {
+  let cur = value;
+  for (const key of path) {
+    if (!cur || typeof cur !== 'object' || Array.isArray(cur)) return undefined;
+    cur = (cur as Record<string, unknown>)[key];
   }
-  return key || input.sessionId || 'OpenClaw session';
+  return readString(cur);
 }
 
-async function execOpenClaw(args: string[], opts: { timeout?: number } = {}): Promise<string> {
-  const { stdout } = await execFileAsync('openclaw', args, {
-    timeout: opts.timeout ?? 15_000,
-    maxBuffer: 1024 * 1024,
-  });
-  return stdout;
-}
-
-function readTrimmed(value: unknown): string | undefined {
+function readString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed || undefined;
 }
 
-function safeErrorMessage(err: unknown): string {
-  return err instanceof Error && err.message ? err.message : String(err);
+function readTimestamp(value: unknown): string | undefined {
+  const text = readString(value);
+  if (text) return text;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  const timestamp = new Date(value);
+  if (!Number.isFinite(timestamp.getTime())) return undefined;
+  return timestamp.toISOString();
 }
+
+function compareLastActivityDesc(a: string | undefined, b: string | undefined): number {
+  const at = Date.parse(a ?? '');
+  const bt = Date.parse(b ?? '');
+  const av = Number.isFinite(at) ? at : 0;
+  const bv = Number.isFinite(bt) ? bt : 0;
+  return bv - av;
+}
+
+export const defaultRecentSessionsCache = createRecentSessionsCache({
+  loadSessions: () => getRecentSessionsWithOpenClaw(),
+  ttlMs: DEFAULT_RECENT_SESSIONS_TTL_MS,
+});

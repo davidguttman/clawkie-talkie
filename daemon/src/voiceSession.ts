@@ -23,8 +23,10 @@ import { SignalClient, type SignalData } from './signal.js';
 import { classifySignal, decideForwardToLivePeer, decideIncomingSignal } from './signalKind.js';
 import { createEmptyTtsCatalog, defaultTtsCatalogCache } from './ttsCatalog.js';
 import { createEmptySttCatalog, defaultSttCatalogCache } from './sttCatalog.js';
+import { createEmptyRecentSessionsSnapshot, defaultRecentSessionsCache } from './recentSessions.js';
 
 const MAX_BUFFERED_CANDIDATES_PER_PEER = 32;
+const RECENT_SESSIONS_SUBSCRIPTION_INTERVAL_MS = 60_000;
 import {
   FRAME_10MS,
   WEBRTC_SAMPLE_RATE,
@@ -183,7 +185,7 @@ export interface VoiceSessionRuntimeOptions {
   ttsSessionFactory?: TtsSessionFactory;
   ttsCatalogProvider?: () => Promise<TtsCatalog>;
   sttCatalogProvider?: () => Promise<SttCatalog>;
-  recentSessionsProvider?: () => RecentSessionsSnapshot | Promise<RecentSessionsSnapshot>;
+  recentSessionsProvider?: () => Promise<RecentSessionsSnapshot>;
   onClose: (roomId: string) => void;
 }
 
@@ -215,6 +217,7 @@ export class VoiceSession {
   private sttOpenToken = 0;
   private turnToken = 0;
   private audioPumpTurnToken: number | null = null;
+  private recentSessionsInterval: NodeJS.Timeout | null = null;
   private readonly replacedRemoteIds = new Set<string>();
   private readonly pendingCandidates = new Map<string, SignalPayload[]>();
 
@@ -339,6 +342,7 @@ export class VoiceSession {
     this.pendingCandidates.clear();
     this.clearConnectionTimeout();
     this.stopKeepalive();
+    this.stopRecentSessionsSubscription();
     this.closeOutboundAudio();
     try {
       this.signalClient.close();
@@ -451,6 +455,7 @@ export class VoiceSession {
 
     this.clearConnectionTimeout();
     this.stopKeepalive();
+    this.stopRecentSessionsSubscription();
     this.resetTurn(reason);
     this.closeOutboundAudio();
     this.peer = null;
@@ -495,6 +500,7 @@ export class VoiceSession {
     console.error(`[voice ${this.roomId}] tearDownPeer reason=${reason}`);
     this.clearConnectionTimeout();
     this.stopKeepalive();
+    this.stopRecentSessionsSubscription();
     this.resetTurn(reason);
     try {
       this.peer?.destroy();
@@ -672,8 +678,17 @@ export class VoiceSession {
       void this.sendSttCatalog();
       return;
     }
-    if (msg.t === 'sessions.catalog.request') {
-      void this.sendRecentSessionsCatalog();
+    if (msg.t === 'sessions.list.request') {
+      void this.sendRecentSessions();
+      return;
+    }
+    if (msg.t === 'sessions.list.subscribe') {
+      this.startRecentSessionsSubscription();
+      void this.sendRecentSessions();
+      return;
+    }
+    if (msg.t === 'sessions.list.unsubscribe') {
+      this.stopRecentSessionsSubscription();
       return;
     }
     if (msg.t === 'stt.start') {
@@ -722,14 +737,26 @@ export class VoiceSession {
     }
   }
 
-  private async sendRecentSessionsCatalog(): Promise<void> {
-    const empty: RecentSessionsSnapshot = { generatedAt: new Date(0).toISOString(), sessions: [] };
+  private startRecentSessionsSubscription(): void {
+    if (this.recentSessionsInterval) return;
+    this.recentSessionsInterval = setInterval(() => {
+      void this.sendRecentSessions();
+    }, RECENT_SESSIONS_SUBSCRIPTION_INTERVAL_MS);
+    this.recentSessionsInterval.unref?.();
+  }
+
+  private stopRecentSessionsSubscription(): void {
+    if (!this.recentSessionsInterval) return;
+    clearInterval(this.recentSessionsInterval);
+    this.recentSessionsInterval = null;
+  }
+
+  private async sendRecentSessions(): Promise<void> {
     try {
-      const loadCatalog = this.opts.recentSessionsProvider;
-      this.send(daemonToPhone.sessionsCatalog(loadCatalog ? await loadCatalog() : empty));
-    } catch (err) {
-      console.error(`[voice ${this.roomId}] recent sessions load failed: ${sanitizedErrorMessage(err)}`);
-      this.send(daemonToPhone.sessionsCatalog(empty));
+      const loadSessions = this.opts.recentSessionsProvider ?? (() => defaultRecentSessionsCache.get());
+      this.send(daemonToPhone.sessionsList(await loadSessions()));
+    } catch {
+      this.send(daemonToPhone.sessionsList(createEmptyRecentSessionsSnapshot()));
     }
   }
 
