@@ -274,6 +274,52 @@ describe('session snapshot replay', () => {
     expect(next.liveReplyText).toBe('');
     expect(side).toEqual([{ kind: 'armTts' }]);
   });
+
+  it('hydrates a stale reply-ready reconnect as idle replayable text without arming TTS', () => {
+    const { next, side } = reduce(idle, {
+      type: 'session.replay',
+      events: [{ type: 'reply.done', text: 'One moment.' }],
+      hydration: {
+        context: {
+          ...initialContext,
+          state: 'idle',
+          lastUserText: 'hello',
+          lastReplyText: 'spoken reply',
+        },
+        armTts: false,
+      },
+    });
+
+    expect(next.state).toBe('idle');
+    expect(next.lastUserText).toBe('hello');
+    expect(next.lastReplyText).toBe('spoken reply');
+    expect(next.pendingReplyText).toBe('');
+    expect(next.liveReplyText).toBe('');
+    expect(side).toEqual([]);
+  });
+
+  it('hydrates a stale speaking reconnect as idle replayable text without active AI playback', () => {
+    const { next, side } = reduce(idle, {
+      type: 'session.replay',
+      events: [{ type: 'tts.start' }],
+      hydration: {
+        context: {
+          ...initialContext,
+          state: 'idle',
+          lastUserText: 'hello',
+          lastReplyText: 'spoken reply',
+        },
+        armTts: false,
+      },
+    });
+
+    expect(next.state).toBe('idle');
+    expect(next.lastUserText).toBe('hello');
+    expect(next.lastReplyText).toBe('spoken reply');
+    expect(next.liveReplyText).toBe('');
+    expect(side).toEqual([]);
+  });
+
 });
 
 describe('displayedCaptionText', () => {

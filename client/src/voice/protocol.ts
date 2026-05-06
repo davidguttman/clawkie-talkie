@@ -170,6 +170,7 @@ export type DaemonToPhone =
       t: 'session.snapshot';
       roomId: string;
       latestEventId: number;
+      disconnectedMs?: number;
       turn: VoiceTurnSnapshot;
       events: ControlEventRecord[];
     };
@@ -238,12 +239,14 @@ export const daemonToPhone = {
   sessionSnapshot: (input: {
     roomId: string;
     latestEventId: number;
+    disconnectedMs?: number;
     turn: VoiceTurnSnapshot;
     events: ControlEventRecord[];
   }): DaemonToPhone => ({
     t: 'session.snapshot',
     roomId: input.roomId,
     latestEventId: input.latestEventId,
+    ...(typeof input.disconnectedMs === 'number' ? { disconnectedMs: input.disconnectedMs } : {}),
     turn: input.turn,
     events: input.events,
   }),

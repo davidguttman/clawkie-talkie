@@ -977,19 +977,41 @@ describe('voice session OpenClaw infer STT runtime', () => {
 
     const reconnectPeer = { send: vi.fn() };
     (session as unknown as { sendCatchUpSnapshot(peer: unknown): void }).sendCatchUpSnapshot(reconnectPeer);
-    const snapshot = sentJson(reconnectPeer)[0] as { t: string; events: Array<{ id: number; msg: unknown }>; turn: unknown };
+    const snapshot = sentJson(reconnectPeer)[0] as { t: string; disconnectedMs?: number; events: Array<{ id: number; msg: unknown }>; turn: unknown };
     expect(snapshot.t).toBe('session.snapshot');
     expect(snapshot.events.map((event) => event.msg)).toEqual([
       { t: 'reply.done', text: 'spoken reply' },
       { t: 'tts.start', sample_rate: 24000 },
       { t: 'tts.done' },
     ]);
+    expect(snapshot.disconnectedMs).toEqual(expect.any(Number));
     expect(snapshot.turn).toMatchObject({
       inFlight: false,
       phase: 'complete',
       userText: 'hello',
       replyText: 'spoken reply',
     });
+  });
+
+  it('reports reconnect age from the last peer detach in catch-up snapshots', () => {
+    const now = vi.spyOn(Date, 'now');
+    try {
+      now.mockReturnValue(1_000);
+      const { session, peer } = makeVoiceSession();
+
+      (session as unknown as { tearDownPeer(reason: string, peer?: unknown): void }).tearDownPeer('peer_closed', peer);
+
+      now.mockReturnValue(31_001);
+      const reconnectPeer = { send: vi.fn() };
+      (session as unknown as { sendCatchUpSnapshot(peer: unknown): void }).sendCatchUpSnapshot(reconnectPeer);
+
+      expect(sentJson(reconnectPeer)[0]).toMatchObject({
+        t: 'session.snapshot',
+        disconnectedMs: 30_001,
+      });
+    } finally {
+      now.mockRestore();
+    }
   });
 
 });

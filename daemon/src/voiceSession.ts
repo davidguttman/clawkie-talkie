@@ -223,6 +223,7 @@ export class VoiceSession {
   private readonly pendingCandidates = new Map<string, SignalPayload[]>();
   private controlEventId = 0;
   private lastPeerDetachEventId = 0;
+  private lastPeerDetachAtMs: number | null = null;
   private readonly controlHistory: ControlEventRecord[] = [];
   private turnSnapshot: VoiceTurnSnapshot = {
     inFlight: false,
@@ -470,6 +471,8 @@ export class VoiceSession {
     this.peer = null;
     this.remoteId = null;
     this.connected = false;
+    this.lastPeerDetachEventId = this.controlEventId;
+    this.lastPeerDetachAtMs = Date.now();
 
     setTimeout(() => {
       try {
@@ -508,6 +511,7 @@ export class VoiceSession {
     if (peer && this.peer !== peer) return;
     console.error(`[voice ${this.roomId}] tearDownPeer reason=${reason}`);
     this.lastPeerDetachEventId = this.controlEventId;
+    this.lastPeerDetachAtMs = Date.now();
     this.clearConnectionTimeout();
     this.stopKeepalive();
     this.stopRecentSessionsSubscription();
@@ -1063,9 +1067,13 @@ export class VoiceSession {
     const events = this.controlHistory
       .filter((event) => event.id > this.lastPeerDetachEventId)
       .map((event) => ({ id: event.id, msg: event.msg }));
+    const disconnectedMs = this.lastPeerDetachAtMs === null
+      ? 0
+      : Math.max(0, Date.now() - this.lastPeerDetachAtMs);
     this.sendToPeer(peer, daemonToPhone.sessionSnapshot({
       roomId: this.roomId,
       latestEventId: this.controlEventId,
+      disconnectedMs,
       turn: { ...this.turnSnapshot, latestEventId: this.controlEventId },
       events,
     }));

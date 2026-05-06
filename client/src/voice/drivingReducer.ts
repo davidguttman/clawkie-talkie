@@ -14,6 +14,8 @@
 
 export type DrivingState = 'idle' | 'recording' | 'thinking' | 'ai';
 
+export const RECONNECT_AUTO_RESUME_THRESHOLD_MS = 30_000;
+
 export interface DrivingContext {
   state: DrivingState;
   lastUserText: string;
@@ -66,6 +68,7 @@ export const initialContext: DrivingContext = {
   liveReplyText: '',
   error: null,
 };
+
 
 export function reduce(ctx: DrivingContext, event: DrivingEvent): Reduction {
   if (event.type === 'session.replay') return reduceSessionReplay(ctx, event);
