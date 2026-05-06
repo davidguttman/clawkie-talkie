@@ -283,10 +283,11 @@ describe('daemon → phone factories', () => {
       { id: 2, msg: daemonClient.replyDone('spoken reply') },
       { id: 3, msg: daemonClient.ttsDone() },
     ];
-    expect(daemonClient.sessionSnapshot({ roomId: 'host:s1', latestEventId: 3, turn, events })).toEqual({
+    expect(daemonClient.sessionSnapshot({ roomId: 'host:s1', latestEventId: 3, disconnectedMs: 31_000, turn, events })).toEqual({
       t: 'session.snapshot',
       roomId: 'host:s1',
       latestEventId: 3,
+      disconnectedMs: 31_000,
       turn,
       events,
     });

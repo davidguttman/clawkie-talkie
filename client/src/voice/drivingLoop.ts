@@ -29,6 +29,7 @@ import {
 import { getActiveMicAnalyser } from './audioSource';
 import {
   initialContext,
+  RECONNECT_AUTO_RESUME_THRESHOLD_MS,
   reduce,
   type DrivingContext,
   type DrivingEvent,
@@ -576,6 +577,8 @@ function snapshotHydrationPlan(source: Record<string, unknown>): SnapshotHydrati
     'responseText',
   ]);
   const error = firstString(source, ['error', 'reason', 'message']) || null;
+  const disconnectedMs = numberValue(source.disconnectedMs);
+  const canAutoResume = disconnectedMs === undefined || disconnectedMs <= RECONNECT_AUTO_RESUME_THRESHOLD_MS;
 
   if (!phase) return null;
 
@@ -595,6 +598,20 @@ function snapshotHydrationPlan(source: Record<string, unknown>): SnapshotHydrati
   }
 
   if (phase === 'reply-ready') {
+    if (!canAutoResume) {
+      return {
+        hydration: {
+          context: {
+            ...initialContext,
+            state: 'idle',
+            lastUserText,
+            lastReplyText: pendingReplyText,
+          },
+          armTts: false,
+        },
+        transcript: { active: false, sttDone: false, text: '' },
+      };
+    }
     return {
       hydration: {
         context: {
@@ -610,6 +627,20 @@ function snapshotHydrationPlan(source: Record<string, unknown>): SnapshotHydrati
   }
 
   if (phase === 'speaking') {
+    if (!canAutoResume) {
+      return {
+        hydration: {
+          context: {
+            ...initialContext,
+            state: 'idle',
+            lastUserText,
+            lastReplyText: replyText,
+          },
+          armTts: false,
+        },
+        transcript: { active: false, sttDone: false, text: '' },
+      };
+    }
     return {
       hydration: {
         context: {
@@ -705,6 +736,10 @@ function normalizeSnapshotPhase(
   if (firstString(source, ['lastReplyText', 'replyText', 'assistantText', 'responseText'])) return 'completed';
   if (firstString(source, ['lastUserText', 'userText', 'transcript', 'finalTranscript'])) return 'thinking';
   return null;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function firstString(source: Record<string, unknown>, keys: readonly string[]): string {
