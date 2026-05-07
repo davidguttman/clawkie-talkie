@@ -855,6 +855,12 @@ interface CaptionData {
 }
 
 const AI_RESPONSE_CAPTION_LABEL = 'AI · READING ALOUD';
+const AI_RESPONSE_AUTOSCROLL_WPM = 175;
+const AI_RESPONSE_AUTOSCROLL_START_WORDS = 18;
+const AI_RESPONSE_AUTOSCROLL_INTERVAL_MS = 250;
+const AI_RESPONSE_AUTOSCROLL_VIEWPORT_ANCHOR = 0.38;
+const AI_RESPONSE_AUTOSCROLL_EASING = 0.3;
+const PROGRAMMATIC_SCROLL_GRACE_MS = 120;
 
 function pickCaption({
   state,
@@ -956,20 +962,109 @@ function Caption({
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const lastAiResponseTextRef = useRef<string | null>(null);
+  const autoScrollDisabledForResponseRef = useRef(false);
+  const programmaticScrollRef = useRef(false);
+  const programmaticScrollClearTimerRef = useRef<number | null>(null);
   const isAiResponseCaption = caption.label === AI_RESPONSE_CAPTION_LABEL;
+
+  const setProgrammaticScrollTop = useCallback((el: HTMLDivElement, scrollTop: number) => {
+    programmaticScrollRef.current = true;
+    el.scrollTop = scrollTop;
+    if (programmaticScrollClearTimerRef.current !== null) {
+      window.clearTimeout(programmaticScrollClearTimerRef.current);
+    }
+    programmaticScrollClearTimerRef.current = window.setTimeout(() => {
+      programmaticScrollRef.current = false;
+      programmaticScrollClearTimerRef.current = null;
+    }, PROGRAMMATIC_SCROLL_GRACE_MS);
+  }, []);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const handleScroll = () => {
+      if (programmaticScrollRef.current) return;
+      if (!isAiResponseCaption || !caption.live) return;
+      autoScrollDisabledForResponseRef.current = true;
+    };
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    return () => el.removeEventListener('scroll', handleScroll);
+  }, [caption.live, isAiResponseCaption]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !isAiResponseCaption || !caption.live) return;
+    const handleUserScrollIntent = () => {
+      autoScrollDisabledForResponseRef.current = true;
+    };
+    el.addEventListener('wheel', handleUserScrollIntent, { passive: true });
+    el.addEventListener('touchstart', handleUserScrollIntent, { passive: true });
+    el.addEventListener('pointerdown', handleUserScrollIntent, { passive: true });
+    el.addEventListener('keydown', handleUserScrollIntent);
+    return () => {
+      el.removeEventListener('wheel', handleUserScrollIntent);
+      el.removeEventListener('touchstart', handleUserScrollIntent);
+      el.removeEventListener('pointerdown', handleUserScrollIntent);
+      el.removeEventListener('keydown', handleUserScrollIntent);
+    };
+  }, [caption.live, isAiResponseCaption]);
+
+  useEffect(() => {
+    return () => {
+      if (programmaticScrollClearTimerRef.current !== null) {
+        window.clearTimeout(programmaticScrollClearTimerRef.current);
+        programmaticScrollClearTimerRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!isAiResponseCaption) {
       lastAiResponseTextRef.current = null;
+      autoScrollDisabledForResponseRef.current = false;
       return;
     }
     const responseText = caption.text ?? '';
     if (lastAiResponseTextRef.current === responseText) return;
     lastAiResponseTextRef.current = responseText;
+    autoScrollDisabledForResponseRef.current = false;
     const el = scrollRef.current;
     if (!el) return;
-    el.scrollTop = 0;
-  }, [isAiResponseCaption, caption.text]);
+    setProgrammaticScrollTop(el, 0);
+  }, [isAiResponseCaption, caption.text, setProgrammaticScrollTop]);
+
+  useEffect(() => {
+    if (!isAiResponseCaption || !caption.live || !caption.text) return;
+    const totalWords = countWords(caption.text);
+    if (totalWords <= AI_RESPONSE_AUTOSCROLL_START_WORDS) return;
+    const startedAtMs = Date.now();
+    const interval = window.setInterval(() => {
+      if (autoScrollDisabledForResponseRef.current) {
+        window.clearInterval(interval);
+        return;
+      }
+      const el = scrollRef.current;
+      if (!el || el.scrollHeight <= el.clientHeight) return;
+
+      const elapsedMs = Date.now() - startedAtMs;
+      const estimatedWordsSpoken = (elapsedMs / 60000) * AI_RESPONSE_AUTOSCROLL_WPM;
+      if (estimatedWordsSpoken < AI_RESPONSE_AUTOSCROLL_START_WORDS) return;
+
+      const maxScrollTop = el.scrollHeight - el.clientHeight;
+      const readingProgress = Math.min(estimatedWordsSpoken / totalWords, 1);
+      const approximateReadingY = readingProgress * el.scrollHeight;
+      const targetScrollTop = clamp(
+        approximateReadingY - el.clientHeight * AI_RESPONSE_AUTOSCROLL_VIEWPORT_ANCHOR,
+        0,
+        maxScrollTop,
+      );
+      if (targetScrollTop <= el.scrollTop) return;
+
+      const easedScrollTop = el.scrollTop + (targetScrollTop - el.scrollTop) * AI_RESPONSE_AUTOSCROLL_EASING;
+      setProgrammaticScrollTop(el, Math.min(targetScrollTop, easedScrollTop));
+    }, AI_RESPONSE_AUTOSCROLL_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [caption.live, caption.text, isAiResponseCaption, setProgrammaticScrollTop]);
 
   return (
     <div
@@ -1069,6 +1164,14 @@ function Caption({
       )}
     </div>
   );
+}
+
+function countWords(text: string): number {
+  return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }
 
 function errorLabelFor(code: string): string {
