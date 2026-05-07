@@ -119,26 +119,28 @@ Required voice handoff args (accepted from hash fragment, then query string):
 - `session` — OpenClaw session id/key, passed later to
   `openclaw agent --session-id`. Prefer the actual OpenClaw sessionId UUID
   when available; use a session key only when the actual sessionId is not
-  visible. For webchat-only fallback handoffs, use `agent:main:main`; the daemon
-  runs `openclaw agent --agent main --session-id agent:main:main --channel last --deliver`.
-  Older `agent:main:webchat` links are normalized to this webchat session-only form.
-- `sessionKey` — optional exact OpenClaw session key. Use it only when `session`
+  visible. For webchat-only fallback handoffs, use `agent:main:main` only for
+  non-delivered internal/webchat smoke paths. Older `agent:main:webchat` links
+  are normalized to this webchat form.
+- `sessionKey` — optional exact OpenClaw session key. Use it when `session`
   is the actual sessionId UUID and the current session key is also visible in
-  trusted runtime context. The daemon uses it only for transcript mirroring /
-  provider derivation/debug, never as the agent session identity.
-- `channel` + `target` — optional explicit current message delivery route, such
+  trusted runtime context. The daemon uses it to select the OpenClaw agent and
+  derive Discord reply/transcript routing when possible.
+- `channel` + `target` — explicit current message delivery route, such
   as `channel=discord` and `target=channel:1498020851298209852`. Include both
-  when visible. The daemon uses them only for transcript mirroring via
-  `openclaw message send`, never for the agent reply.
-- `accountId` — optional channel account id, forwarded to `openclaw message send
-  --account` when transcript mirroring uses explicit `channel` + `target`.
+  when visible. The daemon passes them to `openclaw agent --deliver` as
+  `--reply-channel` and `--reply-to` for assistant text delivery; transcript
+  mirroring also uses them best-effort via `openclaw message send`.
+- `accountId` — optional channel account id, forwarded to reply delivery and
+  transcript mirroring when explicit `channel` + `target` routing is used.
 
-Transcript mirroring is best-effort: the daemon first uses explicit `channel` +
-`target`, then `sessionKey`, then colon-style Discord `session` values, and for
-older UUID-only links it may reverse-resolve the key with `openclaw sessions
---json --all-agents --active 10080`. If no message target can be derived, the
-mirror is skipped without failing the voice turn. The agent turn always runs
-with `--channel last --deliver`.
+Assistant reply delivery is mandatory for delivered voice turns: the daemon
+uses explicit `channel` + `target`, a Discord `sessionKey`/colon-style
+Discord `session`, or a UUID reverse-resolved through `openclaw sessions
+--json --all-agents --active 10080` to pass `--deliver --reply-channel
+<channel> --reply-to <target>` to `openclaw agent`. If no reply target can be
+derived, the voice turn fails before running the agent. Transcript mirroring is
+best-effort and may be skipped without failing the voice turn.
 
 Hash wins over query when both are present. All values must be URL-encoded.
 
@@ -176,7 +178,7 @@ sequenceDiagram
   Phone->>Room: WebRTC voice connection
   User->>Phone: speak
   Room->>OC: optional best-effort transcript mirror via target, sessionKey, session key, or UUID session lookup
-  Room->>OC: openclaw agent --session-id A --channel last --deliver
+  Room->>OC: openclaw agent --session-id A --deliver --reply-channel channel --reply-to target
   OC-->>Room: reply text
   Room-->>Phone: TTS audio
 ```

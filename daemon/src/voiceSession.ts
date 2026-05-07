@@ -925,7 +925,7 @@ export class VoiceSession {
     const stderr = details?.stderr ? sanitizeReplyFailureLogText(details.stderr) : undefined;
     const exitCode = details?.exitCode;
     const target = this.state.chatTarget();
-    const delivery = target.delivery ? `${target.delivery.channel}:${target.delivery.target}` : 'session-bound';
+    const delivery = target.delivery ? `${target.delivery.channel}:${target.delivery.target}` : 'explicit-reply-target-unresolved';
     const fields = [
       `[voice ${this.roomId}] reply failed`,
       `session=${sanitizeReplyFailureLogText(target.sessionId)}`,

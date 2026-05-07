@@ -23,6 +23,9 @@ export function parseArgs(argv) {
     agentTurn: false,
     requireAgentTurn: false,
     deliver: false,
+    replyChannel: '',
+    replyTo: '',
+    replyAccount: '',
     timeoutSeconds: DEFAULT_TIMEOUT_SECONDS,
     skipInfer: false,
     sttLanguage: '',
@@ -40,6 +43,9 @@ export function parseArgs(argv) {
     else if (arg === '--deliver') opts.deliver = true;
     else if (arg === '--skip-infer') opts.skipInfer = true;
     else if (arg === '--session-id' || arg === '--session') opts.sessionId = requireValue(argv, ++i, arg);
+    else if (arg === '--reply-channel') opts.replyChannel = requireValue(argv, ++i, arg);
+    else if (arg === '--reply-to') opts.replyTo = requireValue(argv, ++i, arg);
+    else if (arg === '--reply-account') opts.replyAccount = requireValue(argv, ++i, arg);
     else if (arg === '--stt-language') opts.sttLanguage = requireValue(argv, ++i, arg);
     else if (arg === '--agent-message') opts.agentMessage = requireValue(argv, ++i, arg);
     else if (arg === '--timeout') opts.timeoutSeconds = parseTimeoutSeconds(requireValue(argv, ++i, arg));
@@ -68,14 +74,21 @@ export function usage() {
 Checks Node/npm, OpenClaw status, and infer STT/TTS for a Clawkie Talkie install.
 
 Agent-turn smoke command (with --session-id):
-  openclaw agent --agent main --session-id <session> --channel last --json --timeout <seconds> -m <message>
+  openclaw agent --agent main --session-id <session> --json --timeout <seconds> -m <message>
+
+Delivered smoke command (with --deliver):
+  openclaw agent --agent main --session-id <session> --deliver --reply-channel <channel> --reply-to <target> --json --timeout <seconds> -m <message>
 
 Options:
-  --session-id <session>              Run the OpenClaw agent-turn smoke test for the real current session key.
+  --session-id <session>              Run the OpenClaw agent-turn smoke test for the real stored session id/UUID.
   --agent-turn                        Also run the OpenClaw agent-turn smoke test (requires --session-id).
   --require-agent-turn                Fail before other checks if --session-id is missing.
-  --deliver                           Opt in to delivering the agent-turn smoke reply to the session.
-                                      Without this flag, the smoke test does not pass --deliver.
+  --deliver                           Opt in to delivering the agent-turn smoke reply.
+                                      Requires --reply-channel and --reply-to.
+  --reply-channel <channel>           Explicit delivery channel for --deliver smoke tests.
+  --reply-to <target>                 Explicit delivery target for --deliver smoke tests.
+  --reply-account <accountId>         Optional delivery account for --deliver smoke tests.
+                                      Without --deliver, the smoke test does not post a reply.
   --timeout <seconds>                 Timeout passed to openclaw agent (default: ${DEFAULT_TIMEOUT_SECONDS}).
   --stt-language <code>               Pass a language hint to infer audio transcribe.
   --skip-infer                        Skip STT/TTS infer checks.
@@ -159,13 +172,23 @@ export async function runPreflight(options = {}, deps = {}) {
       return summarize(checks);
     }
 
+    const replyChannel = String(options.replyChannel ?? '').trim();
+    const replyTo = String(options.replyTo ?? '').trim();
+    const replyAccount = String(options.replyAccount ?? '').trim();
+    if (options.deliver && (!replyChannel || !replyTo)) {
+      checks.push(missingReplyTargetCheck('Delivered agent-turn smoke requested, but --reply-channel and --reply-to were not provided.'));
+      return summarize(checks);
+    }
+
     const agentArgs = [
       'agent',
       '--agent', 'main',
       '--session-id', sessionId,
-      '--channel', 'last',
     ];
-    if (options.deliver) agentArgs.push('--deliver');
+    if (options.deliver) {
+      agentArgs.push('--deliver', '--reply-channel', replyChannel, '--reply-to', replyTo);
+      if (replyAccount) agentArgs.push('--reply-account', replyAccount);
+    }
     agentArgs.push(
       '--json',
       '--timeout', String(timeoutSeconds),
@@ -199,6 +222,15 @@ function missingSessionIdCheck(summary) {
     name: 'openclaw-agent-turn',
     status: 'fail',
     code: 'missing_session_id',
+    summary,
+  };
+}
+
+function missingReplyTargetCheck(summary) {
+  return {
+    name: 'openclaw-agent-turn',
+    status: 'fail',
+    code: 'missing_reply_target',
     summary,
   };
 }

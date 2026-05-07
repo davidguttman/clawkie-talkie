@@ -22,7 +22,7 @@ describe('phone → daemon factories', () => {
     expect(phoneClient.replyCancel()).toEqual({ t: 'reply.cancel' });
   });
 
-  it('emits a session-only rendezvous join without delivery', () => {
+  it('emits a minimal rendezvous join without delivery metadata', () => {
     expect(phoneClient.rendezvousJoin({ sessionId: 'session-1' })).toEqual({
       t: 'rendezvous.join',
       sessionId: 'session-1',
@@ -152,11 +152,11 @@ describe('phone → daemon factories', () => {
 
 
 describe('rendezvous delivery validation', () => {
-  it('accepts absent delivery as session-only', () => {
+  it('accepts absent legacy nested delivery metadata', () => {
     expect(validateRendezvousDelivery(undefined)).toEqual({ ok: true });
   });
 
-  it('ignores legacy nested delivery values instead of blocking the session-bound agent turn', () => {
+  it('ignores legacy nested delivery values instead of overriding explicit routing', () => {
     expect(validateRendezvousDelivery({ channel: ' discord ', target: ' channel:t ', accountId: ' acct ' })).toEqual({ ok: true });
     expect(validateRendezvousDelivery({ channel: 'webchat' })).toEqual({ ok: true });
     expect(validateRendezvousDelivery({ channel: 'discord' })).toEqual({ ok: true });

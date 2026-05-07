@@ -8,12 +8,12 @@
 //      provider target, sessionKey or a legacy colon-style Discord session
 //      key exposes a safe target, or an actual OpenClaw sessionId can be
 //      reverse-resolved to a Discord session key.
-//   2. Run `openclaw agent --agent main --session-id <session>
-//      --channel last --deliver -m ...`. The agent receives the full
-//      transcript in its own message payload, so reply generation does not
-//      depend on the transcript post completing. OpenClaw delivery posts
-//      the assistant reply; the daemon captures stdout for TTS and does
-//      not mirror the assistant text with `openclaw message send`.
+//   2. Run `openclaw agent --agent <session-key-agent> --session-id <session>
+//      --deliver --reply-channel <channel> --reply-to <target> -m ...`.
+//      The agent receives the full transcript in its own message payload, so
+//      reply generation does not depend on the transcript post completing.
+//      OpenClaw delivery posts the assistant reply; the daemon captures stdout
+//      for TTS and does not mirror the assistant text with `openclaw message send`.
 //
 // The daemon never calls xAI directly. Debug activity notifications
 // are sent before/after key events (STT start/stop, TTS start/stop,
@@ -97,17 +97,17 @@ async function sendTranscriptMessage(
     return;
   }
 
-  const target = deriveDiscordMessageTarget({
+  const target = deriveDiscordDeliveryTarget({
     threadId: opts.threadId,
     sessionId: opts.sessionKey || opts.sessionId,
   });
   if (!target) {
-    const resolvedTarget = await resolveDiscordMessageTargetFromSessionLookup(opts.sessionId, signal);
+    const resolvedTarget = await resolveDiscordDeliveryTargetFromSessionLookup(opts.sessionId, signal);
     if (!resolvedTarget) return;
-    await sendDiscordMessage(resolvedTarget, quoteTranscript(transcript), signal, 'openclaw_transcript_post_failed');
+    await sendGenericMessage(resolvedTarget, quoteTranscript(transcript), signal, 'openclaw_transcript_post_failed');
     return;
   }
-  await sendDiscordMessage(target, quoteTranscript(transcript), signal, 'openclaw_transcript_post_failed');
+  await sendGenericMessage(target, quoteTranscript(transcript), signal, 'openclaw_transcript_post_failed');
 }
 
 async function sendGenericMessage(
@@ -121,26 +121,6 @@ async function sendGenericMessage(
     '--channel', delivery.channel,
     '--target', delivery.target,
     ...(delivery.accountId ? ['--account', delivery.accountId] : []),
-    '--message', message,
-  ];
-  try {
-    await execFileAsync('openclaw', args, { signal });
-  } catch (err) {
-    if (signal?.aborted) throw new ChatError('aborted', 'aborted');
-    throw toOpenClawChatError(err, failureLabel);
-  }
-}
-
-async function sendDiscordMessage(
-  target: string,
-  message: string,
-  signal: AbortSignal | undefined,
-  failureLabel: string,
-): Promise<void> {
-  const args = [
-    'message', 'send',
-    '--channel', 'discord',
-    '--target', `channel:${target}`,
     '--message', message,
   ];
   try {
@@ -194,31 +174,52 @@ export function deriveDiscordMessageTarget(opts: {
   threadId?: string;
   sessionId: string;
 }): string | undefined {
-  const explicitThreadId = opts.threadId?.trim();
-  if (explicitThreadId) return explicitThreadId;
-
-  const prefix = 'agent:main:discord:';
-  if (!opts.sessionId.startsWith(prefix)) return undefined;
-
-  const ids = opts.sessionId
-    .slice(prefix.length)
-    .split(':')
-    .map((part) => part.trim())
-    .filter((part) => part && !['channel', 'thread', 'message', 'guild'].includes(part));
-
-  return ids.at(-1);
+  const target = deriveDiscordDeliveryTarget(opts)?.target;
+  return target?.startsWith('channel:') ? target.slice('channel:'.length) : undefined;
 }
 
-async function resolveDiscordMessageTargetFromSessionLookup(
+function deriveDiscordDeliveryTarget(opts: {
+  threadId?: string;
+  sessionId: string;
+}): DeliveryTarget | undefined {
+  const explicitThreadId = opts.threadId?.trim();
+  if (explicitThreadId) return { channel: 'discord', target: `channel:${explicitThreadId}` };
+
+  const target = deriveDiscordTargetFromSessionKey(opts.sessionId);
+  return target ? { channel: 'discord', target } : undefined;
+}
+
+function deriveDiscordTargetFromSessionKey(sessionId: string): string | undefined {
+  const parts = sessionId
+    .split(':')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length < 4 || parts[0] !== 'agent' || parts[2] !== 'discord') return undefined;
+
+  const kind = parts[3];
+  const id = parts.at(-1);
+  if (!id || id === kind) return undefined;
+
+  if (kind === 'direct' || kind === 'user') return `user:${id}`;
+  if (kind === 'channel' || kind === 'thread') return `channel:${id}`;
+
+  const legacyIds = parts
+    .slice(3)
+    .filter((part) => !['channel', 'thread', 'message', 'guild'].includes(part));
+  const legacyId = legacyIds.at(-1);
+  return legacyId ? `channel:${legacyId}` : undefined;
+}
+
+async function resolveDiscordDeliveryTargetFromSessionLookup(
   sessionId: string,
   signal?: AbortSignal,
-): Promise<string | undefined> {
+): Promise<DeliveryTarget | undefined> {
   const requested = sessionId.trim();
   if (!isUuidLikeSessionId(requested)) return undefined;
 
   const key = await lookupOpenClawSessionKey(requested, signal);
   if (!key) return undefined;
-  return deriveDiscordMessageTarget({ sessionId: key });
+  return deriveDiscordDeliveryTarget({ sessionId: key });
 }
 
 function isUuidLikeSessionId(sessionId: string): boolean {
@@ -229,16 +230,27 @@ async function lookupOpenClawSessionKey(
   sessionId: string,
   signal?: AbortSignal,
 ): Promise<string | undefined> {
+  try {
+    return await lookupOpenClawSessionKeyRequired(sessionId, signal);
+  } catch {
+    // Transcript mirroring lookup is best-effort. Mandatory reply delivery
+    // and agent metadata resolution use lookupOpenClawSessionKeyRequired so
+    // OpenClaw CLI/gateway/auth failures keep their useful classification.
+    return undefined;
+  }
+}
+
+async function lookupOpenClawSessionKeyRequired(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
   const args = ['sessions', '--json', '--all-agents', '--active', '10080'];
   try {
     const { stdout } = await execFileAsync('openclaw', args, { signal });
     return findSessionKeyForSessionId(stdout, sessionId);
-  } catch {
-    // Transcript mirroring is best-effort. A missing/old OpenClaw CLI, gateway
-    // problem, or session-list parse issue must not fail or noisy-log the
-    // actual voice turn; `openclaw agent --channel last --deliver` remains the
-    // authoritative reply path.
-    return undefined;
+  } catch (err) {
+    if (signal?.aborted) throw new ChatError('aborted', 'aborted');
+    throw toOpenClawChatError(err, 'openclaw_sessions_lookup_failed');
   }
 }
 
@@ -258,16 +270,18 @@ function findSessionKeyForSessionId(stdout: string, sessionId: string): string |
 
   for (const row of rows) {
     if (!row || typeof row !== 'object') continue;
-    const candidate = row as { sessionId?: unknown; key?: unknown };
-    if (candidate.sessionId !== sessionId) continue;
-    if (typeof candidate.key === 'string' && candidate.key.trim()) return candidate.key.trim();
+    const candidateSessionId = readStringProperty(row, 'sessionId') ?? readStringProperty(row, 'id');
+    if (candidateSessionId !== sessionId) continue;
+    const key = readStringProperty(row, 'key') ?? readStringProperty(row, 'sessionKey');
+    const trimmedKey = key?.trim();
+    if (trimmedKey) return trimmedKey;
   }
   return undefined;
 }
 
 // Helper: get assistant reply text. The agent receives the full raw-STT
-// transcript in its own `-m` payload and uses OpenClaw's channel-last
-// delivery path for the assistant reply. Legacy transcript posting is a
+// transcript in its own `-m` payload and OpenClaw delivers the assistant
+// reply to an explicit reply target. Legacy transcript posting is a
 // separate fire-and-observe side effect, not a prerequisite for reply
 // generation.
 async function runOpenClawTurn(opts: {
@@ -275,17 +289,34 @@ async function runOpenClawTurn(opts: {
   threadId?: string;
   userText: string;
   sessionKey?: string;
+  channel?: string;
+  target?: string;
+  accountId?: string;
   delivery?: DeliveryTarget;
+  deliver?: boolean;
   signal?: AbortSignal;
 }): Promise<string> {
   const message = buildAgentTurnMessage(opts.userText);
   const sessionId = await resolveOpenClawAgentSessionId(opts.sessionId);
+  const shouldDeliver = opts.deliver !== false;
+  const resolvedSessionKey = await resolveAgentSessionKeyMetadata({ ...opts, requireLookup: shouldDeliver });
+  const agentId = deriveAgentIdFromSessionKey(resolvedSessionKey) ?? 'main';
+  const replyTarget = shouldDeliver ? await resolveAgentReplyTarget({ ...opts, resolvedSessionKey, requireLookup: shouldDeliver }) : undefined;
+  if (shouldDeliver && !replyTarget) {
+    throw new ChatError('openclaw_delivery_unresolved', 'openclaw_delivery_unresolved');
+  }
   const args = [
     'agent',
-    '--agent', 'main',
+    '--agent', agentId,
     '--session-id', sessionId,
-    '--channel', 'last',
-    '--deliver',
+    ...(shouldDeliver && replyTarget
+      ? [
+          '--deliver',
+          '--reply-channel', replyTarget.channel,
+          '--reply-to', replyTarget.target,
+          ...(replyTarget.accountId ? ['--reply-account', replyTarget.accountId] : []),
+        ]
+      : []),
     '--json',
     '-m', message,
   ];
@@ -357,6 +388,81 @@ function extractReplyFromAgentJson(response: OpenClawAgentJsonResponse): {
     }
   }
   return { text: textParts.join('\n').trim(), hasMedia };
+}
+
+function deriveAgentIdFromSessionKey(sessionKey: string | undefined): string | undefined {
+  const key = sessionKey?.trim();
+  if (!key?.startsWith('agent:')) return undefined;
+  const agent = key.split(':')[1]?.trim();
+  return agent || undefined;
+}
+
+async function resolveAgentSessionKeyMetadata(opts: {
+  sessionId: string;
+  sessionKey?: string;
+  signal?: AbortSignal;
+  requireLookup?: boolean;
+}): Promise<string | undefined> {
+  const explicitKey = opts.sessionKey?.trim();
+  if (explicitKey) return explicitKey;
+
+  const sessionKeyAsSession = opts.sessionId.trim();
+  if (sessionKeyAsSession.startsWith(SESSION_KEY_PREFIX)) return sessionKeyAsSession;
+  if (!isUuidLikeSessionId(sessionKeyAsSession)) return undefined;
+
+  return opts.requireLookup
+    ? lookupOpenClawSessionKeyRequired(sessionKeyAsSession, opts.signal)
+    : lookupOpenClawSessionKey(sessionKeyAsSession, opts.signal);
+}
+
+async function resolveAgentReplyTarget(opts: {
+  threadId?: string;
+  sessionId: string;
+  sessionKey?: string;
+  resolvedSessionKey?: string;
+  channel?: string;
+  target?: string;
+  accountId?: string;
+  delivery?: DeliveryTarget;
+  signal?: AbortSignal;
+  requireLookup?: boolean;
+}): Promise<DeliveryTarget | undefined> {
+  const explicitDelivery = normalizeDeliveryTarget(opts.delivery);
+  if (explicitDelivery) return explicitDelivery;
+
+  const explicitTarget = deriveMessageTargetFromHandoff(opts);
+  if (explicitTarget) return explicitTarget;
+
+  const threadId = opts.threadId?.trim();
+  if (threadId) return { channel: 'discord', target: `channel:${threadId}` };
+
+  const fromKey = deriveReplyTargetFromSessionKey(opts.resolvedSessionKey || opts.sessionKey || opts.sessionId);
+  if (fromKey) return fromKey;
+
+  const resolvedKey = opts.resolvedSessionKey ?? (opts.requireLookup
+    ? await lookupOpenClawSessionKeyRequired(opts.sessionId, opts.signal)
+    : await lookupOpenClawSessionKey(opts.sessionId, opts.signal));
+  return deriveReplyTargetFromSessionKey(resolvedKey);
+}
+
+function normalizeDeliveryTarget(delivery: DeliveryTarget | undefined): DeliveryTarget | undefined {
+  if (!delivery) return undefined;
+  const channel = delivery.channel.trim();
+  const target = delivery.target.trim();
+  if (!channel || !target) return undefined;
+  const accountId = delivery.accountId?.trim();
+  return { channel, target, ...(accountId ? { accountId } : {}) };
+}
+
+function deriveReplyTargetFromSessionKey(sessionKey: string | undefined): DeliveryTarget | undefined {
+  const channel = deriveChannelFromSessionKey(sessionKey);
+  if (!channel) return undefined;
+
+  if (channel === 'discord' && sessionKey) {
+    return deriveDiscordDeliveryTarget({ sessionId: sessionKey });
+  }
+
+  return undefined;
 }
 
 export async function resolveOpenClawAgentSessionId(sessionId: string): Promise<string> {
@@ -593,7 +699,11 @@ export async function runChat(userText: string, opts: ChatOptionsWithSession): P
       threadId: opts.threadId,
       userText: trimmed,
       sessionKey: opts.sessionKey,
+      channel: opts.channel,
+      target: opts.target,
+      accountId: opts.accountId,
       delivery: opts.delivery,
+      deliver: opts.deliver,
       signal: opts.signal,
     });
 

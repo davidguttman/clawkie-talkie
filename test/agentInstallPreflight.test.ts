@@ -72,7 +72,6 @@ describe('agent install preflight', () => {
       'agent',
       '--agent', 'main',
       '--session-id', 'agent:main:main',
-      '--channel', 'last',
       '--json',
       '--timeout', '9',
       '-m', 'Clawkie Talkie install smoke test. Reply with exactly: ok',
@@ -93,16 +92,43 @@ describe('agent install preflight', () => {
     expect(calls.find((call) => call.args[0] === 'agent')?.opts?.timeoutMs).toBe(14_000);
   });
 
-  it('adds --deliver only when explicitly requested', async () => {
+  it('adds --deliver with an explicit reply target only when requested', async () => {
     const calls: Array<{ command: string; args: string[] }> = [];
-    const result = await runPreflight({ sessionId: 'agent:main:main', deliver: true, skipInfer: true, timeoutSeconds: 12 }, {
+    const result = await runPreflight({
+      sessionId: 'agent:main:main',
+      deliver: true,
+      replyChannel: 'discord',
+      replyTo: 'channel:thread-1',
+      skipInfer: true,
+      timeoutSeconds: 12,
+    }, {
       runCommand: successfulCommand(calls),
     });
 
     expect(result.ok).toBe(true);
     const agentCall = calls.find((call) => call.args[0] === 'agent');
-    expect(agentCall?.args).toContain('--deliver');
-    expect(agentCall?.args).toEqual(expect.arrayContaining(['--timeout', '12']));
+    expect(agentCall?.args).toEqual(expect.arrayContaining([
+      '--deliver',
+      '--reply-channel', 'discord',
+      '--reply-to', 'channel:thread-1',
+      '--timeout', '12',
+    ]));
+    expect(agentCall?.args).not.toContain('--channel');
+  });
+
+  it('fails delivered agent-turn smoke before spawning the agent when the explicit reply target is missing', async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const result = await runPreflight({ sessionId: 'agent:main:main', deliver: true, skipInfer: true }, {
+      runCommand: successfulCommand(calls),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(calls.some((call) => call.args[0] === 'agent')).toBe(false);
+    expect(result.checks.at(-1)).toMatchObject({
+      name: 'openclaw-agent-turn',
+      status: 'fail',
+      code: 'missing_reply_target',
+    });
   });
 
   it('fails before status checks when --require-agent-turn has no session id', async () => {
@@ -370,11 +396,21 @@ describe('agent install preflight', () => {
     });
   });
 
-  it('parses agent-turn, delivery, and timeout options', () => {
-    expect(parseArgs(['--session-id', 'agent:main:main', '--deliver', '--timeout', '12'])).toMatchObject({
+  it('parses agent-turn, delivery, reply target, and timeout options', () => {
+    expect(parseArgs([
+      '--session-id', 'agent:main:main',
+      '--deliver',
+      '--reply-channel', 'discord',
+      '--reply-to', 'channel:thread-1',
+      '--reply-account', 'acct-1',
+      '--timeout', '12',
+    ])).toMatchObject({
       agentTurn: true,
       deliver: true,
       sessionId: 'agent:main:main',
+      replyChannel: 'discord',
+      replyTo: 'channel:thread-1',
+      replyAccount: 'acct-1',
       timeoutSeconds: 12,
     });
 
