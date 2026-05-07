@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { handoffToRendezvous, parseInitialLocation, parseInitialSearch, selectHandoffFromRecentSession } from '../client/src/app';
+import { favoriteSessionFromHandoff, handoffToRendezvous, parseInitialLocation, parseInitialSearch, selectHandoffFromRecentSession } from '../client/src/app';
 import { formatHandoffHash, parseHandoffUrl, parseHostDashboardUrl } from '../client/src/voice/handoffUrl';
 
 describe('client URL parsing (legacy query)', () => {
@@ -275,6 +275,69 @@ describe('session picker handoff selection', () => {
       sessionKey: 'agent:main:discord:channel:t1',
       channel: 'discord',
       target: 'channel:t1',
+      accountId: 'acct-1',
+    });
+  });
+});
+
+
+describe('active handoff favorite candidate', () => {
+  it('builds storable favorite metadata from the current handoff before the daemon lists it', () => {
+    expect(
+      favoriteSessionFromHandoff({
+        hostPeerId: 'host-1',
+        sessionId: ' session-uuid ',
+        sessionKey: ' agent:kamaji:discord:channel:thread-1 ',
+        channel: ' discord ',
+        target: ' channel:thread-1 ',
+        accountId: ' acct-1 ',
+      }),
+    ).toEqual({
+      sessionId: 'session-uuid',
+      sessionKey: 'agent:kamaji:discord:channel:thread-1',
+      agent: 'kamaji',
+      channel: 'discord',
+      target: 'channel:thread-1',
+      accountId: 'acct-1',
+      displayLabel: 'discord channel:thread-1',
+    });
+  });
+
+  it('does not fabricate a favorite candidate when the handoff has no session key', () => {
+    expect(
+      favoriteSessionFromHandoff({
+        hostPeerId: 'host-1',
+        sessionId: 'session-uuid',
+      }),
+    ).toBeUndefined();
+    expect(favoriteSessionFromHandoff(null)).toBeUndefined();
+  });
+});
+
+describe('persisted favorite handoff routing', () => {
+  it('uses stored favorite routing fields when the daemon no longer returns the session', () => {
+    expect(
+      selectHandoffFromRecentSession(
+        null,
+        {
+          sessionId: 'stored-session',
+          sessionKey: 'agent:kamaji:discord:channel:stored-thread',
+          agent: 'kamaji',
+          channel: 'discord',
+          target: 'channel:stored-thread',
+          accountId: 'acct-1',
+          displayLabel: 'Stored thread',
+          favorite: true,
+          persistedFavorite: true,
+        } as never,
+        'host-1',
+      ),
+    ).toEqual({
+      hostPeerId: 'host-1',
+      sessionId: 'stored-session',
+      sessionKey: 'agent:kamaji:discord:channel:stored-thread',
+      channel: 'discord',
+      target: 'channel:stored-thread',
       accountId: 'acct-1',
     });
   });

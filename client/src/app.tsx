@@ -141,6 +141,57 @@ export function selectHandoffFromRecentSession(
   };
 }
 
+export function favoriteSessionFromHandoff(handoff: HandoffRoute | null): RecentSession | undefined {
+  const sessionId = trimHandoffString(handoff?.sessionId);
+  const sessionKey = trimHandoffString(handoff?.sessionKey);
+  if (!sessionId || !sessionKey) return undefined;
+
+  const parsed = parseFavoriteSessionKey(sessionKey);
+  const channel = trimHandoffString(handoff?.channel) ?? parsed.channel;
+  const target = trimHandoffString(handoff?.target) ?? parsed.target;
+  const accountId = trimHandoffString(handoff?.accountId);
+  const agent = parsed.agent ?? 'unknown';
+
+  return {
+    sessionId,
+    sessionKey,
+    agent,
+    ...(channel ? { channel } : {}),
+    ...(target ? { target } : {}),
+    ...(accountId ? { accountId } : {}),
+    displayLabel: buildFavoriteSessionDisplayLabel(sessionKey, channel, target),
+  };
+}
+
+function parseFavoriteSessionKey(sessionKey: string): { agent?: string; channel?: string; target?: string } {
+  const parts = sessionKey.split(':').map((part) => part.trim()).filter(Boolean);
+  if (parts[0] !== 'agent') return {};
+  const agent = parts[1];
+  const channel = parts[2];
+  if (!channel) return { ...(agent ? { agent } : {}) };
+
+  const kind = parts[3];
+  const id = parts.at(-1);
+  const targetKind = channel === 'discord' && kind === 'direct' ? 'user' : kind;
+  return {
+    ...(agent ? { agent } : {}),
+    channel,
+    ...(targetKind && id && id !== kind ? { target: `${targetKind}:${id}` } : {}),
+  };
+}
+
+function buildFavoriteSessionDisplayLabel(sessionKey: string, channel?: string, target?: string): string {
+  if (channel && target) return `${channel} ${target}`;
+  const parts = sessionKey.split(':').map((part) => part.trim()).filter(Boolean);
+  const visibleParts = parts[0] === 'agent' ? parts.slice(2) : parts;
+  return visibleParts.length > 0 ? visibleParts.join(' ') : 'Voice session';
+}
+
+function trimHandoffString(value?: string | null): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
 export function App() {
   const initial = useMemo(parseInitial, []);
   const [screen, setScreen] = useState<ScreenId>(initial.screen);
@@ -186,6 +237,10 @@ export function App() {
     screen === 'driving' ? activeHandoff?.sessionId ?? initial.sessionId : openSession || activeHandoff?.sessionId || initial.sessionId;
 
   const rtcVoiceSettings = useMemo(() => voiceSettingsForRtc(settings), [settings]);
+  const currentSessionFavoriteCandidate = useMemo(
+    () => favoriteSessionFromHandoff(activeHandoff),
+    [activeHandoff],
+  );
 
   const selectRecentSession = useCallback((session: RecentSession) => {
     const next = selectHandoffFromRecentSession(
@@ -234,6 +289,7 @@ export function App() {
         <DashboardScreen
           hostPeerId={activeHostPeerId}
           onSelectSession={selectRecentSession}
+          onHistory={openHistory}
           onSettings={openSettings}
           compact={compact}
         />
@@ -248,13 +304,13 @@ export function App() {
               : undefined
           }
           canReplay={canReplayLastReply}
-          onHistory={openHistory}
+          onSessions={() => go('dashboard')}
           onSettings={openSettings}
           compact={compact}
           sessionId={activeHandoff?.sessionId ?? initial.sessionId}
           hostPeerId={activeHostPeerId}
           threadId={initial.threadId}
-          onSelectSession={selectRecentSession}
+          favoriteSession={currentSessionFavoriteCandidate}
         />
       )}
       {screen === 'transcript' && (

@@ -5,6 +5,7 @@
 // sees a key. Fields here are strictly UI/voice/export preferences.
 
 import type {
+  RecentSession,
   SttSelection as ProtocolSttSelection,
   TtsSelection as ProtocolTtsSelection,
 } from './voice/protocol';
@@ -45,6 +46,14 @@ export interface Settings extends ExportSettings {
 const KEY = 'clawkie.settings.v1';
 const LAST_DASHBOARD_HOST_KEY = 'clawkie.dashboard.lastHost.v1';
 const TRANSCRIPTS_KEY = 'clawkie.transcripts.v1';
+const FAVORITE_SESSIONS_KEY = 'clawkie.favoriteSessions.v1';
+
+export type FavoriteRecentSession = RecentSession;
+
+export type RecentSessionFavoriteState = RecentSession & {
+  favorite?: boolean;
+  persistedFavorite?: boolean;
+};
 
 export const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
   format: 'md',
@@ -86,6 +95,117 @@ export function saveSettings(settings: Settings, hostPeerId?: string | null): vo
   } catch {
     // storage full or disabled — settings won't persist, but the app still works.
   }
+}
+
+
+export function loadFavoriteRecentSessions(hostPeerId?: string | null): FavoriteRecentSession[] {
+  const hostKey = normalizeHostPeerId(hostPeerId);
+  if (!hostKey) return [];
+  return readFavoriteSessionStore().hosts[hostKey]?.sessions.map(cloneRecentSession) ?? [];
+}
+
+export function saveFavoriteRecentSession(
+  hostPeerId: string | null | undefined,
+  session: RecentSession,
+): FavoriteRecentSession | null {
+  const hostKey = normalizeHostPeerId(hostPeerId);
+  const normalized = normalizeFavoriteRecentSession(session);
+  if (!hostKey || !normalized) return null;
+  const store = readFavoriteSessionStore();
+  const host = store.hosts[hostKey] ?? { sessions: [] };
+  const key = recentSessionStorageKey(normalized);
+  host.sessions = [
+    normalized,
+    ...host.sessions.filter((item) => recentSessionStorageKey(item) !== key),
+  ];
+  store.hosts[hostKey] = host;
+  writeFavoriteSessionStore(store);
+  return cloneRecentSession(normalized);
+}
+
+export function removeFavoriteRecentSession(
+  hostPeerId: string | null | undefined,
+  session: Pick<RecentSession, 'sessionId'>,
+): void {
+  const hostKey = normalizeHostPeerId(hostPeerId);
+  const sessionKey = recentSessionStorageKey(session);
+  if (!hostKey || !sessionKey) return;
+  const store = readFavoriteSessionStore();
+  const host = store.hosts[hostKey];
+  if (!host) return;
+  host.sessions = host.sessions.filter((item) => recentSessionStorageKey(item) !== sessionKey);
+  if (host.sessions.length > 0) {
+    store.hosts[hostKey] = host;
+  } else {
+    delete store.hosts[hostKey];
+  }
+  writeFavoriteSessionStore(store);
+}
+
+export function reconcileFavoriteRecentSessions(
+  hostPeerId: string | null | undefined,
+  daemonSessions: RecentSession[],
+): FavoriteRecentSession[] {
+  const hostKey = normalizeHostPeerId(hostPeerId);
+  if (!hostKey) return [];
+  const store = readFavoriteSessionStore();
+  const host = store.hosts[hostKey];
+  if (!host || host.sessions.length === 0) return [];
+  const daemonByKey = new Map<string, FavoriteRecentSession>();
+  for (const session of daemonSessions) {
+    const normalized = normalizeFavoriteRecentSession(session);
+    const key = normalized ? recentSessionStorageKey(normalized) : undefined;
+    if (normalized && key) daemonByKey.set(key, normalized);
+  }
+  let changed = false;
+  host.sessions = host.sessions.map((favorite) => {
+    const key = recentSessionStorageKey(favorite);
+    const fresh = key ? daemonByKey.get(key) : undefined;
+    if (fresh) changed = true;
+    return fresh ?? favorite;
+  });
+  store.hosts[hostKey] = host;
+  if (changed) writeFavoriteSessionStore(store);
+  return host.sessions.map(cloneRecentSession);
+}
+
+export function mergeRecentSessionsWithFavorites(
+  daemonSessions: RecentSession[],
+  favoriteSessions: FavoriteRecentSession[],
+): RecentSessionFavoriteState[] {
+  const favoritesByKey = new Map<string, FavoriteRecentSession>();
+  for (const session of favoriteSessions) {
+    const normalized = normalizeFavoriteRecentSession(session);
+    const key = normalized ? recentSessionStorageKey(normalized) : undefined;
+    if (normalized && key) favoritesByKey.set(key, normalized);
+  }
+
+  const seen = new Set<string>();
+  const favoriteRows: RecentSessionFavoriteState[] = [];
+  const nonFavoriteRows: RecentSessionFavoriteState[] = [];
+  for (const session of daemonSessions) {
+    const normalized = normalizeFavoriteRecentSession(session);
+    if (!normalized) continue;
+    const key = recentSessionStorageKey(normalized);
+    if (!key) continue;
+    seen.add(key);
+    const favorite = favoritesByKey.has(key);
+    const row: RecentSessionFavoriteState = {
+      ...normalized,
+      ...(favorite ? { favorite: true } : {}),
+    };
+    if (favorite) favoriteRows.push(row);
+    else nonFavoriteRows.push(row);
+  }
+
+  for (const favorite of favoriteSessions) {
+    const normalized = normalizeFavoriteRecentSession(favorite);
+    const key = normalized ? recentSessionStorageKey(normalized) : undefined;
+    if (!normalized || !key || seen.has(key)) continue;
+    favoriteRows.push({ ...normalized, favorite: true, persistedFavorite: true });
+  }
+
+  return [...favoriteRows, ...nonFavoriteRows];
 }
 
 // Export settings boundary — callers that only need export/history work
@@ -206,6 +326,90 @@ function normalizeOptionalString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed || undefined;
+}
+
+
+interface FavoriteRecentSessionStore {
+  hosts: Record<string, { sessions: FavoriteRecentSession[] }>;
+}
+
+function readFavoriteSessionStore(): FavoriteRecentSessionStore {
+  try {
+    const raw = localStorage.getItem(FAVORITE_SESSIONS_KEY);
+    if (!raw) return { hosts: {} };
+    const parsed = JSON.parse(raw);
+    return normalizeFavoriteSessionStore(parsed);
+  } catch {
+    return { hosts: {} };
+  }
+}
+
+function writeFavoriteSessionStore(store: FavoriteRecentSessionStore): void {
+  try {
+    localStorage.setItem(FAVORITE_SESSIONS_KEY, JSON.stringify(normalizeFavoriteSessionStore(store)));
+  } catch {
+    // Favorite sessions are best-effort local UI state. The live daemon list still works.
+  }
+}
+
+function normalizeFavoriteSessionStore(value: unknown): FavoriteRecentSessionStore {
+  const source = objectRecord(value);
+  const hosts = objectRecord(source.hosts);
+  const normalizedHosts: FavoriteRecentSessionStore['hosts'] = {};
+  for (const [rawHostKey, rawHost] of Object.entries(hosts)) {
+    const hostKey = normalizeHostPeerId(rawHostKey);
+    if (!hostKey) continue;
+    const rawSessions = Array.isArray(rawHost)
+      ? rawHost
+      : Array.isArray(objectRecord(rawHost).sessions)
+        ? (objectRecord(rawHost).sessions as unknown[])
+        : [];
+    const sessions = rawSessions
+      .map(normalizeFavoriteRecentSession)
+      .filter((session: FavoriteRecentSession | null): session is FavoriteRecentSession => !!session);
+    const deduped: FavoriteRecentSession[] = [];
+    const seen = new Set<string>();
+    for (const session of sessions) {
+      const key = recentSessionStorageKey(session);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(session);
+    }
+    if (deduped.length > 0) normalizedHosts[hostKey] = { sessions: deduped };
+  }
+  return { hosts: normalizedHosts };
+}
+
+export function normalizeFavoriteRecentSession(value: unknown): FavoriteRecentSession | null {
+  if (!value || typeof value !== 'object') return null;
+  const source = value as Partial<RecentSession>;
+  const sessionId = normalizeOptionalString(source.sessionId);
+  const sessionKey = normalizeOptionalString(source.sessionKey);
+  if (!sessionId || !sessionKey) return null;
+  const agent = normalizeOptionalString(source.agent) ?? 'unknown';
+  const displayLabel = normalizeOptionalString(source.displayLabel) ?? agent;
+  const channel = normalizeOptionalString(source.channel);
+  const target = normalizeOptionalString(source.target);
+  const accountId = normalizeOptionalString(source.accountId);
+  const lastActivity = normalizeOptionalString(source.lastActivity);
+  return {
+    sessionId,
+    sessionKey,
+    agent,
+    displayLabel,
+    ...(channel ? { channel } : {}),
+    ...(target ? { target } : {}),
+    ...(accountId ? { accountId } : {}),
+    ...(lastActivity ? { lastActivity } : {}),
+  };
+}
+
+function recentSessionStorageKey(session: Pick<RecentSession, 'sessionId'>): string | undefined {
+  return normalizeOptionalString(session.sessionId);
+}
+
+function cloneRecentSession(session: FavoriteRecentSession): FavoriteRecentSession {
+  return { ...session };
 }
 
 export type TranscriptRole = 'user' | 'assistant';

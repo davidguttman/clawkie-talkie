@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { HIFI } from '../tokens';
 import { useRtc } from '../rtc/RtcContext';
 import type { RecentSession } from '../voice/protocol';
+import type { RecentSessionFavoriteState } from '../storage';
 
 const DASHBOARD_REFRESH_TIMEOUT_MS = 12_000;
 
@@ -10,11 +11,13 @@ type RefreshPhase = 'idle' | 'loading' | 'refreshing';
 export function DashboardScreen({
   hostPeerId,
   onSelectSession,
+  onHistory,
   onSettings,
   compact = false,
 }: {
   hostPeerId?: string | null;
   onSelectSession: (session: RecentSession) => void;
+  onHistory?: () => void;
   onSettings?: () => void;
   compact?: boolean;
 }) {
@@ -110,25 +113,52 @@ export function DashboardScreen({
             Pick a session
           </h1>
         </div>
-        {onSettings && (
-          <button
-            type="button"
-            onClick={onSettings}
-            aria-label="Settings"
-            style={{
-              width: 34,
-              height: 34,
-              borderRadius: 12,
-              background: 'transparent',
-              border: `1px solid ${HIFI.stroke}`,
-              color: HIFI.ink2,
-              cursor: 'pointer',
-              fontSize: 16,
-              flexShrink: 0,
-            }}
-          >
-            ⚙
-          </button>
+        {(onHistory || onSettings) && (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+            {onHistory && (
+              <button
+                type="button"
+                onClick={onHistory}
+                aria-label="History"
+                style={{
+                  minWidth: compact ? 76 : 84,
+                  height: 34,
+                  borderRadius: 12,
+                  background: 'transparent',
+                  border: `1px solid ${HIFI.stroke}`,
+                  color: HIFI.ink2,
+                  cursor: 'pointer',
+                  fontFamily: HIFI.fonts.mono,
+                  fontSize: 10,
+                  fontWeight: 800,
+                  letterSpacing: 1.1,
+                  flexShrink: 0,
+                }}
+              >
+                HISTORY
+              </button>
+            )}
+            {onSettings && (
+              <button
+                type="button"
+                onClick={onSettings}
+                aria-label="Settings"
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 12,
+                  background: 'transparent',
+                  border: `1px solid ${HIFI.stroke}`,
+                  color: HIFI.ink2,
+                  cursor: 'pointer',
+                  fontSize: 16,
+                  flexShrink: 0,
+                }}
+              >
+                ⚙
+              </button>
+            )}
+          </div>
         )}
       </header>
 
@@ -268,60 +298,77 @@ function SessionButton({
   compact,
   onSelect,
 }: {
-  session: RecentSession;
+  session: RecentSessionFavoriteState;
   compact: boolean;
   onSelect: (session: RecentSession) => void;
 }) {
+  const favorite = session.favorite === true;
   return (
-    <button
-      type="button"
-      onClick={() => onSelect(session)}
+    <div
       style={{
         display: 'grid',
-        gap: 6,
+        gridTemplateColumns: 'minmax(0, 1fr)',
+        alignItems: 'stretch',
+        gap: 8,
         minWidth: 0,
         width: '100%',
-        textAlign: 'left',
         borderRadius: 14,
-        border: `1px solid ${HIFI.stroke}`,
-        background: 'rgba(255,255,255,0.045)',
-        color: HIFI.ink,
-        cursor: 'pointer',
-        padding: compact ? '11px 12px' : '13px 14px',
-        fontFamily: HIFI.fonts.sans,
+        border: `1px solid ${favorite ? `${HIFI.ai}88` : HIFI.stroke}`,
+        background: favorite ? `${HIFI.ai}10` : 'rgba(255,255,255,0.045)',
+        padding: compact ? '8px 8px 8px 12px' : '10px 10px 10px 14px',
+        boxSizing: 'border-box',
       }}
     >
-      <span
+      <button
+        type="button"
+        onClick={() => onSelect(session)}
         style={{
+          display: 'grid',
+          gap: 6,
           minWidth: 0,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-          fontSize: compact ? 14 : 15,
-          fontWeight: 800,
-        }}
-        title={session.displayLabel}
-      >
-        {session.displayLabel}
-      </span>
-      <span
-        style={{
-          display: 'flex',
-          gap: 8,
-          flexWrap: 'wrap',
-          minWidth: 0,
-          color: HIFI.ink3,
-          fontFamily: HIFI.fonts.mono,
-          fontSize: 10,
-          fontWeight: 700,
-          letterSpacing: 0.5,
+          width: '100%',
+          textAlign: 'left',
+          border: 0,
+          background: 'transparent',
+          color: HIFI.ink,
+          cursor: 'pointer',
+          padding: 0,
+          fontFamily: HIFI.fonts.sans,
         }}
       >
-        <span>{session.agent || 'unknown'}</span>
-        {session.channel && <span>{session.channel}</span>}
-        {session.lastActivity && <span>{formatRelativeActivity(session.lastActivity)}</span>}
-      </span>
-    </button>
+        <span
+          style={{
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            fontSize: compact ? 14 : 15,
+            fontWeight: 800,
+          }}
+          title={session.displayLabel}
+        >
+          {session.displayLabel}
+        </span>
+        <span
+          style={{
+            display: 'flex',
+            gap: 8,
+            flexWrap: 'wrap',
+            minWidth: 0,
+            color: HIFI.ink3,
+            fontFamily: HIFI.fonts.mono,
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: 0.5,
+          }}
+        >
+          <span>{session.agent || 'unknown'}</span>
+          {session.channel && <span>{session.channel}</span>}
+          {session.lastActivity && <span>{formatRelativeActivity(session.lastActivity)}</span>}
+          {session.persistedFavorite && <span>SAVED</span>}
+        </span>
+      </button>
+    </div>
   );
 }
 

@@ -12,6 +12,16 @@ import {
   type ReactNode,
 } from 'react';
 import { RtcClient, type ControlMessage, type RtcStatus } from './client';
+import {
+  loadFavoriteRecentSessions,
+  mergeRecentSessionsWithFavorites,
+  normalizeFavoriteRecentSession,
+  reconcileFavoriteRecentSessions,
+  removeFavoriteRecentSession,
+  saveFavoriteRecentSession,
+  type FavoriteRecentSession,
+  type RecentSessionFavoriteState,
+} from '../storage';
 import { attachDaemonRemoteStream, detachDaemonRemoteStream } from '../voice/tts';
 import { phoneToDaemon, type DeliveryTarget, type RecentSession, type RecentSessionsSnapshot, type SttCatalog, type TtsCatalog, type VoiceSettings } from '../voice/protocol';
 
@@ -35,8 +45,9 @@ export interface RtcContextValue {
   requestTtsCatalog: () => void;
   sttCatalog: SttCatalog | null;
   requestSttCatalog: () => void;
-  recentSessions: RecentSession[];
+  recentSessions: RecentSessionFavoriteState[];
   recentSessionsGeneratedAt?: string;
+  toggleRecentSessionFavorite: (session: RecentSession) => void;
   recentSessionsResponseSeq: number;
   recentSessionsSupportStatus: RecentSessionsSupportStatus;
   requestRecentSessions: () => void;
@@ -61,6 +72,7 @@ const Ctx = createContext<RtcContextValue>({
   requestSttCatalog: noop,
   recentSessions: [],
   recentSessionsGeneratedAt: undefined,
+  toggleRecentSessionFavorite: noop,
   recentSessionsResponseSeq: 0,
   recentSessionsSupportStatus: 'unknown',
   requestRecentSessions: noop,
@@ -152,6 +164,9 @@ export function RtcProvider({
     generatedAt: '',
     sessions: [],
   });
+  const [favoriteRecentSessions, setFavoriteRecentSessions] = useState<FavoriteRecentSession[]>(() =>
+    loadFavoriteRecentSessions(hostPeerId),
+  );
   const [recentSessionsResponseSeq, setRecentSessionsResponseSeq] = useState(0);
   const [recentSessionsSupportStatus, setRecentSessionsSupportStatus] =
     useState<RecentSessionsSupportStatus>('unknown');
@@ -173,6 +188,7 @@ export function RtcProvider({
     setActiveRoomId(hostPeerId);
     setRecentSessionsSupportStatus('unknown');
     setRecentSessionsSnapshot({ generatedAt: '', sessions: [] });
+    setFavoriteRecentSessions(loadFavoriteRecentSessions(hostPeerId));
     setAutoRetryAttempt(0);
   }, [hostPeerId]);
 
@@ -192,6 +208,11 @@ export function RtcProvider({
     catalogRequestedRoomRef.current = null;
     sessionsSubscribedRoomRef.current = null;
   }, []);
+
+  const applyRecentSessionsSnapshot = useCallback((snapshot: RecentSessionsSnapshot) => {
+    setRecentSessionsSnapshot(snapshot);
+    setFavoriteRecentSessions(reconcileFavoriteRecentSessions(hostPeerId, snapshot.sessions));
+  }, [hostPeerId]);
 
   useEffect(() => {
     if (!activeRoomId) return;
@@ -216,7 +237,7 @@ export function RtcProvider({
       if (msg.t === 'sessions.list' && Array.isArray(msg.sessions)) {
         setRecentSessionsSupportStatus('supported');
         setRecentSessionsResponseSeq((seq) => seq + 1);
-        setRecentSessionsSnapshot({
+        applyRecentSessionsSnapshot({
           generatedAt: typeof msg.generatedAt === 'string' ? msg.generatedAt : '',
           sessions: msg.sessions as RecentSession[],
         });
@@ -230,7 +251,7 @@ export function RtcProvider({
         const catalog = msg.catalog as Partial<RecentSessionsSnapshot>;
         setRecentSessionsSupportStatus('supported');
         setRecentSessionsResponseSeq((seq) => seq + 1);
-        setRecentSessionsSnapshot({
+        applyRecentSessionsSnapshot({
           generatedAt: typeof catalog.generatedAt === 'string' ? catalog.generatedAt : '',
           sessions: catalog.sessions as RecentSession[],
         });
@@ -286,7 +307,7 @@ export function RtcProvider({
       if (remoteStreamRef.current) detachDaemonRemoteStream(remoteStreamRef.current);
       remoteStreamRef.current = null;
     };
-  }, [activeRoomId, retrySeq]);
+  }, [activeRoomId, applyRecentSessionsSnapshot, retrySeq]);
 
   useEffect(() => {
     if (previousRendezvousKeyRef.current !== rendezvousKey) {
@@ -498,6 +519,24 @@ export function RtcProvider({
     };
   }, []);
 
+  const toggleRecentSessionFavorite = useCallback((session: RecentSession) => {
+    const normalized = normalizeFavoriteRecentSession(session);
+    if (!hostPeerId || !normalized) return;
+    const current = loadFavoriteRecentSessions(hostPeerId);
+    const favorite = current.some((item) => item.sessionId === normalized.sessionId);
+    if (favorite) {
+      removeFavoriteRecentSession(hostPeerId, normalized);
+    } else {
+      saveFavoriteRecentSession(hostPeerId, normalized);
+    }
+    setFavoriteRecentSessions(loadFavoriteRecentSessions(hostPeerId));
+  }, [hostPeerId]);
+
+  const mergedRecentSessions = useMemo(
+    () => mergeRecentSessionsWithFavorites(recentSessionsSnapshot.sessions, favoriteRecentSessions),
+    [favoriteRecentSessions, recentSessionsSnapshot.sessions],
+  );
+
   const addRemoteStreamListener = useCallback((fn: (stream: MediaStream) => void) => {
     remoteStreamListenersRef.current.add(fn);
     if (remoteStreamRef.current) {
@@ -525,8 +564,9 @@ export function RtcProvider({
       requestTtsCatalog,
       sttCatalog,
       requestSttCatalog,
-      recentSessions: recentSessionsSnapshot.sessions,
+      recentSessions: mergedRecentSessions,
       recentSessionsGeneratedAt: recentSessionsSnapshot.generatedAt || undefined,
+      toggleRecentSessionFavorite,
       recentSessionsResponseSeq,
       recentSessionsSupportStatus,
       requestRecentSessions,
@@ -546,7 +586,8 @@ export function RtcProvider({
       requestTtsCatalog,
       sttCatalog,
       requestSttCatalog,
-      recentSessionsSnapshot,
+      mergedRecentSessions,
+      recentSessionsSnapshot.generatedAt,
       recentSessionsResponseSeq,
       recentSessionsSupportStatus,
       requestRecentSessions,
