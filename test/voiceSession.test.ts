@@ -1023,6 +1023,39 @@ describe('voice session OpenClaw infer STT runtime', () => {
     expect(sentBinary(reconnectPeer)).not.toContainEqual(Buffer.from([1, 1]));
   });
 
+  it('buffers WebRTC-track TTS chunks generated after the phone switches away and replays them as PCM on reconnect', async () => {
+    chatMocks.runChat.mockResolvedValue({ text: 'spoken reply' });
+    const { session, peer } = makeVoiceSession();
+    const audioSource = { onData: vi.fn() };
+    (session as unknown as { audioSource: typeof audioSource; outboundStream: unknown }).audioSource = audioSource;
+    (session as unknown as { outboundStream: unknown }).outboundStream = { active: true };
+
+    sendControl(session, { t: 'stt.start' });
+    await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+    sttMocks.inferCtor.mock.results[0].value.cb.onDone('hello');
+    await vi.waitFor(() => expect(ttsMocks.inferTtsCtor).toHaveBeenCalledTimes(1));
+    const fakeTts = ttsMocks.inferTtsCtor.mock.results[0].value;
+
+    fakeTts.cb.onOpen();
+    expect(sentJson(peer)).toContainEqual({ t: 'tts.start', sample_rate: 48000 });
+
+    (session as unknown as { tearDownPeer(reason: string, peer?: unknown): void }).tearDownPeer('peer_closed', peer);
+    fakeTts.cb.onAudio(new Uint8Array([4, 5, 6]));
+    fakeTts.cb.onAudio(new Uint8Array([7, 8]));
+    fakeTts.cb.onDone();
+
+    expect(audioSource.onData).not.toHaveBeenCalled();
+
+    const reconnectPeer = { send: vi.fn() };
+    (session as unknown as { sendCatchUpSnapshot(peer: unknown): void }).sendCatchUpSnapshot(reconnectPeer);
+
+    expect(sentJson(reconnectPeer).filter((msg) => msg.t === 'tts.start' && msg.buffered === true)).toEqual([
+      { t: 'tts.start', sample_rate: 24000, buffered: true, turnId: expect.any(Number), text: 'spoken reply' },
+    ]);
+    expect(sentBinary(reconnectPeer)).toEqual([Buffer.from([4, 5, 6]), Buffer.from([7, 8])]);
+    expect(sentJson(reconnectPeer)).toContainEqual({ t: 'tts.done' });
+  });
+
   it.each([
     ['first buffered chunk', (payload: unknown) => payload instanceof Uint8Array],
     ['tts.done', (payload: unknown) => typeof payload === 'string' && JSON.parse(payload).t === 'tts.done'],
