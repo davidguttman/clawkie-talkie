@@ -21,54 +21,36 @@ import {
 // daemon-streamed TTS audio; STT, reply generation, and TTS all terminate
 // on the daemon side.
 
-type SessionListRequestPhase = 'idle' | 'loading' | 'refreshing';
-
-interface SessionListRequestState {
-  phase: SessionListRequestPhase;
-  requestId: number;
-  timedOut: boolean;
-}
-
-const RECENT_SESSIONS_REFRESH_TIMEOUT_MS = 2500;
 
 export function DrivingScreen({
   accent = 'amber',
   fontMode = 'mono',
   onReplay,
   canReplay = false,
-  onHistory,
+  onSessions,
   onSettings,
   compact = false,
   sessionId,
   hostPeerId,
   threadId,
-  onSelectSession,
+  favoriteSession,
 }: {
   accent?: AccentKey;
   fontMode?: 'mono' | 'sans';
   onReplay?: () => void | Promise<void>;
   canReplay?: boolean;
-  onHistory?: () => void;
+  onSessions?: () => void;
   onSettings?: () => void;
   compact?: boolean;
   sessionId?: string;
   hostPeerId?: string | null;
   threadId?: string;
-  onSelectSession?: (session: RecentSession) => void;
+  favoriteSession?: RecentSession;
 }) {
   const accentCfg = HIFI.accents[accent] || HIFI.accents.amber;
   const debugMode = useDebugMode();
   const [holdMusicMuted, setHoldMusicMutedState] = useState(() => getHoldMusicMuted());
-  const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
-  const [sessionListRequest, setSessionListRequest] = useState<SessionListRequestState>({
-    phase: 'idle',
-    requestId: 0,
-    timedOut: false,
-  });
-
   const rtc = useRtc();
-  const recentSessionsSupported = rtc.recentSessionsSupportStatus === 'supported';
-
   const loop = useDrivingLoop({
     sessionId,
     threadId,
@@ -97,32 +79,6 @@ export function DrivingScreen({
   useEffect(() => {
     return subscribeHoldMusicMuted(setHoldMusicMutedState);
   }, []);
-
-  useEffect(() => {
-    if (!recentSessionsSupported) setSessionPickerOpen(false);
-  }, [recentSessionsSupported]);
-
-  useEffect(() => {
-    if (rtc.recentSessionsResponseSeq <= 0) return;
-    setSessionListRequest((current) =>
-      current.phase === 'idle' && !current.timedOut
-        ? current
-        : { phase: 'idle', requestId: current.requestId, timedOut: false },
-    );
-  }, [rtc.recentSessionsResponseSeq]);
-
-  useEffect(() => {
-    if (sessionListRequest.phase === 'idle') return;
-    const requestId = sessionListRequest.requestId;
-    const timeout = window.setTimeout(() => {
-      setSessionListRequest((current) =>
-        current.requestId === requestId && current.phase !== 'idle'
-          ? { phase: 'idle', requestId: current.requestId, timedOut: true }
-          : current,
-      );
-    }, RECENT_SESSIONS_REFRESH_TIMEOUT_MS);
-    return () => window.clearTimeout(timeout);
-  }, [sessionListRequest.phase, sessionListRequest.requestId]);
 
   const isRec = state === 'recording';
   const isAI = state === 'ai';
@@ -180,21 +136,12 @@ export function DrivingScreen({
   const rowGap = compact ? 8 : 10;
   const replayEnabled = !!onReplay && canReplay;
   const recentSessions = rtc.recentSessions;
-  const recentSessionsGeneratedAt = rtc.recentSessionsGeneratedAt;
   const activeSession = recentSessions.find(
     (session) => session.sessionId === sessionId || session.sessionKey === sessionId,
   );
+  const favoriteSessionTarget = activeSession ?? favoriteSession;
+  const activeSessionFavorite = Boolean(activeSession?.favorite);
   const headerLabel = buildHeaderLabel(activeSession);
-  const requestRecentSessionList = useCallback(() => {
-    setSessionListRequest((current) => ({
-      phase: recentSessionsGeneratedAt ? 'refreshing' : 'loading',
-      requestId: current.requestId + 1,
-      timedOut: false,
-    }));
-    rtc.requestRecentSessions();
-  }, [recentSessionsGeneratedAt, rtc]);
-  const recentSessionsLoading = sessionListRequest.phase === 'loading' && !recentSessionsGeneratedAt;
-  const recentSessionsRefreshing = sessionListRequest.phase === 'refreshing';
   const pttButtonSize = compact
     ? 'clamp(164px, min(52vw, 29dvh), 208px)'
     : 'clamp(188px, min(42vw, 30dvh), 208px)';
@@ -210,8 +157,8 @@ export function DrivingScreen({
         // fr-based, not content-based, which is why streaming text in the
         // bounded caption cannot push the button around.
         gridTemplateRows: debugMode
-          ? `auto minmax(0, 0.9fr) auto minmax(0, 1fr) auto auto auto`
-          : `auto minmax(0, 1fr) auto minmax(0, 1.2fr) auto auto`,
+          ? `auto minmax(0, 0.9fr) auto minmax(0, 1fr) auto auto`
+          : `auto minmax(0, 1fr) auto minmax(0, 1.2fr) auto`,
         rowGap,
         padding: compact ? `8px ${sidePad}px 10px` : `12px ${sidePad}px 14px`,
         color: HIFI.ink,
@@ -430,29 +377,13 @@ export function DrivingScreen({
         />
       )}
 
-      {recentSessionsSupported && sessionPickerOpen && (
-        <SessionPicker
-          sessions={recentSessions}
-          activeSessionId={sessionId}
-          compact={compact}
-          generatedAt={recentSessionsGeneratedAt}
-          loading={recentSessionsLoading}
-          refreshing={recentSessionsRefreshing}
-          timedOut={sessionListRequest.timedOut}
-          onRefresh={requestRecentSessionList}
-          onSelect={(session) => {
-            setSessionPickerOpen(false);
-            onSelectSession?.(session);
-          }}
-        />
-      )}
 
       {/* footer — compact action strip. Settings lives in the header gear
           button (visible in both compact and desktop). */}
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: recentSessionsSupported ? '1fr 1fr 1fr' : '1fr 1fr',
+          gridTemplateColumns: '1fr 1fr 1fr',
           gap: 8,
           minWidth: 0,
         }}
@@ -463,233 +394,32 @@ export function DrivingScreen({
           onClick={replayEnabled ? onReplay : undefined}
           compact={compact}
         />
-        <FooterButton icon="≡" label="HISTORY" onClick={onHistory} compact={compact} />
-        {recentSessionsSupported && (
-          <FooterButton
-            icon="▦"
-            label="SESSIONS"
-            ariaLabel="Sessions"
-            onClick={() => {
-              setSessionPickerOpen((open) => {
-                const nextOpen = !open;
-                if (nextOpen) requestRecentSessionList();
-                return nextOpen;
-              });
-            }}
-            compact={compact}
-          />
-        )}
+        <FooterButton
+          icon={activeSessionFavorite ? '★' : '☆'}
+          label="FAVORITE"
+          ariaLabel={
+            favoriteSessionTarget
+              ? activeSessionFavorite
+                ? 'Unfavorite session'
+                : 'Favorite session'
+              : 'Favorite session unavailable'
+          }
+          ariaPressed={favoriteSessionTarget ? activeSessionFavorite : undefined}
+          onClick={favoriteSessionTarget ? () => rtc.toggleRecentSessionFavorite(favoriteSessionTarget) : undefined}
+          compact={compact}
+        />
+        <FooterButton
+          icon="▦"
+          label="SESSIONS"
+          ariaLabel="Sessions"
+          onClick={onSessions}
+          compact={compact}
+        />
       </div>
     </div>
   );
 }
 
-
-function SessionPicker({
-  sessions,
-  activeSessionId,
-  compact,
-  generatedAt,
-  loading,
-  refreshing,
-  timedOut,
-  onRefresh,
-  onSelect,
-}: {
-  sessions: RecentSession[];
-  activeSessionId?: string;
-  compact: boolean;
-  generatedAt?: string;
-  loading: boolean;
-  refreshing: boolean;
-  timedOut: boolean;
-  onRefresh: () => void;
-  onSelect: (session: RecentSession) => void;
-}) {
-  const waiting = loading || refreshing;
-  const updatedLabel = formatRecentSessionsUpdatedAt(generatedAt);
-  const statusLabel = loading
-    ? 'Loading recent sessions…'
-    : refreshing
-      ? 'Refreshing…'
-      : updatedLabel;
-
-  return (
-    <section
-      aria-label="Recent sessions"
-      style={{
-        minWidth: 0,
-        border: `1px solid ${HIFI.stroke}`,
-        borderRadius: 14,
-        background: 'rgba(12, 16, 24, 0.72)',
-        padding: compact ? 8 : 10,
-        boxShadow: `0 12px 28px rgba(0,0,0,0.22)`,
-        overflow: 'hidden',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'flex-start',
-          justifyContent: 'space-between',
-          gap: 8,
-          marginBottom: 6,
-          fontFamily: HIFI.fonts.mono,
-        }}
-      >
-        <div style={{ minWidth: 0, display: 'grid', gap: 2 }}>
-          <span
-            style={{
-              fontSize: 10,
-              fontWeight: 800,
-              letterSpacing: 1.3,
-              color: HIFI.ink2,
-            }}
-          >
-            SESSIONS
-          </span>
-          {statusLabel && (
-            <span
-              aria-live="polite"
-              style={{
-                minWidth: 0,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                fontSize: 10,
-                fontWeight: 700,
-                letterSpacing: 0.3,
-                color: refreshing ? HIFI.ai : HIFI.ink3,
-              }}
-            >
-              {statusLabel}
-            </span>
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={onRefresh}
-          disabled={waiting}
-          style={{
-            border: 0,
-            background: 'transparent',
-            color: waiting ? HIFI.ink3 : HIFI.ink2,
-            opacity: waiting ? 0.58 : 1,
-            fontFamily: HIFI.fonts.mono,
-            fontSize: 10,
-            fontWeight: 800,
-            letterSpacing: 1,
-            cursor: waiting ? 'default' : 'pointer',
-            padding: 2,
-            flexShrink: 0,
-          }}
-        >
-          {refreshing || loading ? 'REFRESHING…' : 'REFRESH'}
-        </button>
-      </div>
-      {timedOut && (
-        <div
-          role="status"
-          style={{
-            marginBottom: 6,
-            border: `1px solid ${HIFI.think}55`,
-            borderRadius: 9,
-            background: `${HIFI.think}12`,
-            color: HIFI.think,
-            fontSize: 10,
-            fontWeight: 800,
-            letterSpacing: 0.4,
-            lineHeight: 1.25,
-            padding: '5px 7px',
-          }}
-        >
-          No refresh response yet
-        </div>
-      )}
-      <div
-        style={{
-          display: 'grid',
-          gap: 5,
-          maxHeight: compact ? 154 : 180,
-          overflowY: 'auto',
-          paddingRight: 2,
-        }}
-      >
-        {sessions.length === 0 ? (
-          <div style={{ color: HIFI.ink3, fontSize: 11, lineHeight: 1.35 }}>
-            {loading ? 'Loading recent sessions…' : 'No recent sessions yet.'}
-          </div>
-        ) : (
-          sessions.map((session) => {
-            const active = session.sessionId === activeSessionId || session.sessionKey === activeSessionId;
-            return (
-              <button
-                key={`${session.sessionKey}:${session.sessionId}`}
-                type="button"
-                onClick={() => onSelect(session)}
-                aria-current={active ? 'true' : undefined}
-                style={{
-                  minWidth: 0,
-                  display: 'grid',
-                  gridTemplateColumns: 'minmax(0, 1fr) auto',
-                  gap: 8,
-                  alignItems: 'center',
-                  textAlign: 'left',
-                  borderRadius: 10,
-                  border: `1px solid ${active ? HIFI.ai : HIFI.stroke}`,
-                  background: active ? `${HIFI.ai}18` : 'rgba(255,255,255,0.03)',
-                  color: HIFI.ink,
-                  cursor: 'pointer',
-                  padding: compact ? '7px 8px' : '8px 10px',
-                  fontFamily: HIFI.fonts.mono,
-                  boxSizing: 'border-box',
-                }}
-              >
-                <span
-                  style={{
-                    minWidth: 0,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    fontSize: compact ? 11 : 12,
-                    fontWeight: 800,
-                  }}
-                  title={session.displayLabel}
-                >
-                  {session.displayLabel}
-                </span>
-                <span
-                  style={{
-                    color: active ? HIFI.ai : HIFI.ink3,
-                    fontSize: 9,
-                    fontWeight: 800,
-                    letterSpacing: 1,
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {active ? 'ACTIVE' : session.agent.toUpperCase()}
-                </span>
-              </button>
-            );
-          })
-        )}
-      </div>
-    </section>
-  );
-}
-
-function formatRecentSessionsUpdatedAt(generatedAt?: string): string | null {
-  if (!generatedAt) return null;
-  const updatedAt = Date.parse(generatedAt);
-  if (!Number.isFinite(updatedAt)) return null;
-  const elapsedMs = Math.max(0, Date.now() - updatedAt);
-  const elapsedMinutes = Math.floor(elapsedMs / 60_000);
-  if (elapsedMinutes < 1) return 'Updated just now';
-  if (elapsedMinutes < 60) return `Updated ${elapsedMinutes}m ago`;
-  const elapsedHours = Math.floor(elapsedMinutes / 60);
-  if (elapsedHours < 24) return `Updated ${elapsedHours}h ago`;
-  return `Updated ${new Date(updatedAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}`;
-}
 
 function useDebugMode(): boolean {
   const [enabled] = useState(() => {
@@ -1347,21 +1077,25 @@ function FooterButton({
   icon,
   label,
   ariaLabel,
+  ariaPressed,
   onClick,
   compact,
 }: {
   icon: string;
   label: string;
   ariaLabel?: string;
+  ariaPressed?: boolean;
   onClick?: () => void | Promise<void>;
   compact?: boolean;
 }) {
   const disabled = !onClick;
+  const selected = ariaPressed === true && !disabled;
   return (
     <button
       onClick={onClick}
       disabled={disabled}
       aria-label={ariaLabel ?? label}
+      aria-pressed={ariaPressed}
       style={{
         height: compact ? 50 : 60,
         width: '100%',
@@ -1369,9 +1103,10 @@ function FooterButton({
         minWidth: 0,
         boxSizing: 'border-box',
         borderRadius: 14,
-        border: `1px solid ${HIFI.stroke}`,
-        background: HIFI.surface,
-        color: disabled ? HIFI.ink4 : HIFI.ink,
+        border: `1px solid ${selected ? `${HIFI.ai}aa` : HIFI.stroke}`,
+        background: selected ? `${HIFI.ai}18` : HIFI.surface,
+        color: disabled ? HIFI.ink4 : selected ? HIFI.ai : HIFI.ink,
+        boxShadow: selected ? `0 0 18px ${HIFI.ai}22` : undefined,
         cursor: disabled ? 'default' : 'pointer',
         display: 'flex',
         alignItems: 'center',
@@ -1381,7 +1116,7 @@ function FooterButton({
         fontSize: compact ? 9 : 11,
         fontWeight: 700,
         letterSpacing: compact ? 1 : 1.4,
-        transition: 'background 0.2s, border-color 0.2s',
+        transition: 'background 0.2s, border-color 0.2s, color 0.2s, box-shadow 0.2s',
         appearance: 'none',
         WebkitAppearance: 'none',
         opacity: disabled ? 0.55 : 1,

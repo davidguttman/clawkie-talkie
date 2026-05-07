@@ -98,7 +98,7 @@ describe('DrivingScreen hold music mute control', () => {
     expect(source).toContain('subscribeHoldMusicMuted(setHoldMusicMutedState)');
     expect(source).toContain("'Mute hold music'");
     expect(source).toContain("'Unmute hold music'");
-    expect(source).toContain("holdMusicMuted ? '⊘' : '◐'");
+    expect(source).toMatch(/holdMusicMuted\s*\?\s*'⊘'\s*:\s*'◐'/);
   });
 });
 
@@ -122,7 +122,7 @@ describe('DrivingScreen response scroll timing', () => {
     expect(source).toContain('AI_RESPONSE_AUTOSCROLL_START_WORDS');
     expect(source).toContain('AI_RESPONSE_AUTOSCROLL_INTERVAL_MS');
     expect(source).toContain('const startedAtMs = Date.now();');
-    expect(source).toContain('const estimatedWordsSpoken = (elapsedMs / 60000) * AI_RESPONSE_AUTOSCROLL_WPM;');
+    expect(source).toMatch(/const estimatedWordsSpoken\s*=\s*\(elapsedMs \/ 60000\) \* AI_RESPONSE_AUTOSCROLL_WPM;/);
     expect(source).toContain('if (estimatedWordsSpoken < AI_RESPONSE_AUTOSCROLL_START_WORDS) return;');
     expect(source).toContain('const readingProgress = Math.min(estimatedWordsSpoken / totalWords, 1);');
     expect(source).toContain('AI_RESPONSE_AUTOSCROLL_EASING');
@@ -145,8 +145,8 @@ describe('DrivingScreen response scroll timing', () => {
 
     expect(source).toContain("el.addEventListener('scroll', handleScroll, { passive: true });");
     expect(source).toContain("el.addEventListener('wheel', handleUserScrollIntent, { passive: true });");
-    expect(source).toContain("el.addEventListener('touchstart', handleUserScrollIntent, { passive: true });");
-    expect(source).toContain("el.addEventListener('pointerdown', handleUserScrollIntent, { passive: true });");
+    expect(source).toMatch(/el\.addEventListener\('touchstart', handleUserScrollIntent,\s*\{\s*passive: true,?\s*\}\);/);
+    expect(source).toMatch(/el\.addEventListener\('pointerdown', handleUserScrollIntent,\s*\{\s*passive: true,?\s*\}\);/);
     expect(source).toContain("el.addEventListener('keydown', handleUserScrollIntent);");
     expect(source).toContain("el.removeEventListener('wheel', handleUserScrollIntent);");
     expect(source).toContain("el.removeEventListener('touchstart', handleUserScrollIntent);");
@@ -182,9 +182,9 @@ describe('DrivingScreen voice error labels', () => {
   it('surfaces infer STT, infer TTS, and reply auth failures with distinct labels', () => {
     const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
 
-    expect(source).toContain("if (code === 'openclaw_infer_stt_failed') return 'INFER ERROR");
-    expect(source).toContain("if (code === 'openclaw_infer_tts_failed') return 'TTS ERROR");
-    expect(source).toContain("if (code === 'openclaw_auth_unavailable') return 'REPLY ERROR");
+    expect(source).toMatch(/if \(code === 'openclaw_infer_stt_failed'\)\s*return 'INFER ERROR/);
+    expect(source).toMatch(/if \(code === 'openclaw_infer_tts_failed'\)\s*return 'TTS ERROR/);
+    expect(source).toMatch(/if \(code === 'openclaw_auth_unavailable'\)\s*return 'REPLY ERROR/);
   });
 });
 
@@ -199,22 +199,51 @@ describe('DrivingScreen audio debug surface', () => {
   });
 });
 
-describe('DrivingScreen session picker control', () => {
-  it('renders a compact SESSIONS footer picker backed by RTC recent sessions', () => {
+
+describe('DrivingScreen active session favorite control', () => {
+  it('renders a footer favorite button for the active session wired to RTC favorites', () => {
     const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
 
-    const sessionsFooterButton = source.slice(
-      Math.max(0, source.indexOf('ariaLabel="Sessions"') - 160),
-      source.indexOf('ariaLabel="Sessions"') + 80,
-    );
+    expect(source).toContain('favoriteSession?: RecentSession;');
+    expect(source).toContain('const favoriteSessionTarget = activeSession ?? favoriteSession;');
+    expect(source).toContain('const activeSessionFavorite = Boolean(activeSession?.favorite);');
+    expect(source).toContain('label="FAVORITE"');
+    expect(source).toContain("icon={activeSessionFavorite ? '★' : '☆'}");
+    expect(source).toContain("? 'Unfavorite session'");
+    expect(source).toContain("ariaPressed={favoriteSessionTarget ? activeSessionFavorite : undefined}");
+    expect(source).toContain('const selected = ariaPressed === true && !disabled;');
+    expect(source).toContain('border: `1px solid ${selected ? `${HIFI.ai}aa` : HIFI.stroke}`');
+    expect(source).toContain('background: selected ? `${HIFI.ai}18` : HIFI.surface');
+    expect(source).toContain('color: disabled ? HIFI.ink4 : selected ? HIFI.ai : HIFI.ink');
+    expect(source).toContain('boxShadow: selected ? `0 0 18px ${HIFI.ai}22` : undefined');
+    expect(source).toContain('onClick={');
+    expect(source).toContain('() => rtc.toggleRecentSessionFavorite(favoriteSessionTarget)');
+    expect(source).toContain("'Favorite session unavailable'");
+  });
 
-    expect(source).toContain('rtc.recentSessions');
-    expect(source).toContain('SessionPicker');
-    expect(sessionsFooterButton).toContain('label="SESSIONS"');
-    expect(sessionsFooterButton).not.toContain('activeSession');
-    expect(source).not.toContain('compactSessionLabel');
-    expect(source).toContain('rtc.requestRecentSessions();');
-    expect(source).toContain('onSelectSession?.(session);');
+  it('removes the old header favorite star', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+    const header = source.slice(source.indexOf('{headerLabel}'), source.indexOf('aria-label="Settings"'));
+
+    expect(header).not.toContain('toggleRecentSessionFavorite');
+    expect(header).not.toContain('aria-pressed={activeSessionFavorite}');
+  });
+});
+
+describe('DrivingScreen sessions navigation control', () => {
+  it('renders fixed Replay, Favorite, Sessions footer buttons without an inline quick picker', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    expect(source).toContain("gridTemplateColumns: '1fr 1fr 1fr'");
+    expect(source).toContain('label="REPLAY"');
+    expect(source).toContain('label="FAVORITE"');
+    expect(source).toContain('label="SESSIONS"');
+    expect(source).toContain('onClick={onSessions}');
+    expect(source).not.toContain('function SessionPicker(');
+    expect(source).not.toContain('sessionPickerOpen');
+    expect(source).not.toContain('requestRecentSessionList');
+    expect(source).not.toContain('onSelectSession');
+    expect(source).not.toContain('label="HISTORY"');
   });
 
   it('uses the active recent session display label and agent in the header without UUID fallbacks', () => {
@@ -241,34 +270,15 @@ describe('DrivingScreen session picker control', () => {
     expect(source).not.toContain('compactSessionLabel');
   });
 
-  it('hides the Sessions footer and picker until recent-session support is confirmed', () => {
-    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+  it('wires the Sessions footer to the dashboard route instead of quick switcher state', () => {
+    const appSource = readFileSync(resolve(root, 'client/src/app.tsx'), 'utf8');
+    const drivingScreen = appSource.match(/<DrivingScreen\b[\s\S]*?\/>/)?.[0] ?? '';
 
-    expect(source).toContain("const recentSessionsSupported = rtc.recentSessionsSupportStatus === 'supported';");
-    expect(source).toContain("{recentSessionsSupported && sessionPickerOpen && (");
-    expect(source).toContain("gridTemplateColumns: recentSessionsSupported ? '1fr 1fr 1fr' : '1fr 1fr'");
-    expect(source).toContain('{recentSessionsSupported && (');
-    expect(source).toContain('if (!recentSessionsSupported) setSessionPickerOpen(false);');
-  });
-
-  it('surfaces loading, refreshing, timeout, and updated-at feedback in the session picker', () => {
-    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
-
-    expect(source).toContain('SessionListRequestPhase');
-    expect(source).toContain('RECENT_SESSIONS_REFRESH_TIMEOUT_MS');
-    expect(source).toContain('Loading recent sessions…');
-    expect(source).toContain('REFRESHING…');
-    expect(source).toContain('No refresh response yet');
-    expect(source).toContain('Updated just now');
-    expect(source).toContain('disabled={waiting}');
-    expect(source).toContain('formatRecentSessionsUpdatedAt');
-  });
-
-  it('clears pending refresh state from response sequence changes instead of generatedAt changes', () => {
-    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
-
-    expect(source).toContain('rtc.recentSessionsResponseSeq <= 0');
-    expect(source).toContain('}, [rtc.recentSessionsResponseSeq]);');
-    expect(source).not.toContain('}, [rtc.recentSessionsGeneratedAt]);');
+    expect(drivingScreen).toContain("onSessions={() => go('dashboard')}");
+    expect(drivingScreen).toContain('favoriteSession={currentSessionFavoriteCandidate}');
+    expect(appSource).toContain('const currentSessionFavoriteCandidate = useMemo(');
+    expect(appSource).toContain('() => favoriteSessionFromHandoff(activeHandoff)');
+    expect(drivingScreen).not.toContain('onHistory={openHistory}');
+    expect(drivingScreen).not.toContain('onSelectSession');
   });
 });

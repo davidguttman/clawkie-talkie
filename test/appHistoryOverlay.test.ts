@@ -46,11 +46,13 @@ describe('App History overlay contract', () => {
     expect(appSource).not.toMatch(/\bgo\s*\(\s*['"]history['"]\s*\)/);
   });
 
-  it('keeps DrivingScreen wired with an onHistory callback backed by overlay state', () => {
+  it('keeps DashboardScreen wired with an onHistory callback backed by overlay state', () => {
+    const dashboardScreen = jsxTag(appSource, 'DashboardScreen');
     const drivingScreen = jsxTag(appSource, 'DrivingScreen');
 
     expect(appSource).toMatch(/\bconst\s+\[historyOpen,\s*setHistoryOpen\]\s*=\s*useState\(false\)/);
-    expect(drivingScreen).toMatch(/\bonHistory=\{openHistory\}/);
+    expect(dashboardScreen).toMatch(/\bonHistory=\{openHistory\}/);
+    expect(drivingScreen).not.toMatch(/\bonHistory=/);
     expect(appSource).toMatch(/const\s+openHistory\s*=\s*useCallback\(\(\)\s*=>\s*\{\s*setSettingsOpen\(false\);\s*setHistoryOpen\(true\);/s);
   });
 
