@@ -33,6 +33,7 @@ const VISUALIZER_SMOOTHING = 0.45;
 let sharedAudioCtx: AudioContext | null = null;
 let sharedAudioElement: HTMLAudioElement | null = null;
 let attachedRemoteStream: MediaStream | null = null;
+let remoteAudioSuppressed = false;
 let lastBufferedReplyAudio: BufferedReplyAudio | null = null;
 let remoteStreamAnalyserState: {
   stream: MediaStream;
@@ -264,7 +265,8 @@ export function attachDaemonRemoteStream(stream: MediaStream): void {
       }
     }
   }
-  void playRemoteAudioElement(el);
+  applyRemoteAudioSuppression(el);
+  if (!remoteAudioSuppressed) void playRemoteAudioElement(el);
 }
 
 export function detachDaemonRemoteStream(stream?: MediaStream): void {
@@ -309,6 +311,7 @@ function ensureRemoteAudioElement(): HTMLAudioElement | null {
     el.style.width = '0';
     el.style.height = '0';
     el.style.opacity = '0';
+    el.muted = remoteAudioSuppressed;
     document.body.appendChild(el);
     sharedAudioElement = el;
     return el;
@@ -330,7 +333,32 @@ function primeRemoteAudioElement(): void {
       // best-effort
     }
   }
+  applyRemoteAudioSuppression(el);
   void playRemoteAudioElement(el);
+}
+
+function setRemoteAudioSuppressed(suppressed: boolean): void {
+  remoteAudioSuppressed = suppressed;
+  const el = sharedAudioElement;
+  if (!el) return;
+  applyRemoteAudioSuppression(el);
+  if (suppressed) return;
+  if (attachedRemoteStream && el.srcObject !== attachedRemoteStream) {
+    try {
+      el.srcObject = attachedRemoteStream;
+    } catch {
+      // best-effort
+    }
+  }
+  if (attachedRemoteStream) void playRemoteAudioElement(el);
+}
+
+function applyRemoteAudioSuppression(el: HTMLAudioElement): void {
+  try {
+    el.muted = remoteAudioSuppressed;
+  } catch {
+    // best-effort
+  }
 }
 
 function playRemoteAudioElement(el: HTMLAudioElement): Promise<void> {
@@ -511,6 +539,7 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
     if (state.finished || state.stopped) return;
     if (msg.t === 'tts.start') {
       state.started = true;
+      setRemoteAudioSuppressed(false);
       state.replayChunks = [];
       state.replayBytes = 0;
       state.forcePcmPlayback = msg.buffered === true;
@@ -551,6 +580,7 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
     stop(options?: { cancelRemote?: boolean }) {
       if (state.stopped) return;
       state.stopped = true;
+      setRemoteAudioSuppressed(true);
       if (options?.cancelRemote !== false) {
         try {
           opts.sendControl({ t: 'reply.cancel' });
