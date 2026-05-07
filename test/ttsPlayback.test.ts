@@ -336,6 +336,81 @@ describe('daemon TTS playback audio context', () => {
     });
   });
 
+  it('silences the hidden remote audio element on local stop and resumes it on the next TTS turn', async () => {
+    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+    const audioEl = {
+      autoplay: false,
+      muted: false,
+      pause: vi.fn(),
+      play: vi.fn(() => Promise.resolve()),
+      setAttribute: vi.fn(),
+      srcObject: null as MediaStream | null,
+      style: {},
+    };
+    vi.stubGlobal('document', {
+      body: { appendChild: vi.fn() },
+      createElement: vi.fn(() => audioEl),
+    });
+    const { attachDaemonRemoteStream, playDaemonTts, unlockDaemonTtsAudio } = await import(
+      '../client/src/voice/tts'
+    );
+    const stream = new FakeMediaStream() as unknown as MediaStream;
+    const sendControl = vi.fn();
+    const controls: Array<(msg: { t: string; [k: string]: unknown }) => void> = [];
+
+    attachDaemonRemoteStream(stream);
+    const firstHandle = playDaemonTts({
+      addControlListener(fn) {
+        controls.push(fn);
+        return vi.fn();
+      },
+      addBinaryListener() {
+        return vi.fn();
+      },
+      sendControl,
+    });
+
+    controls[0]({ t: 'tts.start', sample_rate: 48000 });
+    expect(audioEl.muted).toBe(false);
+    firstHandle.stop({ cancelRemote: false });
+    await firstHandle.done;
+
+    expect(sendControl).not.toHaveBeenCalled();
+    expect(audioEl.pause).not.toHaveBeenCalled();
+    expect(audioEl.muted).toBe(true);
+    expect(audioEl.srcObject).toBe(stream);
+
+    const playCallsAfterStop = audioEl.play.mock.calls.length;
+    attachDaemonRemoteStream(stream);
+    expect(audioEl.play.mock.calls.length).toBe(playCallsAfterStop);
+    expect(audioEl.muted).toBe(true);
+    expect(audioEl.srcObject).toBe(stream);
+
+    // The next trusted tap should re-prime playback even while suppressed, but
+    // keep the element muted until a new daemon TTS turn begins.
+    await unlockDaemonTtsAudio();
+    expect(audioEl.play.mock.calls.length).toBeGreaterThan(playCallsAfterStop);
+    expect(audioEl.muted).toBe(true);
+    const playCallsAfterUnlock = audioEl.play.mock.calls.length;
+
+    const secondHandle = playDaemonTts({
+      addControlListener(fn) {
+        controls.push(fn);
+        return vi.fn();
+      },
+      addBinaryListener() {
+        return vi.fn();
+      },
+      sendControl,
+    });
+    controls[1]({ t: 'tts.start', sample_rate: 48000 });
+
+    expect(audioEl.muted).toBe(false);
+    expect(audioEl.play.mock.calls.length).toBeGreaterThan(playCallsAfterUnlock);
+
+    controls[1]({ t: 'tts.done' });
+    await secondHandle.done;
+  });
 
   it('plays buffered reconnect PCM over the data channel even when a remote stream is attached', async () => {
     vi.stubGlobal('window', { AudioContext: FakeAudioContext });
