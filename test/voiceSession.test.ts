@@ -108,6 +108,7 @@ function makeVoiceSession(overrides: {
   recentSessionsProvider?: () => Promise<RecentSessionsSnapshot>;
   voiceSettings?: VoiceSettings;
   ttsSessionFactory?: TtsSessionFactory;
+  delivery?: { channel: string; target: string; accountId?: string } | null;
   onClose?: (roomId: string) => void;
 } = {}) {
   const fakeVad = {
@@ -131,7 +132,9 @@ function makeVoiceSession(overrides: {
     ...(overrides.channel ? { channel: overrides.channel } : {}),
     ...(overrides.target ? { target: overrides.target } : {}),
     ...(overrides.accountId ? { accountId: overrides.accountId } : {}),
-    delivery: { channel: 'discord', target: 'channel:thread-1' },
+    ...(overrides.delivery === null
+      ? {}
+      : { delivery: overrides.delivery ?? { channel: 'discord', target: 'channel:thread-1' } }),
     createSpeechDetector,
     ...(overrides.voiceSettings ? { voiceSettings: overrides.voiceSettings } : {}),
     ttsCatalogProvider: overrides.ttsCatalogProvider ?? defaultTtsCatalogProvider,
@@ -643,6 +646,32 @@ describe('voice session OpenClaw infer STT runtime', () => {
         target: 'channel:thread-1',
         accountId: 'acct-1',
         delivery: { channel: 'discord', target: 'channel:thread-1' },
+        deliver: true,
+      }),
+    );
+  });
+
+  it('keeps the selected Kamaji session key and originating reply target on voice chat turns', async () => {
+    const { session } = makeVoiceSession({
+      sessionKey: 'agent:kamaji:discord:channel:1501983803436961932',
+      channel: 'discord',
+      target: 'channel:1501983803436961932',
+      delivery: null,
+    });
+
+    sendControl(session, { t: 'stt.start' });
+    await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+    const fakeStt = sttMocks.inferCtor.mock.results[0].value;
+
+    fakeStt.cb.onDone('hello kamaji');
+
+    expect(chatMocks.runChat).toHaveBeenCalledWith(
+      'hello kamaji',
+      expect.objectContaining({
+        sessionId: 'session-1',
+        sessionKey: 'agent:kamaji:discord:channel:1501983803436961932',
+        channel: 'discord',
+        target: 'channel:1501983803436961932',
         deliver: true,
       }),
     );

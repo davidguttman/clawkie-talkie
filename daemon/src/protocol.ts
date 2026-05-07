@@ -2,11 +2,12 @@
 // daemon. Mirror of `client/src/voice/protocol.ts`; the protocol test
 // pins both copies to the same serialized shape.
 //
-// Routing (sessionId) is bound once at
-// rendezvous when the per-session voice room is created. Optional sessionKey
-// is routing metadata for transcript mirroring only; it is never used as the
-// agent session identity. `stt.start`
-// no longer carries routing per turn. Voice settings (legacy voice id plus
+// Routing is bound once at rendezvous when the per-session voice room is
+// created. `sessionId` remains the OpenClaw session identity; optional
+// `sessionKey` selects the OpenClaw agent and can derive Discord reply and
+// transcript routing. `channel`/`target` carry the explicit originating reply
+// route when available. `stt.start` no longer carries routing per turn. Voice
+// settings (legacy voice id plus
 // canonical TTS provider/model/voice selection) flow over the voice room:
 // an initial value is included in
 // `rendezvous.join` so the first reply uses it, and `settings.update`
@@ -216,8 +217,8 @@ export function validateRendezvousDelivery(
   _delivery: Partial<DeliveryTarget> | null | undefined,
 ): RendezvousDeliveryValidation {
   // Public handoff routing uses top-level channel/target/accountId metadata.
-  // Legacy nested delivery payloads are ignored so they cannot block the
-  // session-bound agent turn.
+  // Legacy nested delivery payloads are ignored so they cannot override the
+  // explicit reply route derived from current handoff metadata/session keys.
   return { ok: true };
 }
 

@@ -93,10 +93,10 @@ Those values are not a login token or a credential bundle. They are routing info
 
 - `host` — the stable local daemon ID on the user's machine.
 - `session` — the OpenClaw session to continue. Prefer the actual OpenClaw sessionId UUID; fall back to the exact current session key only if the UUID is unavailable.
-- `sessionKey` — optional exact OpenClaw session key, included when `session` is the UUID and used only for transcript mirroring / provider derivation / debug.
-- `target` — optional explicit current message target, included when visible and used only for transcript mirroring.
+- `sessionKey` — optional exact OpenClaw session key, included when `session` is the UUID. The daemon uses it to select the OpenClaw agent and, when possible, derive Discord reply/transcript routing.
+- `channel` + `target` — explicit originating message route, included when visible. Assistant reply delivery uses this route mandatorily; transcript mirroring also uses it best-effort.
 
-`channel` is not a URL param. The values live in the URL hash so they are parsed by the browser locally instead of being sent to the web server as normal request parameters.
+The values live in the URL hash so they are parsed by the browser locally instead of being sent to the web server as normal request parameters.
 
 ## The privacy boundary
 
@@ -211,7 +211,7 @@ Check that the daemon is running and that the `host` value in the link matches t
 
 ### The page says the session is bad
 
-The handoff link is missing routing fields or was built for the wrong context. All handoff links need `host` and `session`; prefer the actual OpenClaw sessionId UUID, include `sessionKey`, `channel`, and `target` when those exact runtime values are also visible, use an exact session key in `session` only as fallback, and include `channel`/`target` when visible for transcript mirroring.
+The handoff link is missing routing fields or was built for the wrong context. All handoff links need `host` and `session`; prefer the actual OpenClaw sessionId UUID, include `sessionKey`, `channel`, and `target` when those exact runtime values are visible, and use an exact session key in `session` only as fallback. Delivered assistant replies require an explicit reply route, either from `channel`/`target` or a resolvable Discord session key.
 
 ### Voice records but no reply comes back
 

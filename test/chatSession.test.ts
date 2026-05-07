@@ -118,6 +118,7 @@ describe('runChat OpenClaw CLI integration', () => {
 
     const result = await runChat('hi', {
       sessionId: 'session-1',
+      threadId: 'thread-1',
       deliver: true,
     });
 
@@ -143,6 +144,7 @@ describe('runChat OpenClaw CLI integration', () => {
     await expect(
       runChat('hi', {
         sessionId: 'session-1',
+        threadId: 'thread-1',
         deliver: true,
       }),
     ).rejects.toMatchObject({ code: 'openclaw_reply_unparseable' });
@@ -168,6 +170,7 @@ describe('runChat OpenClaw CLI integration', () => {
 
     const result = await runChat('hi', {
       sessionId: 'session-1',
+      threadId: 'thread-1',
       deliver: true,
     });
 
@@ -303,6 +306,91 @@ describe('runChat OpenClaw CLI integration', () => {
     expect(agentCommand).toContain(`"--session-id" "${sessionId}"`);
   });
 
+  it('delivers voice replies with the agent from sessionKey and explicit handoff reply target metadata', async () => {
+    const sessionId = 'c44d9502-ce71-46b1-9b15-5d548004544a';
+    execMock.mockImplementation((cmd) => {
+      const command = String(cmd);
+      if (command.includes('openclaw "message" "send"')) {
+        return Promise.resolve({ stdout: 'transcript posted\n', stderr: '' });
+      }
+      if (command.includes('openclaw "agent"')) {
+        return Promise.resolve({ stdout: jsonAgentStdout('reply'), stderr: '' });
+      }
+      return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+    });
+
+    await runChat('from kamaji explicit target', {
+      sessionId,
+      sessionKey: 'agent:kamaji:discord:channel:1501983803436961932',
+      channel: 'discord',
+      target: 'channel:1501983803436961932',
+      deliver: true,
+    });
+
+    const agentCall = findOpenClawExecFileInvocation('agent');
+    expect(agentCall.args).toEqual(expect.arrayContaining([
+      '--agent', 'kamaji',
+      '--session-id', sessionId,
+      '--deliver',
+      '--reply-channel', 'discord',
+      '--reply-to', 'channel:1501983803436961932',
+    ]));
+    expect(agentCall.args).not.toContain('main');
+    expect(agentCall.args).not.toContain('--channel');
+    expect(agentCall.args).not.toContain('last');
+  });
+
+  it('delivers voice replies with the agent from sessionKey and nested delivery metadata', async () => {
+    const sessionId = 'c44d9502-ce71-46b1-9b15-5d548004544a';
+    execMock.mockImplementation((cmd) => {
+      const command = String(cmd);
+      if (command.includes('openclaw "message" "send"')) {
+        return Promise.resolve({ stdout: 'transcript posted\n', stderr: '' });
+      }
+      if (command.includes('openclaw "agent"')) {
+        return Promise.resolve({ stdout: jsonAgentStdout('reply'), stderr: '' });
+      }
+      return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+    });
+
+    await runChat('from kamaji delivery target', {
+      sessionId,
+      sessionKey: 'agent:kamaji:discord:channel:1501983803436961932',
+      delivery: { channel: 'discord', target: 'channel:1501983803436961932' },
+      deliver: true,
+    });
+
+    const agentCall = findOpenClawExecFileInvocation('agent');
+    expect(agentCall.args).toEqual(expect.arrayContaining([
+      '--agent', 'kamaji',
+      '--session-id', sessionId,
+      '--deliver',
+      '--reply-channel', 'discord',
+      '--reply-to', 'channel:1501983803436961932',
+    ]));
+    expect(agentCall.args).not.toContain('--channel');
+    expect(agentCall.args).not.toContain('last');
+  });
+
+  it('fails loudly when mandatory voice reply delivery metadata is missing', async () => {
+    execMock.mockImplementation((cmd) => {
+      const command = String(cmd);
+      if (command.includes('openclaw "agent"')) {
+        return Promise.resolve({ stdout: jsonAgentStdout('reply'), stderr: '' });
+      }
+      return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+    });
+
+    await expect(
+      runChat('hello without route', {
+        sessionId: 'session-1',
+        deliver: true,
+      }),
+    ).rejects.toMatchObject({ code: 'openclaw_delivery_unresolved' });
+
+    expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "agent"'))).toBe(false);
+  });
+
   it('best-effort posts transcripts from sessionKey while keeping UUID as the agent session identity', async () => {
     const sessionId = 'c44d9502-ce71-46b1-9b15-5d548004544a';
     execMock.mockImplementation((cmd) => {
@@ -332,8 +420,10 @@ describe('runChat OpenClaw CLI integration', () => {
 
     const agentCommand = findAgentCommand();
     expect(agentCommand).toContain(`"--session-id" "${sessionId}"`);
-    expect(agentCommand).toContain('"--channel" "last"');
     expect(agentCommand).toContain('"--deliver"');
+    expect(agentCommand).toContain('"--reply-channel" "discord"');
+    expect(agentCommand).toContain('"--reply-to" "channel:thread-from-session-key"');
+    expect(agentCommand).not.toContain('"--channel" "last"');
   });
 
   it('best-effort posts transcripts for UUID session ids by reverse-resolving the OpenClaw session key when sessionKey is missing', async () => {
@@ -386,17 +476,192 @@ describe('runChat OpenClaw CLI integration', () => {
 
     const agentCommand = findAgentCommand();
     expect(agentCommand).toContain(`"--session-id" "${sessionId}"`);
-    expect(agentCommand).toContain('"--channel" "last"');
     expect(agentCommand).toContain('"--deliver"');
+    expect(agentCommand).toContain('"--reply-channel" "discord"');
+    expect(agentCommand).toContain('"--reply-to" "channel:thread-from-session-list"');
+    expect(agentCommand).not.toContain('"--channel" "last"');
   });
 
-  it('does not fail or error-log when UUID transcript target lookup fails', async () => {
+  it('uses the agent from a reverse-resolved UUID session key for mandatory reply delivery', async () => {
+    const sessionId = 'c44d9502-ce71-46b1-9b15-5d548004544a';
+    execMock.mockImplementation((cmd) => {
+      const command = String(cmd);
+      if (command.includes('openclaw "sessions"')) {
+        return Promise.resolve({
+          stdout: JSON.stringify({
+            sessions: [
+              {
+                sessionId,
+                key: 'agent:kamaji:discord:channel:thread-from-session-list',
+              },
+            ],
+          }),
+          stderr: '',
+        });
+      }
+      if (command.includes('openclaw "message" "send"')) {
+        return Promise.resolve({ stdout: 'transcript posted\n', stderr: '' });
+      }
+      if (command.includes('openclaw "agent"')) {
+        return Promise.resolve({ stdout: jsonAgentStdout('reply'), stderr: '' });
+      }
+      return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+    });
+
+    await runChat('from uuid kamaji route', {
+      sessionId,
+      deliver: true,
+    });
+
+    const agentCall = findOpenClawExecFileInvocation('agent');
+    expect(agentCall.args).toEqual(expect.arrayContaining([
+      '--agent', 'kamaji',
+      '--session-id', sessionId,
+      '--deliver',
+      '--reply-channel', 'discord',
+      '--reply-to', 'channel:thread-from-session-list',
+    ]));
+    expect(agentCall.args).not.toContain('--channel');
+    expect(agentCall.args).not.toContain('last');
+  });
+
+  it('reverse-resolves UUID sessions from { id, sessionKey } rows', async () => {
+    const sessionId = 'c44d9502-ce71-46b1-9b15-5d548004544a';
+    execMock.mockImplementation((cmd) => {
+      const command = String(cmd);
+      if (command.includes('openclaw "sessions"')) {
+        return Promise.resolve({
+          stdout: JSON.stringify({
+            sessions: [
+              {
+                id: sessionId,
+                sessionKey: 'agent:kamaji:discord:channel:thread-from-id-session-key',
+              },
+            ],
+          }),
+          stderr: '',
+        });
+      }
+      if (command.includes('openclaw "message" "send"')) {
+        return Promise.resolve({ stdout: 'transcript posted\n', stderr: '' });
+      }
+      if (command.includes('openclaw "agent"')) {
+        return Promise.resolve({ stdout: jsonAgentStdout('reply'), stderr: '' });
+      }
+      return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+    });
+
+    await runChat('from id/sessionKey route', {
+      sessionId,
+      deliver: true,
+    });
+
+    const agentCall = findOpenClawExecFileInvocation('agent');
+    expect(agentCall.args).toEqual(expect.arrayContaining([
+      '--agent', 'kamaji',
+      '--session-id', sessionId,
+      '--deliver',
+      '--reply-channel', 'discord',
+      '--reply-to', 'channel:thread-from-id-session-key',
+    ]));
+  });
+
+  it('routes Discord thread session keys to channel targets', async () => {
+    const sessionId = 'c44d9502-ce71-46b1-9b15-5d548004544a';
+    execMock.mockImplementation((cmd) => {
+      const command = String(cmd);
+      if (command.includes('openclaw "message" "send"')) {
+        return Promise.resolve({ stdout: 'transcript posted\n', stderr: '' });
+      }
+      if (command.includes('openclaw "agent"')) {
+        return Promise.resolve({ stdout: jsonAgentStdout('reply'), stderr: '' });
+      }
+      return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+    });
+
+    await runChat('from thread session key', {
+      sessionId,
+      sessionKey: 'agent:main:discord:thread:5555555555',
+      deliver: true,
+    });
+
+    const agentCall = findOpenClawExecFileInvocation('agent');
+    expect(agentCall.args).toEqual(expect.arrayContaining([
+      '--reply-channel', 'discord',
+      '--reply-to', 'channel:5555555555',
+    ]));
+  });
+
+  it('routes Discord direct session keys to user targets, not channel targets', async () => {
+    const sessionId = 'c44d9502-ce71-46b1-9b15-5d548004544a';
+    execMock.mockImplementation((cmd) => {
+      const command = String(cmd);
+      if (command.includes('openclaw "message" "send"')) {
+        return Promise.resolve({ stdout: 'transcript posted\n', stderr: '' });
+      }
+      if (command.includes('openclaw "agent"')) {
+        return Promise.resolve({ stdout: jsonAgentStdout('reply'), stderr: '' });
+      }
+      return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+    });
+
+    await runChat('from direct session key', {
+      sessionId,
+      sessionKey: 'agent:main:discord:direct:1234567890',
+      deliver: true,
+    });
+
+    const transcriptCall = findOpenClawExecFileInvocation('message', 'send');
+    expect(transcriptCall.args).toEqual(expect.arrayContaining([
+      '--channel', 'discord',
+      '--target', 'user:1234567890',
+    ]));
+    expect(transcriptCall.args).not.toContain('channel:1234567890');
+
+    const agentCall = findOpenClawExecFileInvocation('agent');
+    expect(agentCall.args).toEqual(expect.arrayContaining([
+      '--reply-channel', 'discord',
+      '--reply-to', 'user:1234567890',
+    ]));
+    expect(agentCall.args).not.toContain('channel:1234567890');
+  });
+
+  it('routes Discord user session keys to user targets, not channel targets', async () => {
+    const sessionId = 'c44d9502-ce71-46b1-9b15-5d548004544a';
+    execMock.mockImplementation((cmd) => {
+      const command = String(cmd);
+      if (command.includes('openclaw "message" "send"')) {
+        return Promise.resolve({ stdout: 'transcript posted\n', stderr: '' });
+      }
+      if (command.includes('openclaw "agent"')) {
+        return Promise.resolve({ stdout: jsonAgentStdout('reply'), stderr: '' });
+      }
+      return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+    });
+
+    await runChat('from user session key', {
+      sessionId,
+      sessionKey: 'agent:main:discord:user:9876543210',
+      deliver: true,
+    });
+
+    const agentCall = findOpenClawExecFileInvocation('agent');
+    expect(agentCall.args).toEqual(expect.arrayContaining([
+      '--reply-channel', 'discord',
+      '--reply-to', 'user:9876543210',
+    ]));
+    expect(agentCall.args).not.toContain('channel:9876543210');
+  });
+
+  it('classifies mandatory UUID delivery lookup failures instead of masking them as unresolved routes', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
       execMock.mockImplementation((cmd) => {
         const command = String(cmd);
         if (command.includes('openclaw "sessions"')) {
-          return Promise.reject(new Error('sessions unavailable'));
+          return Promise.reject(Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:18789'), {
+            stderr: 'connect ECONNREFUSED 127.0.0.1:18789',
+          }));
         }
         if (command.includes('openclaw "agent"')) {
           return Promise.resolve({ stdout: jsonAgentStdout('reply despite lookup failure'), stderr: '' });
@@ -409,11 +674,11 @@ describe('runChat OpenClaw CLI integration', () => {
           sessionId: 'c44d9502-ce71-46b1-9b15-5d548004544a',
           deliver: true,
         }),
-      ).resolves.toEqual({ text: 'reply despite lookup failure', source: 'openclaw' });
+      ).rejects.toMatchObject({ code: 'openclaw_gateway_unavailable' });
 
       expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "message" "send"'))).toBe(false);
+      expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "agent"'))).toBe(false);
       expect(errorSpy).not.toHaveBeenCalled();
-      expect(findAgentCommand()).toContain('"--channel" "last"');
     } finally {
       errorSpy.mockRestore();
     }
@@ -434,7 +699,7 @@ describe('runChat OpenClaw CLI integration', () => {
     expect(agentCommand).toContain('"--session-id" "session-1"');
   });
 
-  it('runs agent turns through OpenClaw channel-last delivery without an explicit reply target', async () => {
+  it('runs agent turns through explicit OpenClaw reply target delivery', async () => {
     mockExecRoutingAgentTo(jsonAgentStdout('ok'));
 
     await runChat('hello', {
@@ -445,11 +710,11 @@ describe('runChat OpenClaw CLI integration', () => {
 
     const agentCommand = findAgentCommand();
     expect(agentCommand).toContain('"--agent" "main"');
-    expect(agentCommand).toContain('"--channel" "last"');
     expect(agentCommand).toContain('"--deliver"');
+    expect(agentCommand).toContain('"--reply-channel" "discord"');
+    expect(agentCommand).toContain('"--reply-to" "channel:thread-1"');
     expect(agentCommand).toContain('"-m"');
-    expect(agentCommand).not.toContain('"--reply-channel"');
-    expect(agentCommand).not.toContain('"--reply-to"');
+    expect(agentCommand).not.toContain('"--channel" "last"');
   });
 
   it('starts the agent turn without waiting for transcript posting to finish', async () => {
@@ -481,7 +746,7 @@ describe('runChat OpenClaw CLI integration', () => {
       deliver: true,
     });
 
-    await vi.waitFor(() => expect(findAgentCommand()).toContain('"--channel" "last"'));
+    await vi.waitFor(() => expect(findAgentCommand()).toContain('"--reply-to" "channel:thread-1"'));
     expect(agentStartedWhileTranscriptPending).toBe(true);
     await expect(resultPromise).resolves.toEqual({ text: 'hello back', source: 'openclaw' });
 
@@ -575,29 +840,23 @@ describe('runChat OpenClaw CLI integration', () => {
     }
   });
 
-  it('runs UUID session turns without requiring a transcript target when lookup finds no match', async () => {
+  it('fails UUID session turns when delivery target lookup finds no match', async () => {
     const sessionId = 'c44d9502-ce71-46b1-9b15-5d548004544a';
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
       mockExecRoutingAgentTo(jsonAgentStdout('plain reply'));
 
-      const result = await runChat('hi', {
+      await expect(runChat('hi', {
         sessionId,
         deliver: true,
-      });
-
-      expect(result.text).toBe('plain reply');
+      })).rejects.toMatchObject({ code: 'openclaw_delivery_unresolved' });
 
       const sendCommands = execMock.mock.calls
         .map(([cmd]) => String(cmd))
         .filter((cmd) => cmd.includes('openclaw "message" "send"'));
       expect(sendCommands).toHaveLength(0);
+      expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "agent"'))).toBe(false);
       expect(errorSpy).not.toHaveBeenCalled();
-
-      const agentCommand = findAgentCommand();
-      expect(agentCommand).toContain(`"--session-id" "${sessionId}"`);
-      expect(agentCommand).toContain('"--channel" "last"');
-      expect(agentCommand).toContain('"--deliver"');
     } finally {
       errorSpy.mockRestore();
     }
@@ -609,6 +868,7 @@ describe('runChat OpenClaw CLI integration', () => {
 
     const result = await runChat('hi', {
       sessionId: 'session-1',
+      threadId: 'thread-1',
       deliver: true,
     });
 
@@ -621,6 +881,7 @@ describe('runChat OpenClaw CLI integration', () => {
     await expect(
       runChat('hi', {
         sessionId: 'session-1',
+        threadId: 'thread-1',
         deliver: true,
       }),
     ).rejects.toMatchObject({ code: 'openclaw_media_reply_unavailable' });
@@ -644,12 +905,14 @@ describe('runChat OpenClaw CLI integration', () => {
       expect(agentCommand).toContain('"--agent" "main"');
       expect(agentCommand).toContain('"--session-id" "019e0000-0000-7000-8000-000000000001"');
       expect(agentCommand).not.toContain('"--session-id" "agent:main:discord:channel:thread-1"');
-      expect(agentCommand).toContain('"--channel" "last"');
       expect(agentCommand).toContain('"--deliver"');
+      expect(agentCommand).toContain('"--reply-channel" "discord"');
+      expect(agentCommand).toContain('"--reply-to" "channel:thread-1"');
+      expect(agentCommand).not.toContain('"--channel" "last"');
     });
   });
 
-  it('resolves session-only webchat keys through the OpenClaw sessions store', async () => {
+  it('resolves non-delivered webchat fallback keys through the OpenClaw sessions store', async () => {
     await withOpenClawSessionStore('main', {
       'agent:main:main': { sessionId: '019e0000-0000-7000-8000-000000000002' },
     }, async () => {
@@ -657,7 +920,7 @@ describe('runChat OpenClaw CLI integration', () => {
 
       await runChat('hello', {
         sessionId: 'agent:main:main',
-        deliver: true,
+        deliver: false,
       });
 
       expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "sessions"'))).toBe(false);
@@ -665,8 +928,8 @@ describe('runChat OpenClaw CLI integration', () => {
       const agentCommand = findAgentCommand();
       expect(agentCommand).toContain('"--agent" "main"');
       expect(agentCommand).toContain('"--session-id" "019e0000-0000-7000-8000-000000000002"');
-      expect(agentCommand).toContain('"--channel" "last"');
-      expect(agentCommand).toContain('"--deliver"');
+      expect(agentCommand).not.toContain('"--channel" "last"');
+      expect(agentCommand).not.toContain('"--deliver"');
       expect(agentCommand).toContain('"-m"');
     });
   });
@@ -679,14 +942,14 @@ describe('runChat OpenClaw CLI integration', () => {
 
       await runChat('hello', {
         sessionId: 'agent:main:webchat',
-        deliver: true,
+        deliver: false,
       });
 
       const agentCommand = findAgentCommand();
       expect(agentCommand).toContain('"--session-id" "019e0000-0000-7000-8000-000000000003"');
       expect(agentCommand).not.toContain('agent:main:main');
-      expect(agentCommand).toContain('"--channel" "last"');
-      expect(agentCommand).toContain('"--deliver"');
+      expect(agentCommand).not.toContain('"--channel" "last"');
+      expect(agentCommand).not.toContain('"--deliver"');
       expect(agentCommand).toContain('"-m"');
     });
   });
@@ -776,11 +1039,12 @@ describe('runChat OpenClaw CLI integration', () => {
     const err = Object.assign(new Error('/bin/sh: 1: openclaw: not found'), {
       stderr: '/bin/sh: 1: openclaw: not found',
     });
-    execMock.mockRejectedValueOnce(err);
+    execMock.mockRejectedValue(err);
 
     await expect(
       runChat('hello', {
         sessionId: 'session-1',
+        threadId: 'thread-1',
         deliver: true,
       }),
     ).rejects.toMatchObject({ code: 'openclaw_unavailable' });
@@ -794,6 +1058,7 @@ describe('runChat OpenClaw CLI integration', () => {
     await expect(
       runChat('hello', {
         sessionId: 'session-1',
+        threadId: 'thread-1',
         signal: abort.signal,
         deliver: true,
       }),
@@ -845,8 +1110,10 @@ describe('runChat with explicit delivery target', () => {
 
     const agentCommand = findAgentCommand();
     expect(agentCommand).toContain('"--agent" "main"');
-    expect(agentCommand).toContain('"--channel" "last"');
     expect(agentCommand).toContain('"--deliver"');
+    expect(agentCommand).toContain('"--reply-channel" "discord"');
+    expect(agentCommand).toContain('"--reply-to" "channel:thread-1"');
+    expect(agentCommand).not.toContain('"--channel" "last"');
   });
 
   it('does not post a reply when the agent turn fails', async () => {
@@ -933,7 +1200,7 @@ describe('Discord transcript formatting and target derivation', () => {
     ).toBe('explicit-thread');
   });
 
-  it('derives the most specific Discord ID from agent session keys', () => {
+  it('derives the most specific Discord channel/thread ID from agent session keys', () => {
     expect(
       deriveDiscordMessageTarget({
         sessionId: 'agent:main:discord:channel-1:thread-2',
@@ -944,6 +1211,16 @@ describe('Discord transcript formatting and target derivation', () => {
         sessionId: 'agent:main:discord:channel:1497851727846576159',
       }),
     ).toBe('1497851727846576159');
+    expect(
+      deriveDiscordMessageTarget({
+        sessionId: 'agent:main:discord:thread:1497851727846576160',
+      }),
+    ).toBe('1497851727846576160');
+    expect(
+      deriveDiscordMessageTarget({
+        sessionId: 'agent:main:discord:direct:1497851727846576161',
+      }),
+    ).toBeUndefined();
   });
 });
 

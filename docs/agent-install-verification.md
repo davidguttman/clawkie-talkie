@@ -86,7 +86,7 @@ params.set('target', 'channel:EXAMPLE');
 console.log(`https://clawkietalkie.app/voice#${params.toString()}`);
 ```
 
-The dry-run URL must include `host` and `session`. Prefer the actual OpenClaw sessionId UUID for `session`; use a session key only as fallback when the UUID is not visible. When visible, include `sessionKey`, `channel`, `target`, and optional `accountId` so transcript mirroring can use `openclaw message send`. For internal/webchat sessions, `session=agent:main:main` is valid only as fallback. The skill must never emit `agent:main:main` for external channels such as Discord, Slack, or WhatsApp.
+The dry-run URL must include `host` and `session`. Prefer the actual OpenClaw sessionId UUID for `session`; use a session key only as fallback when the UUID is not visible. When visible, include `sessionKey`, `channel`, `target`, and optional `accountId` so the daemon can select the right agent, deliver assistant replies explicitly, and mirror transcripts best-effort. For internal/webchat sessions, `session=agent:main:main` is valid only as fallback. The skill must never emit `agent:main:main` for external channels such as Discord, Slack, or WhatsApp.
 
 ## Real handoff-link smoke test
 
@@ -98,7 +98,7 @@ Inspect the generated URL before trying the phone:
 - It must include the configured daemon `host`.
 - For web chat, `session=agent%3Amain%3Amain` is valid only when no actual sessionId UUID is visible.
 - For Discord/Slack/etc., prefer the actual sessionId UUID in `session`; if the UUID is not visible, use the correct external session key, not `session=agent%3Amain%3Amain`.
-- If trusted runtime context exposes `sessionKey`, `channel`, `target`, or `accountId`, the URL should preserve them for transcript mirroring.
+- If trusted runtime context exposes `sessionKey`, `channel`, `target`, or `accountId`, the URL should preserve them for agent selection, explicit reply delivery, and best-effort transcript mirroring.
 
 ## Pre-emptive OpenClaw agent-turn check
 
@@ -138,7 +138,6 @@ PY
 openclaw agent \
   --agent main \
   --session-id "$OPENCLAW_STORED_SESSION_ID" \
-  --channel last \
   --json \
   --timeout 60 \
   -m "Clawkie Talkie install smoke test. Reply with exactly: ok"
@@ -150,11 +149,11 @@ Or run the equivalent repo preflight gate:
 npm run agent-install-preflight -- --require-agent-turn --session-id "$OPENCLAW_STORED_SESSION_ID"
 ```
 
-By default this verifies the agent-turn path without passing `--deliver`, so it should not post a smoke-test reply. To intentionally prove delivery into the current conversation, add `--deliver` to the direct command or to the repo preflight:
+By default this verifies the agent-turn path without passing `--deliver`, so it should not post a smoke-test reply. To intentionally prove delivery into the current conversation, add explicit reply routing to the direct command or to the repo preflight:
 
 ```bash
-openclaw agent --agent main --session-id "$OPENCLAW_STORED_SESSION_ID" --channel last --deliver --json --timeout 60 -m "Clawkie Talkie install smoke test. Reply with exactly: ok"
-npm run agent-install-preflight -- --require-agent-turn --session-id "$OPENCLAW_STORED_SESSION_ID" --deliver
+openclaw agent --agent main --session-id "$OPENCLAW_STORED_SESSION_ID" --deliver --reply-channel discord --reply-to "channel:<id>" --json --timeout 60 -m "Clawkie Talkie install smoke test. Reply with exactly: ok"
+npm run agent-install-preflight -- --require-agent-turn --session-id "$OPENCLAW_STORED_SESSION_ID" --deliver --reply-channel discord --reply-to "channel:<id>"
 ```
 
 If there is no real session key/stored session id available, do not fake one. Mark this verification as blocked until a real `switch to voice` handoff can be generated from a live OpenClaw session.
@@ -168,7 +167,7 @@ If you get connection errors, auth errors, gateway errors, or session lookup err
 Do not rely only on `openclaw status --json`, STT, TTS, or a daemon `Waiting for phone…` log line. Verify one of these before reporting success:
 
 - Preferred: complete a real phone voice smoke test. Logs must show STT, `[chat] running OpenClaw turn`, a successful agent reply, TTS conversion, and no fatal `openclaw_gateway_unavailable`.
-- If no phone is available: resolve the handoff session key to its stored session id/UUID, then run the same `openclaw agent --agent main --session-id <stored-session-id-or-uuid> --channel last --json --timeout 60 -m <smoke-message>` command from the same OS user and environment shape that the service uses. Add `--deliver` only when intentionally testing channel-last delivery. For systemd installs, inspect the user service environment and fix missing `OPENCLAW_*`, auth, `PATH`, or gateway settings before claiming success.
+- If no phone is available: resolve the handoff session key to its stored session id/UUID, then run the same `openclaw agent --agent <agent-from-session-key> --session-id <stored-session-id-or-uuid> --json --timeout 60 -m <smoke-message>` command from the same OS user and environment shape that the service uses. Add `--deliver --reply-channel <channel> --reply-to <target>` only when intentionally testing explicit reply delivery. For systemd installs, inspect the user service environment and fix missing `OPENCLAW_*`, auth, `PATH`, or gateway settings before claiming success.
 
 ## Required final report
 

@@ -113,12 +113,14 @@ The agent constructs the URL directly:
 Hash args are preferred (so `host`, `session`, `sessionKey`, `channel`, `target`,
 and `accountId` are never sent to web servers); query params are accepted for
 compatibility. If a key appears in both, the hash wins. All values must be
-URL-encoded. `sessionKey`, `channel`, `target`, and `accountId` are optional
-routing metadata used only for transcript mirroring when `session` is an actual
-OpenClaw sessionId UUID. Transcript mirroring is best-effort inside the daemon:
-explicit `channel` + `target` wins when supplied, colon-style Discord
-`sessionKey`/`session` values can be used directly, and UUID-only links may be
-reverse-resolved through `openclaw sessions --json --all-agents --active 10080`.
+URL-encoded. `sessionKey`, `channel`, `target`, and `accountId` should be
+included whenever visible in trusted runtime context. `sessionKey` selects the
+OpenClaw agent and can derive Discord reply/transcript routing; explicit
+`channel` + `target` are used for mandatory assistant reply delivery and
+best-effort transcript mirroring. UUID-only links may be reverse-resolved
+through `openclaw sessions --json --all-agents --active 10080`; if no reply
+target can be derived for a delivered voice turn, the daemon fails before
+running the agent.
 
 ## Signaling
 

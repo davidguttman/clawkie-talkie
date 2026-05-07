@@ -67,7 +67,7 @@ Verify:
 Before reporting success, verify one of these:
 
 - Preferred: complete a real phone voice smoke test. Logs must show STT, `[chat] running OpenClaw turn`, successful agent reply, TTS conversion, and no fatal `openclaw_gateway_unavailable`.
-- If no phone is available: resolve the handoff session key through the OpenClaw state dir (`OPENCLAW_STATE_DIR`, else `dirname(OPENCLAW_CONFIG_PATH)`, else `<OPENCLAW_HOME-or-home>/.openclaw`), then run `openclaw agent --agent main --session-id <stored-session-id-or-uuid> --channel last --json --timeout 60 -m <smoke-message>` from the same OS user and environment shape that the service uses. Add `--deliver` only when intentionally testing delivery.
+- If no phone is available: resolve the handoff session key through the OpenClaw state dir (`OPENCLAW_STATE_DIR`, else `dirname(OPENCLAW_CONFIG_PATH)`, else `<OPENCLAW_HOME-or-home>/.openclaw`), then run `openclaw agent --agent <agent-from-session-key> --session-id <stored-session-id-or-uuid> --json --timeout 60 -m <smoke-message>` from the same OS user and environment shape that the service uses. Add `--deliver --reply-channel <channel> --reply-to <target>` only when intentionally testing explicit reply delivery into the originating channel/thread.
 
 For systemd installs, do not assume the interactive shell environment is equivalent. Inspect the user service environment and either apply a Clawkie-side service environment workaround or mark missing `OPENCLAW_*`, auth, `PATH`, or gateway settings as the blocker before claiming success.
 

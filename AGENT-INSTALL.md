@@ -180,10 +180,10 @@ npm run agent-install-preflight -- --require-agent-turn --session-id "$OPENCLAW_
 
 Handoff URLs carry a session **key** such as `agent:main:main` or `agent:main:discord:...`. Current `openclaw agent --session-id` expects the stored session id/UUID from the OpenClaw state dir (`OPENCLAW_STATE_DIR`, else `dirname(OPENCLAW_CONFIG_PATH)`, else `<OPENCLAW_HOME-or-home>/.openclaw`). The daemon resolves URL session keys before invoking the CLI; direct preflight commands should use the stored id/UUID, not a colon-containing session key.
 
-By default the preflight agent-turn smoke test does **not** deliver a reply. If you intentionally need to prove channel-last delivery too, opt in explicitly:
+By default the preflight agent-turn smoke test does **not** deliver a reply. If you intentionally need to prove explicit reply delivery into the originating channel/thread too, opt in with a reply target:
 
 ```bash
-npm run agent-install-preflight -- --require-agent-turn --session-id "$OPENCLAW_STORED_SESSION_ID" --deliver
+npm run agent-install-preflight -- --require-agent-turn --session-id "$OPENCLAW_STORED_SESSION_ID" --deliver --reply-channel discord --reply-to "channel:<id>"
 ```
 
 `openclaw status --json`, infer STT, and infer TTS can all pass while the daemon still cannot run agent replies because the local gateway is waiting on a scope/device approval. The `--session-id` agent-turn preflight is the relevant gate for that class of issue.
