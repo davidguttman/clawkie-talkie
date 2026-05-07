@@ -224,36 +224,27 @@ export function DrivingScreen({
         overflow: 'hidden',
       }}
     >
-      {/* header — full hi-fi layout in both compact and desktop. Status
-          pill is always visible so the user can read state at a glance. */}
+      {/* header — status left, active session centered, settings right.
+          The centered label reserves symmetrical side room and ellipsizes on
+          compact phones so the status pill and gear never clip. */}
       <div
         style={{
-          display: 'flex',
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0, 1fr) auto minmax(0, 1fr)',
           alignItems: 'center',
-          gap: compact ? 8 : 10,
+          columnGap: compact ? 8 : 10,
           minWidth: 0,
           width: '100%',
-          minHeight: 0,
+          minHeight: 48,
+          position: 'relative',
         }}
       >
         <div
           style={{
-            fontFamily: HIFI.fonts.mono,
-            fontSize: 12,
-            fontWeight: 600,
-            letterSpacing: 1.2,
-            color: HIFI.ink2,
-            flex: 1,
-            minWidth: 0,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {headerLabel}
-        </div>
-        <div
-          style={{
+            gridColumn: '1',
+            gridRow: 1,
+            justifySelf: 'start',
+            zIndex: 1,
             display: 'inline-flex',
             gap: 5,
             alignItems: 'center',
@@ -267,7 +258,10 @@ export function DrivingScreen({
             letterSpacing: 1.2,
             color: stateColor,
             whiteSpace: 'nowrap',
-            flexShrink: 0,
+            minWidth: 0,
+            maxWidth: compact ? 96 : 140,
+            overflow: 'hidden',
+            boxSizing: 'border-box',
           }}
         >
           <span
@@ -279,14 +273,49 @@ export function DrivingScreen({
               boxShadow: `0 0 8px ${stateColor}`,
               animation:
                 isRec || isAI || isThink ? 'pulseDot 1.2s ease-in-out infinite' : 'none',
+              flexShrink: 0,
             }}
           />
-          {statePill}
+          <span
+            style={{
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {statePill}
+          </span>
+        </div>
+        <div
+          style={{
+            gridColumn: '1 / -1',
+            gridRow: 1,
+            justifySelf: 'center',
+            zIndex: 0,
+            fontFamily: HIFI.fonts.mono,
+            fontSize: 12,
+            fontWeight: 600,
+            letterSpacing: 1.2,
+            color: HIFI.ink2,
+            maxWidth: compact ? 'calc(100% - 196px)' : 'calc(100% - 280px)',
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            textAlign: 'center',
+            pointerEvents: 'none',
+          }}
+        >
+          {headerLabel}
         </div>
         {onSettings && (
           <button
             onClick={onSettings}
             style={{
+              gridColumn: '3',
+              gridRow: 1,
+              justifySelf: 'end',
+              zIndex: 1,
               width: 48,
               height: 48,
               borderRadius: 15,

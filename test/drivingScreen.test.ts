@@ -22,6 +22,34 @@ describe('DrivingScreen waveform wiring', () => {
 });
 
 describe('DrivingScreen settings button', () => {
+  it('lays out the driving header as status left, session label centered, settings right', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    const headerBlock = source.slice(
+      source.indexOf('{/* header —'),
+      source.indexOf('{/* caption —'),
+    );
+    const statusIndex = headerBlock.indexOf('{statePill}');
+    const labelIndex = headerBlock.indexOf('{headerLabel}');
+    const settingsIndex = headerBlock.indexOf('aria-label="Settings"');
+
+    expect(statusIndex).toBeGreaterThan(-1);
+    expect(labelIndex).toBeGreaterThan(statusIndex);
+    expect(settingsIndex).toBeGreaterThan(labelIndex);
+
+    expect(headerBlock).toContain("display: 'grid'");
+    expect(headerBlock).toContain("gridTemplateColumns: 'minmax(0, 1fr) auto minmax(0, 1fr)'");
+    expect(headerBlock).toContain("gridColumn: '1'");
+    expect(headerBlock).toContain("justifySelf: 'start'");
+    expect(headerBlock).toContain("gridColumn: '1 / -1'");
+    expect(headerBlock).toContain("justifySelf: 'center'");
+    expect(headerBlock).toContain("maxWidth: compact ? 'calc(100% - 196px)' : 'calc(100% - 280px)'");
+    expect(headerBlock).toContain("gridColumn: '3'");
+    expect(headerBlock).toContain("justifySelf: 'end'");
+    expect(headerBlock).toContain("overflow: 'hidden'");
+    expect(headerBlock).toContain("textOverflow: 'ellipsis'");
+  });
+
   it('renders the settings gear in both compact and desktop headers', () => {
     const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
 
