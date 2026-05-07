@@ -3,15 +3,20 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const execMock = vi.hoisted(() => {
+const { execMock, execFileInvocations } = vi.hoisted(() => {
+  const invocations: Array<{ file: string; args: string[]; opts?: unknown }> = [];
   const fn = vi.fn();
+  const formatCommand = (file: string, args: string[]) => [file, ...args.map((arg) => JSON.stringify(arg))].join(' ');
   Object.defineProperty(fn, Symbol.for('nodejs.util.promisify.custom'), {
-    value: (cmd: string, opts?: unknown) => Promise.resolve(fn(cmd, opts)),
+    value: (file: string, args: string[] = [], opts?: unknown) => {
+      invocations.push({ file, args, opts });
+      return Promise.resolve(fn(formatCommand(file, args), opts, file, args));
+    },
   });
-  return fn;
+  return { execMock: fn, execFileInvocations: invocations };
 });
 
-vi.mock('node:child_process', () => ({ exec: execMock }));
+vi.mock('node:child_process', () => ({ execFile: execMock }));
 
 import {
   buildAgentTurnMessage,
@@ -75,6 +80,7 @@ function restoreOpenClawEnv() {
 
 afterEach(() => {
   restoreOpenClawEnv();
+  execFileInvocations.length = 0;
 });
 
 function mockExecRoutingAgentTo(stdoutForAgent: string) {
@@ -189,6 +195,53 @@ describe('runChat OpenClaw CLI integration', () => {
       String(cmd).includes('openclaw "agent"'),
     );
     expect(agentCallIndex).toBeGreaterThan(0);
+  });
+
+  it('passes transcript shell-substitution syntax as a literal execFile argv value', async () => {
+    mockExecRoutingAgentTo(jsonAgentStdout('ok'));
+    const dangerousTranscript = 'hello $(touch /tmp/clawkie-pwned) and `whoami`';
+
+    await runChat(dangerousTranscript, {
+      sessionId: 'session-1',
+      threadId: 'thread-1',
+      deliver: true,
+    });
+
+    const transcriptCall = findOpenClawExecFileInvocation('message', 'send');
+    expect(transcriptCall.file).toBe('openclaw');
+    expect(transcriptCall.args).toEqual([
+      'message', 'send',
+      '--channel', 'discord',
+      '--target', 'channel:thread-1',
+      '--message', `> ${dangerousTranscript}`,
+    ]);
+    expect(execFileInvocations.every((call) => call.file === 'openclaw' && Array.isArray(call.args))).toBe(true);
+  });
+
+  it('passes delivery metadata shell-substitution syntax as literal execFile argv values', async () => {
+    mockExecRoutingAgentTo(jsonAgentStdout('ok'));
+    const dangerousTarget = 'channel:$(touch /tmp/clawkie-target-pwned)`id`';
+    const dangerousAccount = 'acct-$(touch /tmp/clawkie-account-pwned)`whoami`';
+
+    await runChat('hello from metadata route', {
+      sessionId: 'session-1',
+      delivery: {
+        channel: 'discord',
+        target: dangerousTarget,
+        accountId: dangerousAccount,
+      },
+    });
+
+    const transcriptCall = findOpenClawExecFileInvocation('message', 'send');
+    expect(transcriptCall.file).toBe('openclaw');
+    expect(transcriptCall.args).toEqual([
+      'message', 'send',
+      '--channel', 'discord',
+      '--target', dangerousTarget,
+      '--account', dangerousAccount,
+      '--message', '> hello from metadata route',
+    ]);
+    expect(execFileInvocations.every((call) => call.file === 'openclaw' && Array.isArray(call.args))).toBe(true);
   });
 
   it('posts transcripts to the Discord target derived from the session key when threadId is absent', async () => {
@@ -952,4 +1005,12 @@ function findAgentCommand(): string {
   const call = execMock.mock.calls.find(([cmd]) => String(cmd).includes('openclaw "agent"'));
   if (!call) throw new ChatError('missing agent command', 'test_failure');
   return String(call[0]);
+}
+
+function findOpenClawExecFileInvocation(...prefix: string[]): { file: string; args: string[]; opts?: unknown } {
+  const call = execFileInvocations.find((invocation) =>
+    invocation.file === 'openclaw' && prefix.every((part, index) => invocation.args[index] === part),
+  );
+  if (!call) throw new ChatError(`missing openclaw execFile invocation: ${prefix.join(' ')}`, 'test_failure');
+  return call;
 }

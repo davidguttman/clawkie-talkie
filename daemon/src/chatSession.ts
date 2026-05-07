@@ -19,14 +19,14 @@
 // are sent before/after key events (STT start/stop, TTS start/stop,
 // etc.) and never embed the agent reply text.
 
-import { exec } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { ChatOptions, ChatResult } from './types.js';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export interface ChatErrorDetails {
   rootMessage?: string;
@@ -63,7 +63,7 @@ async function sendDebugNotification(
       '--target', `channel:${threadId}`,
       '--message', `> _clawkie ${message}`,
     ];
-    await execAsync(`openclaw ${args.map(a => JSON.stringify(a)).join(' ')}`);
+    await execFileAsync('openclaw', args);
   } catch {
     // debug notifications are best-effort — don't fail the turn
   }
@@ -124,7 +124,7 @@ async function sendGenericMessage(
     '--message', message,
   ];
   try {
-    await execAsync(`openclaw ${args.map(a => JSON.stringify(a)).join(' ')}`, { signal });
+    await execFileAsync('openclaw', args, { signal });
   } catch (err) {
     if (signal?.aborted) throw new ChatError('aborted', 'aborted');
     throw toOpenClawChatError(err, failureLabel);
@@ -144,7 +144,7 @@ async function sendDiscordMessage(
     '--message', message,
   ];
   try {
-    await execAsync(`openclaw ${args.map(a => JSON.stringify(a)).join(' ')}`, { signal });
+    await execFileAsync('openclaw', args, { signal });
   } catch (err) {
     if (signal?.aborted) throw new ChatError('aborted', 'aborted');
     throw toOpenClawChatError(err, failureLabel);
@@ -231,10 +231,7 @@ async function lookupOpenClawSessionKey(
 ): Promise<string | undefined> {
   const args = ['sessions', '--json', '--all-agents', '--active', '10080'];
   try {
-    const { stdout } = await execAsync(
-      `openclaw ${args.map(a => JSON.stringify(a)).join(' ')}`,
-      { signal },
-    );
+    const { stdout } = await execFileAsync('openclaw', args, { signal });
     return findSessionKeyForSessionId(stdout, sessionId);
   } catch {
     // Transcript mirroring is best-effort. A missing/old OpenClaw CLI, gateway
@@ -294,10 +291,7 @@ async function runOpenClawTurn(opts: {
   ];
 
   try {
-    const { stdout } = await execAsync(
-      `openclaw ${args.map(a => JSON.stringify(a)).join(' ')}`,
-      { signal: opts.signal },
-    );
+    const { stdout } = await execFileAsync('openclaw', args, { signal: opts.signal });
     const parsed = parseOpenClawAgentJson(stdout);
     const { text, hasMedia } = extractReplyFromAgentJson(parsed);
     if (!text && hasMedia) {
