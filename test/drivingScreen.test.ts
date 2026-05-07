@@ -75,15 +75,57 @@ describe('DrivingScreen hold music mute control', () => {
 });
 
 describe('DrivingScreen response scroll timing', () => {
-  it('resets AI response captions to the top instead of auto-scrolling to the bottom', () => {
+  it('resets new AI response captions to the top before heuristic scrolling starts', () => {
     const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
 
     expect(source).toContain('AI_RESPONSE_CAPTION_LABEL');
     expect(source).toContain('isAiResponseCaption');
     expect(source).toContain('lastAiResponseTextRef');
-    expect(source).toContain('el.scrollTop = 0');
+    expect(source).toContain('setProgrammaticScrollTop(el, 0);');
+    expect(source).toContain('autoScrollDisabledForResponseRef.current = false;');
     expect(source).not.toContain('el.scrollTop = el.scrollHeight');
     expect(source).not.toContain('scrollTop = scrollHeight');
+  });
+
+  it('uses elapsed WPM word progress to gradually auto-scroll live AI responses', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    expect(source).toContain('AI_RESPONSE_AUTOSCROLL_WPM');
+    expect(source).toContain('AI_RESPONSE_AUTOSCROLL_START_WORDS');
+    expect(source).toContain('AI_RESPONSE_AUTOSCROLL_INTERVAL_MS');
+    expect(source).toContain('const startedAtMs = Date.now();');
+    expect(source).toContain('const estimatedWordsSpoken = (elapsedMs / 60000) * AI_RESPONSE_AUTOSCROLL_WPM;');
+    expect(source).toContain('if (estimatedWordsSpoken < AI_RESPONSE_AUTOSCROLL_START_WORDS) return;');
+    expect(source).toContain('const readingProgress = Math.min(estimatedWordsSpoken / totalWords, 1);');
+    expect(source).toContain('AI_RESPONSE_AUTOSCROLL_EASING');
+    expect(source).toContain('setProgrammaticScrollTop(el, Math.min(targetScrollTop, easedScrollTop));');
+  });
+
+  it('cancels AI response auto-scroll on explicit user intent even during programmatic scroll grace', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    expect(source).toContain("if (!isAiResponseCaption || !caption.live || !caption.text) return;");
+    expect(source).toContain('return () => window.clearInterval(interval);');
+
+    const scrollHandler = source.match(/const handleScroll = \(\) => \{[\s\S]*?\n    \};/)?.[0] ?? '';
+    expect(scrollHandler).toContain('if (programmaticScrollRef.current) return;');
+    expect(scrollHandler).toContain('autoScrollDisabledForResponseRef.current = true;');
+
+    const userIntentHandler = source.match(/const handleUserScrollIntent = \(\) => \{[\s\S]*?\n    \};/)?.[0] ?? '';
+    expect(userIntentHandler).toContain('autoScrollDisabledForResponseRef.current = true;');
+    expect(userIntentHandler).not.toContain('programmaticScrollRef');
+
+    expect(source).toContain("el.addEventListener('scroll', handleScroll, { passive: true });");
+    expect(source).toContain("el.addEventListener('wheel', handleUserScrollIntent, { passive: true });");
+    expect(source).toContain("el.addEventListener('touchstart', handleUserScrollIntent, { passive: true });");
+    expect(source).toContain("el.addEventListener('pointerdown', handleUserScrollIntent, { passive: true });");
+    expect(source).toContain("el.addEventListener('keydown', handleUserScrollIntent);");
+    expect(source).toContain("el.removeEventListener('wheel', handleUserScrollIntent);");
+    expect(source).toContain("el.removeEventListener('touchstart', handleUserScrollIntent);");
+    expect(source).toContain("el.removeEventListener('pointerdown', handleUserScrollIntent);");
+    expect(source).toContain("el.removeEventListener('keydown', handleUserScrollIntent);");
+    expect(source).toContain('if (autoScrollDisabledForResponseRef.current) {');
+    expect(source).toContain('window.clearInterval(interval);');
   });
 });
 
