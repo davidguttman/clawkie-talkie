@@ -4,6 +4,8 @@
 
 - Treat this app as released as of 2026-04-27.
 - Use git worktrees for new implementation work by default.
+- **Worktree location is mandatory:** all Clawkie Talkie worktrees must live under `/mnt/data/play/web/clawkie-talkie/.worktrees/` (or the equivalent `/home/dguttman/play/web/clawkie-talkie/.worktrees/` symlink path). Do not create or use sibling directories such as `/mnt/data/play/web/clawkie-talkie-*`, `/home/dguttman/play/web/clawkie-talkie-*`, or `/mnt/data/play/web/clawkie-talkie-worktrees/*`.
+- Before creating or using a worktree, verify the resolved absolute path starts with `/mnt/data/play/web/clawkie-talkie/.worktrees/`.
 - `package.json` has `"private": true` to prevent accidental npm publication; for this repo, that is not a signal that the app is pre-release or worktree-ineligible.
 - The current canonical project root is `/mnt/data/play/web/clawkie-talkie`.
 
