@@ -125,7 +125,7 @@ export function saveFavoriteRecentSession(
 
 export function removeFavoriteRecentSession(
   hostPeerId: string | null | undefined,
-  session: Pick<RecentSession, 'sessionId'>,
+  session: Partial<Pick<RecentSession, 'sessionId' | 'sessionKey'>>,
 ): void {
   const hostKey = normalizeHostPeerId(hostPeerId);
   const sessionKey = recentSessionStorageKey(session);
@@ -133,7 +133,7 @@ export function removeFavoriteRecentSession(
   const store = readFavoriteSessionStore();
   const host = store.hosts[hostKey];
   if (!host) return;
-  host.sessions = host.sessions.filter((item) => recentSessionStorageKey(item) !== sessionKey);
+  host.sessions = host.sessions.filter((item) => !favoriteRecentSessionIdentityMatches(item, session));
   if (host.sessions.length > 0) {
     store.hosts[hostKey] = host;
   } else {
@@ -404,8 +404,32 @@ export function normalizeFavoriteRecentSession(value: unknown): FavoriteRecentSe
   };
 }
 
-function recentSessionStorageKey(session: Pick<RecentSession, 'sessionId'>): string | undefined {
-  return normalizeOptionalString(session.sessionId);
+export function favoriteRecentSessionIdentity(
+  session: Partial<Pick<RecentSession, 'sessionId' | 'sessionKey'>>,
+): string | undefined {
+  const sessionKey = normalizeOptionalString(session.sessionKey);
+  if (sessionKey) return `sessionKey:${sessionKey}`;
+  const sessionId = normalizeOptionalString(session.sessionId);
+  return sessionId ? `sessionId:${sessionId}` : undefined;
+}
+
+function favoriteRecentSessionIdentityMatches(
+  left: Partial<Pick<RecentSession, 'sessionId' | 'sessionKey'>>,
+  right: Partial<Pick<RecentSession, 'sessionId' | 'sessionKey'>>,
+): boolean {
+  const leftSessionKey = normalizeOptionalString(left.sessionKey);
+  const rightSessionKey = normalizeOptionalString(right.sessionKey);
+  if (leftSessionKey && rightSessionKey) return leftSessionKey === rightSessionKey;
+
+  const leftSessionId = normalizeOptionalString(left.sessionId);
+  const rightSessionId = normalizeOptionalString(right.sessionId);
+  return !!leftSessionId && !!rightSessionId && leftSessionId === rightSessionId;
+}
+
+function recentSessionStorageKey(
+  session: Partial<Pick<RecentSession, 'sessionId' | 'sessionKey'>>,
+): string | undefined {
+  return favoriteRecentSessionIdentity(session);
 }
 
 function cloneRecentSession(session: FavoriteRecentSession): FavoriteRecentSession {
