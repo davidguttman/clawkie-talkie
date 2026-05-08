@@ -123,7 +123,10 @@ interface MediaStreamLike {
   addTrack(track: unknown): void;
 }
 
-interface BufferedTtsTurn {
+// Canonical per-turn TTS PCM log. TTS callbacks append here exactly once;
+// live data-channel sends, WebRTC frame staging, and reconnect replay all
+// consume from this log instead of deciding whether audio should be retained.
+interface TtsAudioTurn {
   turnId: number;
   text: string;
   sampleRate: number;
@@ -133,6 +136,8 @@ interface BufferedTtsTurn {
   drained: boolean;
   overflowed: boolean;
   replayOnReconnect: boolean;
+  replayFromChunkIndex: number;
+  liveDataCursor: number;
 }
 
 export interface SttSessionLike {
@@ -221,7 +226,8 @@ export class VoiceSession {
   private audioSource: AudioSourceLike | null = null;
   private outboundStream: unknown = null;
   private keepaliveInterval: NodeJS.Timeout | null = null;
-  private audioQueue: Int16Array[] = [];
+  // Resampled WebRTC frame staging for RTCAudioSource; canonical PCM lives in ttsAudioTurn.
+  private audioFrameQueue: Int16Array[] = [];
   private audioPumpInterval: NodeJS.Timeout | null = null;
   private audioPumpAwaitingDone = false;
   private rawRemainder: Buffer = Buffer.alloc(0);
@@ -239,7 +245,7 @@ export class VoiceSession {
   private lastPeerDetachEventId = 0;
   private lastPeerDetachAtMs: number | null = null;
   private readonly controlHistory: ControlEventRecord[] = [];
-  private bufferedTtsTurn: BufferedTtsTurn | null = null;
+  private ttsAudioTurn: TtsAudioTurn | null = null;
   private turnSnapshot: VoiceTurnSnapshot = {
     inFlight: false,
     phase: 'idle',
@@ -568,13 +574,16 @@ export class VoiceSession {
   }
 
   private closeOutboundAudio(): void {
-    if (this.audioSource && this.state.turnInFlight && !this.closing) {
-      this.markBufferedTtsReplayOnReconnect();
+    if (this.state.turnInFlight && !this.closing) {
+      const turn = this.ttsAudioTurn;
+      if (turn?.turnId === this.turnToken) {
+        this.markTtsAudioReplayOnReconnect(turn.turnId, 0);
+      }
     }
     const shouldCompletePendingTrackTts = this.audioPumpAwaitingDone && this.state.turnInFlight && !this.closing;
     this.stopAudioPump();
     this.audioPumpTurnToken = null;
-    this.audioQueue = [];
+    this.audioFrameQueue = [];
     this.rawRemainder = Buffer.alloc(0);
     this.resampledRemainder = Buffer.alloc(0);
     this.audioSource = null;
@@ -600,7 +609,7 @@ export class VoiceSession {
     if (wholeBytes > 0) {
       const framed = merged.subarray(0, wholeBytes);
       const frames = pcmToFrames(framed, FRAME_10MS);
-      for (const f of frames) this.audioQueue.push(f);
+      for (const f of frames) this.audioFrameQueue.push(f);
     }
     this.resampledRemainder = merged.subarray(wholeBytes);
     this.startAudioPump(this.turnToken);
@@ -616,7 +625,7 @@ export class VoiceSession {
     }
     if (this.resampledRemainder.length >= 2) {
       const tailFrames = pcmToFrames(this.resampledRemainder, FRAME_10MS);
-      for (const f of tailFrames) this.audioQueue.push(f);
+      for (const f of tailFrames) this.audioFrameQueue.push(f);
       this.resampledRemainder = Buffer.alloc(0);
     }
   }
@@ -635,7 +644,7 @@ export class VoiceSession {
         this.stopAudioPump();
         return;
       }
-      const frame = this.audioQueue.shift();
+      const frame = this.audioFrameQueue.shift();
       if (!frame) {
         if (this.audioPumpAwaitingDone) {
           this.stopAudioPump();
@@ -946,8 +955,8 @@ export class VoiceSession {
     console.error(fields.join(' '));
   }
 
-  private startBufferedTtsTurn(token: number, text: string): void {
-    this.bufferedTtsTurn = {
+  private startTtsAudioTurn(token: number, text: string): void {
+    this.ttsAudioTurn = {
       turnId: token,
       text,
       sampleRate: TTS_SAMPLE_RATE,
@@ -957,80 +966,118 @@ export class VoiceSession {
       drained: false,
       overflowed: false,
       replayOnReconnect: false,
+      replayFromChunkIndex: 0,
+      liveDataCursor: 0,
     };
   }
 
-  private markBufferedTtsReplayOnReconnect(token?: number): void {
-    const turn = this.bufferedTtsTurn;
+  private markTtsAudioReplayOnReconnect(token?: number, fromChunkIndex?: number): void {
+    const turn = this.ttsAudioTurn;
     if (!turn || turn.drained || turn.overflowed) return;
     if (token !== undefined && turn.turnId !== token) return;
+    const replayStart = Math.max(0, Math.min(fromChunkIndex ?? 0, turn.chunks.length));
+    turn.replayFromChunkIndex = turn.replayOnReconnect
+      ? Math.min(turn.replayFromChunkIndex, replayStart)
+      : replayStart;
     turn.replayOnReconnect = true;
   }
 
-  private appendBufferedTtsPcm(token: number, pcm: Uint8Array): void {
-    const turn = this.bufferedTtsTurn;
-    if (!turn || turn.turnId !== token || turn.drained || turn.overflowed || pcm.byteLength === 0) return;
-    if (turn.byteLength + pcm.byteLength > MAX_BUFFERED_TTS_TURN_BYTES) {
+  private appendTtsAudioPcm(token: number, pcm: Uint8Array): { chunk: Buffer; retained: boolean } | null {
+    const turn = this.ttsAudioTurn;
+    if (!turn || turn.turnId !== token || turn.drained || pcm.byteLength === 0) return null;
+    const chunk = Buffer.from(pcm);
+    if (turn.overflowed) return { chunk, retained: false };
+    if (turn.byteLength + chunk.byteLength > MAX_BUFFERED_TTS_TURN_BYTES) {
+      // The cap is only a reconnect-replay retention cap. Once exceeded, drop
+      // the retained canonical replay log for this turn, but keep returning the
+      // current/future live chunks so connected transports are not cut off.
       turn.chunks = [];
       turn.byteLength = 0;
       turn.overflowed = true;
-      console.error(`[voice ${this.roomId}] buffered TTS replay dropped: exceeded ${MAX_BUFFERED_TTS_TURN_BYTES} bytes`);
-      return;
+      turn.replayOnReconnect = false;
+      turn.replayFromChunkIndex = 0;
+      turn.liveDataCursor = 0;
+      console.error(`[voice ${this.roomId}] buffered TTS replay dropped: canonical queue exceeded ${MAX_BUFFERED_TTS_TURN_BYTES} bytes`);
+      return { chunk, retained: false };
     }
-    const copy = Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
-    turn.chunks.push(Buffer.from(copy));
-    turn.byteLength += copy.byteLength;
+    turn.chunks.push(chunk);
+    turn.byteLength += chunk.byteLength;
+    return { chunk, retained: true };
   }
 
-  private markBufferedTtsComplete(token: number): void {
-    const turn = this.bufferedTtsTurn;
+  private drainLiveDataTtsAudio(token: number): void {
+    const turn = this.ttsAudioTurn;
+    if (!turn || turn.turnId !== token || turn.drained || turn.overflowed) return;
+    if (turn.replayOnReconnect) return;
+    while (turn.liveDataCursor < turn.chunks.length) {
+      const chunk = turn.chunks[turn.liveDataCursor];
+      if (!this.sendBinary(chunk)) {
+        this.markTtsAudioReplayOnReconnect(token, turn.liveDataCursor);
+        return;
+      }
+      turn.liveDataCursor += 1;
+    }
+  }
+
+  private markTtsAudioComplete(token: number): void {
+    const turn = this.ttsAudioTurn;
     if (!turn || turn.turnId !== token || turn.overflowed) return;
     turn.complete = true;
   }
 
-  private clearBufferedTtsTurn(): void {
-    this.bufferedTtsTurn = null;
+  private clearTtsAudioTurn(): void {
+    this.ttsAudioTurn = null;
   }
 
   private completeTtsTurn(reason: string): void {
-    this.markBufferedTtsComplete(this.turnToken);
-    const bufferedTurn = this.bufferedTtsTurn;
-    if (bufferedTurn && bufferedTurn.turnId === this.turnToken && !bufferedTurn.replayOnReconnect) {
-      this.clearBufferedTtsTurn();
+    this.markTtsAudioComplete(this.turnToken);
+    const audioTurn = this.ttsAudioTurn;
+    if (
+      audioTurn &&
+      audioTurn.turnId === this.turnToken &&
+      (!audioTurn.replayOnReconnect || audioTurn.overflowed || audioTurn.replayFromChunkIndex >= audioTurn.chunks.length)
+    ) {
+      this.clearTtsAudioTurn();
     }
     this.audioPumpAwaitingDone = false;
     this.send(daemonToPhone.ttsDone());
     if (reason !== 'tts_audio_transport_closed' && this.connected && this.peer && !this.peer.destroyed) {
-      this.drainBufferedTtsTurn(this.peer);
+      this.drainTtsAudioReplay(this.peer);
     }
     this.tts = null;
     this.resetTurn(reason);
   }
 
-  private drainBufferedTtsTurn(peer: SimplePeer.Instance): void {
-    const turn = this.bufferedTtsTurn;
-    if (!turn || turn.drained || !turn.complete || turn.overflowed || turn.chunks.length === 0) return;
+  private drainTtsAudioReplay(peer: SimplePeer.Instance): void {
+    const turn = this.ttsAudioTurn;
+    if (!turn || turn.drained || !turn.complete || turn.overflowed) return;
     if (!turn.replayOnReconnect) return;
+    const chunks = turn.chunks.slice(turn.replayFromChunkIndex);
+    if (chunks.length === 0) {
+      turn.drained = true;
+      this.clearTtsAudioTurn();
+      return;
+    }
     if (!this.sendToPeer(peer, daemonToPhone.ttsStart(turn.sampleRate, {
       buffered: true,
       turnId: turn.turnId,
       text: turn.text,
     }))) return;
-    for (const chunk of turn.chunks) {
+    for (const chunk of chunks) {
       if (!this.sendBinaryToPeer(peer, chunk, 'buffered binary send failed')) return;
     }
     if (!this.sendToPeer(peer, daemonToPhone.ttsDone())) return;
     turn.drained = true;
-    this.clearBufferedTtsTurn();
+    this.clearTtsAudioTurn();
   }
 
   private async openTtsAsync(text: string, token: number): Promise<void> {
     try {
-      this.audioQueue = [];
+      this.audioFrameQueue = [];
       this.rawRemainder = Buffer.alloc(0);
       this.resampledRemainder = Buffer.alloc(0);
       this.audioPumpAwaitingDone = false;
-      this.startBufferedTtsTurn(token, text);
+      this.startTtsAudioTurn(token, text);
       const catalog = await this.loadTtsCatalogForTurn();
       if (!this.isTurnActive(token)) return;
       const useTrack = !!this.audioSource;
@@ -1043,37 +1090,42 @@ export class VoiceSession {
         },
         onAudio: (pcm) => {
           if (!this.isTurnActive(token)) return;
+          const audio = this.appendTtsAudioPcm(token, pcm);
+          if (!audio) return;
           if (useTrack) {
-            this.appendBufferedTtsPcm(token, pcm);
-            if (this.connected && this.audioSource) {
-              this.enqueueTtsPcm(pcm);
-            } else {
-              this.markBufferedTtsReplayOnReconnect(token);
+            const turn = this.ttsAudioTurn;
+            if (this.connected && this.audioSource && (!turn?.replayOnReconnect || turn.overflowed)) {
+              this.enqueueTtsPcm(audio.chunk);
+            } else if (audio.retained) {
+              this.markTtsAudioReplayOnReconnect(token, 0);
             }
             return;
           }
-          if (!this.sendBinary(pcm)) {
-            this.appendBufferedTtsPcm(token, pcm);
-            this.markBufferedTtsReplayOnReconnect(token);
+          if (audio.retained) {
+            this.drainLiveDataTtsAudio(token);
+            return;
           }
+          // Replay retention overflow must not cut off live connected
+          // data-channel audio; only reconnect replay is dropped.
+          this.sendBinary(audio.chunk);
         },
         onDone: () => {
           if (!this.isTurnActive(token)) return;
-          this.markBufferedTtsComplete(token);
+          this.markTtsAudioComplete(token);
           if (!useTrack || !this.audioSource) {
             this.completeTtsTurn('tts_done');
             return;
           }
           this.flushTtsTail(); this.audioPumpAwaitingDone = true; this.startAudioPump(token);
-          if (this.audioQueue.length === 0) {
+          if (this.audioFrameQueue.length === 0) {
             this.completeTtsTurn('tts_done');
           }
         },
         onError: (message) => {
           if (!this.isTurnActive(token)) return;
-          this.clearBufferedTtsTurn();
+          this.clearTtsAudioTurn();
           this.stopAudioPump();
-          this.audioQueue = [];
+          this.audioFrameQueue = [];
           this.rawRemainder = Buffer.alloc(0);
           this.resampledRemainder = Buffer.alloc(0);
           this.audioPumpAwaitingDone = false;
@@ -1084,7 +1136,7 @@ export class VoiceSession {
       });
     } catch (err) {
       if (!this.isTurnActive(token)) return;
-      this.clearBufferedTtsTurn();
+      this.clearTtsAudioTurn();
       console.error(`[voice ${this.roomId}] TTS open failed: ${sanitizedErrorMessage(err)}`);
       this.send(daemonToPhone.ttsError('openclaw_infer_tts_failed'));
       this.resetTurn('tts_open_failed');
@@ -1099,7 +1151,7 @@ export class VoiceSession {
 
 
   private beginTurn(): number {
-    this.clearBufferedTtsTurn();
+    this.clearTtsAudioTurn();
     const token = ++this.turnToken;
     this.sttOpenToken = token;
     this.state.handleStartTurn();
@@ -1117,7 +1169,7 @@ export class VoiceSession {
 
   private resetTurn(reason: string): void {
     if (!['tts_done', 'tts_audio_pump_done', 'tts_audio_transport_closed'].includes(reason)) {
-      this.clearBufferedTtsTurn();
+      this.clearTtsAudioTurn();
     }
     this.turnToken += 1;
     this.sttOpenToken = this.turnToken;
@@ -1135,7 +1187,7 @@ export class VoiceSession {
     }
     this.tts = null;
     this.stopAudioPump();
-    this.audioQueue = [];
+    this.audioFrameQueue = [];
     this.rawRemainder = Buffer.alloc(0);
     this.resampledRemainder = Buffer.alloc(0);
     this.audioPumpAwaitingDone = false;
@@ -1209,7 +1261,7 @@ export class VoiceSession {
       turn: { ...this.turnSnapshot, latestEventId: this.controlEventId },
       events,
     }));
-    this.drainBufferedTtsTurn(peer);
+    this.drainTtsAudioReplay(peer);
   }
 
   private sendToPeer(peer: SimplePeer.Instance, msg: unknown): boolean {

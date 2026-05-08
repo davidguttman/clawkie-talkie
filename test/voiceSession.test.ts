@@ -174,6 +174,11 @@ function sentBinary(peer: { send: ReturnType<typeof vi.fn> }): Buffer[] {
     .map((payload) => Buffer.from(payload));
 }
 
+function queuedTtsAudio(session: VoiceSession): Buffer[] {
+  const turn = (session as unknown as { ttsAudioTurn: { chunks: Buffer[] } | null }).ttsAudioTurn;
+  return turn?.chunks.map((chunk) => Buffer.from(chunk)) ?? [];
+}
+
 describe('voice session state', () => {
   it('binds one room to one session, sessionKey, and delivery target for its lifetime', () => {
     const s = createVoiceSessionState({
@@ -823,6 +828,119 @@ describe('voice session OpenClaw infer STT runtime', () => {
     expect((session as unknown as { state: { turnInFlight: boolean } }).state.turnInFlight).toBe(false);
   });
 
+  it('appends each generated TTS chunk exactly once to the canonical queue across track, disconnected, and data-channel paths', async () => {
+    async function startTts(session: VoiceSession, expectedCall: number) {
+      sendControl(session, { t: 'stt.start' });
+      await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(expectedCall));
+      sttMocks.inferCtor.mock.results[expectedCall - 1].value.cb.onDone('hello');
+      await vi.waitFor(() => expect(ttsMocks.inferTtsCtor).toHaveBeenCalledTimes(expectedCall));
+      const fakeTts = ttsMocks.inferTtsCtor.mock.results[expectedCall - 1].value;
+      fakeTts.cb.onOpen();
+      return fakeTts;
+    }
+
+    chatMocks.runChat.mockResolvedValue({ text: 'spoken reply' });
+
+    const trackCase = makeVoiceSession();
+    (trackCase.session as unknown as { audioSource: { onData: ReturnType<typeof vi.fn> }; outboundStream: unknown }).audioSource = { onData: vi.fn() };
+    (trackCase.session as unknown as { outboundStream: unknown }).outboundStream = { active: true };
+    const trackTts = await startTts(trackCase.session, 1);
+    trackTts.cb.onAudio(new Uint8Array([1, 1]));
+    trackTts.cb.onAudio(new Uint8Array([2, 2]));
+    expect(queuedTtsAudio(trackCase.session)).toEqual([Buffer.from([1, 1]), Buffer.from([2, 2])]);
+
+    const disconnectedCase = makeVoiceSession();
+    const disconnectedTts = await startTts(disconnectedCase.session, 2);
+    (disconnectedCase.session as unknown as { tearDownPeer(reason: string, peer?: unknown): void }).tearDownPeer('peer_closed', disconnectedCase.peer);
+    disconnectedTts.cb.onAudio(new Uint8Array([3, 3]));
+    disconnectedTts.cb.onAudio(new Uint8Array([4, 4]));
+    expect(queuedTtsAudio(disconnectedCase.session)).toEqual([Buffer.from([3, 3]), Buffer.from([4, 4])]);
+
+    const dataChannelCase = makeVoiceSession();
+    const dataChannelTts = await startTts(dataChannelCase.session, 3);
+    dataChannelTts.cb.onAudio(new Uint8Array([5, 5]));
+    dataChannelTts.cb.onAudio(new Uint8Array([6, 6]));
+    expect(sentBinary(dataChannelCase.peer)).toEqual([Buffer.from([5, 5]), Buffer.from([6, 6])]);
+    expect(queuedTtsAudio(dataChannelCase.session)).toEqual([Buffer.from([5, 5]), Buffer.from([6, 6])]);
+  });
+
+  it('drops replay retention only after TTS overflow while live data-channel audio keeps playing', async () => {
+    chatMocks.runChat.mockResolvedValue({ text: 'spoken reply' });
+    const { session, peer } = makeVoiceSession();
+
+    sendControl(session, { t: 'stt.start' });
+    await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+    sttMocks.inferCtor.mock.results[0].value.cb.onDone('hello');
+    await vi.waitFor(() => expect(ttsMocks.inferTtsCtor).toHaveBeenCalledTimes(1));
+    const fakeTts = ttsMocks.inferTtsCtor.mock.results[0].value;
+
+    fakeTts.cb.onOpen();
+    const runtime = session as unknown as {
+      ttsAudioTurn: {
+        chunks: Buffer[];
+        byteLength: number;
+        overflowed: boolean;
+        replayOnReconnect: boolean;
+      } | null;
+      tearDownPeer(reason: string, peer?: unknown): void;
+      sendCatchUpSnapshot(peer: unknown): void;
+    };
+    const turn = runtime.ttsAudioTurn;
+    expect(turn).not.toBeNull();
+    turn!.byteLength = 64 * 1024 * 1024 - 1;
+
+    fakeTts.cb.onAudio(new Uint8Array([7, 7]));
+    fakeTts.cb.onAudio(new Uint8Array([8, 8]));
+
+    expect(sentBinary(peer)).toEqual([Buffer.from([7, 7]), Buffer.from([8, 8])]);
+    expect(turn!.overflowed).toBe(true);
+    expect(turn!.chunks).toEqual([]);
+    expect(turn!.byteLength).toBe(0);
+    expect(turn!.replayOnReconnect).toBe(false);
+
+    runtime.tearDownPeer('peer_closed', peer);
+    fakeTts.cb.onDone();
+
+    const reconnectPeer = { send: vi.fn() };
+    runtime.sendCatchUpSnapshot(reconnectPeer);
+    const reconnectJson = sentJson(reconnectPeer) as Array<{ t: string; buffered?: boolean }>;
+    expect(reconnectJson.filter((msg) => msg.t === 'tts.start' && msg.buffered === true)).toEqual([]);
+    expect(sentBinary(reconnectPeer)).toEqual([]);
+    expect(runtime.ttsAudioTurn).toBeNull();
+  });
+
+  it('replays data-channel TTS audio sent before peer detach when daemon EOF was missed', async () => {
+    chatMocks.runChat.mockResolvedValue({ text: 'spoken reply' });
+    const { session, peer } = makeVoiceSession();
+
+    sendControl(session, { t: 'stt.start' });
+    await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+    sttMocks.inferCtor.mock.results[0].value.cb.onDone('hello');
+    await vi.waitFor(() => expect(ttsMocks.inferTtsCtor).toHaveBeenCalledTimes(1));
+    const fakeTts = ttsMocks.inferTtsCtor.mock.results[0].value;
+
+    fakeTts.cb.onOpen();
+    fakeTts.cb.onAudio(new Uint8Array([1, 0]));
+    fakeTts.cb.onAudio(new Uint8Array([2, 0]));
+    expect(sentBinary(peer)).toEqual([Buffer.from([1, 0]), Buffer.from([2, 0])]);
+
+    (session as unknown as { tearDownPeer(reason: string, peer?: unknown): void }).tearDownPeer('peer_closed', peer);
+    fakeTts.cb.onDone();
+
+    const reconnectPeer = { send: vi.fn() };
+    (session as unknown as { sendCatchUpSnapshot(peer: unknown): void }).sendCatchUpSnapshot(reconnectPeer);
+
+    const json = sentJson(reconnectPeer);
+    expect(json[0]).toMatchObject({ t: 'session.snapshot' });
+    expect(json.flatMap((msg) => (msg.t === 'session.snapshot' ? msg.events.map((event: { msg: unknown }) => event.msg) : [msg]))).toContainEqual({ t: 'tts.done' });
+    expect(json.filter((msg) => msg.t === 'tts.start' && msg.buffered === true)).toEqual([
+      { t: 'tts.start', sample_rate: 24000, buffered: true, turnId: expect.any(Number), text: 'spoken reply' },
+    ]);
+    expect(sentBinary(reconnectPeer)).toEqual([Buffer.from([1, 0]), Buffer.from([2, 0])]);
+    expect(json.at(-1)).toEqual({ t: 'tts.done' });
+    expect((session as unknown as { ttsAudioTurn: unknown | null }).ttsAudioTurn).toBeNull();
+  });
+
   it('does not forward legacy voice-only settings to TTS without a canonical model', async () => {
     chatMocks.runChat.mockResolvedValue({ text: 'spoken reply' });
     const { session } = makeVoiceSession();
@@ -1023,7 +1141,7 @@ describe('voice session OpenClaw infer STT runtime', () => {
   });
 
 
-  it('replays only binary TTS chunks generated after live playback disconnects', async () => {
+  it('replays the full data-channel TTS turn when live playback disconnects before EOF', async () => {
     chatMocks.runChat.mockResolvedValue({ text: 'spoken reply' });
     const { session, peer } = makeVoiceSession();
 
@@ -1048,8 +1166,7 @@ describe('voice session OpenClaw infer STT runtime', () => {
     expect(sentJson(reconnectPeer).filter((msg) => msg.t === 'tts.start' && msg.buffered === true)).toEqual([
       { t: 'tts.start', sample_rate: 24000, buffered: true, turnId: expect.any(Number), text: 'spoken reply' },
     ]);
-    expect(sentBinary(reconnectPeer)).toEqual([Buffer.from([2, 2]), Buffer.from([3, 3])]);
-    expect(sentBinary(reconnectPeer)).not.toContainEqual(Buffer.from([1, 1]));
+    expect(sentBinary(reconnectPeer)).toEqual([Buffer.from([1, 1]), Buffer.from([2, 2]), Buffer.from([3, 3])]);
   });
 
   it('replays full WebRTC-track TTS when the phone switches away after live track audio already started', async () => {
@@ -1086,7 +1203,38 @@ describe('voice session OpenClaw infer STT runtime', () => {
     expect(sentJson(reconnectPeer)).toContainEqual({ t: 'tts.done' });
   });
 
-  it('drains completed WebRTC-track replay to an already-reconnected peer when reconnect happens before TTS completes', async () => {
+  it('clears zero-chunk reconnect TTS after control catch-up has enough state', async () => {
+    chatMocks.runChat.mockResolvedValue({ text: 'silent reply' });
+    const { session, peer } = makeVoiceSession();
+    const audioSource = { onData: vi.fn() };
+    (session as unknown as { audioSource: typeof audioSource; outboundStream: unknown }).audioSource = audioSource;
+    (session as unknown as { outboundStream: unknown }).outboundStream = { active: true };
+
+    sendControl(session, { t: 'stt.start' });
+    await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+    sttMocks.inferCtor.mock.results[0].value.cb.onDone('hello');
+    await vi.waitFor(() => expect(ttsMocks.inferTtsCtor).toHaveBeenCalledTimes(1));
+    const fakeTts = ttsMocks.inferTtsCtor.mock.results[0].value;
+
+    fakeTts.cb.onOpen();
+    (session as unknown as { tearDownPeer(reason: string, peer?: unknown): void }).tearDownPeer('peer_closed', peer);
+    fakeTts.cb.onDone();
+
+    expect((session as unknown as { ttsAudioTurn: unknown | null }).ttsAudioTurn).toBeNull();
+
+    const reconnectPeer = { send: vi.fn() };
+    (session as unknown as { sendCatchUpSnapshot(peer: unknown): void }).sendCatchUpSnapshot(reconnectPeer);
+    const json = sentJson(reconnectPeer);
+    expect(json[0]).toMatchObject({
+      t: 'session.snapshot',
+      turn: expect.objectContaining({ phase: 'complete', replyText: 'silent reply' }),
+    });
+    expect(json.flatMap((msg) => (msg.t === 'session.snapshot' ? msg.events.map((event: { msg: unknown }) => event.msg) : [msg]))).toContainEqual({ t: 'tts.done' });
+    expect(json.filter((msg) => msg.t === 'tts.start' && msg.buffered === true)).toHaveLength(0);
+    expect(sentBinary(reconnectPeer)).toEqual([]);
+  });
+
+  it('drains completed WebRTC-track replay to an already-reconnected peer when reconnect happens before TTS completes without duplicating live track audio', async () => {
     chatMocks.runChat.mockResolvedValue({ text: 'spoken reply' });
     const { session, peer } = makeVoiceSession();
     const initialAudioSource = { onData: vi.fn() };
@@ -1119,10 +1267,11 @@ describe('voice session OpenClaw infer STT runtime', () => {
     vi.useFakeTimers();
     try {
       fakeTts.cb.onAudio(new Uint8Array([2, 0]));
+      expect(queuedTtsAudio(session)).toEqual([Buffer.from([1, 0]), Buffer.from([2, 0])]);
       fakeTts.cb.onDone();
       await vi.advanceTimersByTimeAsync(30);
 
-      expect(reconnectAudioSource.onData).toHaveBeenCalled();
+      expect(reconnectAudioSource.onData).not.toHaveBeenCalled();
       expect(sentJson(reconnectPeer).filter((msg) => msg.t === 'tts.start' && msg.buffered === true)).toEqual([
         { t: 'tts.start', sample_rate: 24000, buffered: true, turnId: expect.any(Number), text: 'spoken reply' },
       ]);

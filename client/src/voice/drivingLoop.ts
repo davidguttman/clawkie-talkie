@@ -119,7 +119,6 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
 
   const sttRef = useRef<STTHandle | null>(null);
   const ttsRef = useRef<TTSHandle | null>(null);
-  const ttsUiDoneModeRef = useRef<'control' | 'playback'>('control');
   const holdMusicRef = useRef<HoldMusicController | null>(null);
   const micBandsRef = useRef<number[]>([...QUIET_INTENSITIES]);
   const renderedBandsRef = useRef<number[]>([...IDLE_INTENSITIES]);
@@ -147,7 +146,7 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     accumulatedRef.current = [];
     setCurrentTurnTranscript({ active: false, sttDone: false, text: '' });
     runCancelMic(sttRef);
-    runStopTts(ttsRef, ttsUiDoneModeRef);
+    runStopTts(ttsRef);
     dispatch({ type: 'session.reset' });
   }, [opts.sessionId, opts.threadId, opts.hostPeerId]);
 
@@ -157,9 +156,20 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
   useEffect(() => {
     const detach = rtc.addControlListener((msg) => {
       if (msg.t === 'session.snapshot') {
-        const plan = sessionSnapshotReplayPlanFromControlMessage(msg);
+        const replayControls = sessionSnapshotControlEvents(msg);
+        const activeTts = ttsRef.current;
+        const handleActiveTtsControl = activeTts?.handleControlMessage;
+        const canForwardActiveTts = typeof handleActiveTtsControl === 'function';
+        const deferTtsDone = canForwardActiveTts && replayControls.some((event) => event.t === 'tts.done');
+        const deferTtsError = canForwardActiveTts && replayControls.some((event) => event.t === 'tts.error');
+        if (canForwardActiveTts && (deferTtsDone || deferTtsError)) {
+          for (const event of replayControls) {
+            if (event.t === 'tts.done' || event.t === 'tts.error') handleActiveTtsControl(event);
+          }
+        }
+        const plan = sessionSnapshotReplayPlanFromControlMessage(msg, { deferTtsDone, deferTtsError });
         if (plan) {
-          for (const event of sessionSnapshotControlEvents(msg)) {
+          for (const event of replayControls) {
             applyReplayControlSideEffects(event, sessionMetaRef.current, holdMusicRef.current);
           }
           if (plan.transcript) {
@@ -223,10 +233,8 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
       }
       if (msg.t === 'tts.start') {
         stopHoldMusicForControlMessage(msg, holdMusicRef.current);
-        const replayStart = msg.buffered === true;
-        if (replayStart) ttsUiDoneModeRef.current = 'playback';
-        if (replayStart && !ttsRef.current) {
-          runArmTts(rtcRef, ttsRef, ttsUiDoneModeRef, dispatch, msg);
+        if (msg.buffered === true && !ttsRef.current) {
+          runArmTts(rtcRef, ttsRef, dispatch, msg);
         }
         dispatch({
           type: 'tts.start',
@@ -236,13 +244,20 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
       }
       if (msg.t === 'tts.done') {
         stopHoldMusicForControlMessage(msg, holdMusicRef.current);
-        if (ttsUiDoneModeRef.current === 'playback' && ttsRef.current) return;
-        dispatch({ type: 'tts.done' });
+        // Wire tts.done only means the daemon finished sending the TTS turn.
+        // UI completion comes from the local TTSHandle after browser playback
+        // has drained. If no handle is active, keep the old no-playback adapter
+        // so snapshots/stale control streams can still close reducer state.
+        if (!ttsRef.current) dispatch({ type: 'tts.done' });
         return;
       }
       if (msg.t === 'tts.error') {
         const reason = typeof msg.message === 'string' ? msg.message : 'tts_error';
         stopHoldMusicForControlMessage(msg, holdMusicRef.current);
+        // Errors should surface immediately; the TTS handle will still observe
+        // the control message and clean itself up, but clearing the ref prevents
+        // its completion callback from dispatching a duplicate/stale event.
+        ttsRef.current = null;
         dispatch({ type: 'tts.error', reason });
         return;
       }
@@ -259,9 +274,9 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
       }
       else if (s.kind === 'stopMic') runStopMic(sttRef);
       else if (s.kind === 'cancelMic') runCancelMic(sttRef);
-      else if (s.kind === 'armTts') runArmTts(rtcRef, ttsRef, ttsUiDoneModeRef, dispatch);
-      else if (s.kind === 'stopTts') runStopTts(ttsRef, ttsUiDoneModeRef);
-      else if (s.kind === 'cancelReply') runCancelReply(rtcRef, ttsUiDoneModeRef, ttsRef);
+      else if (s.kind === 'armTts') runArmTts(rtcRef, ttsRef, dispatch);
+      else if (s.kind === 'stopTts') runStopTts(ttsRef);
+      else if (s.kind === 'cancelReply') runCancelReply(rtcRef, ttsRef);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [side]);
@@ -302,7 +317,6 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     return () => {
       sttRef.current?.cancel();
       ttsRef.current?.stop();
-      ttsUiDoneModeRef.current = 'control';
       holdMusicRef.current?.stop();
     };
   }, []);
@@ -413,10 +427,22 @@ function runCancelMic(sttRef: React.MutableRefObject<STTHandle | null>): void {
 function runArmTts(
   rtcRef: React.MutableRefObject<DrivingLoopOptions['rtc']>,
   ttsRef: React.MutableRefObject<TTSHandle | null>,
-  ttsUiDoneModeRef: React.MutableRefObject<'control' | 'playback'>,
   dispatch: Dispatch,
   initialControlMessage?: ControlMessage,
 ): void {
+  const activeTts = ttsRef.current;
+  if (activeTts) {
+    // Reconnect snapshots can hydrate `speaking` with reply text while the
+    // original local playback handle is still draining. Keep that single
+    // canonical playback lifecycle instead of overwriting it and leaking its
+    // listeners. If the caller has an initial replay control, feed it into the
+    // active lifecycle; otherwise arming is idempotent.
+    if (initialControlMessage && typeof activeTts.handleControlMessage === 'function') {
+      activeTts.handleControlMessage(initialControlMessage);
+    }
+    return;
+  }
+
   const tts = playDaemonTts({
     addControlListener: rtcRef.current.addControlListener,
     addBinaryListener: rtcRef.current.addBinaryListener,
@@ -424,30 +450,22 @@ function runArmTts(
     ...(initialControlMessage ? { initialControlMessage } : {}),
   });
   ttsRef.current = tts;
-  ttsUiDoneModeRef.current = initialControlMessage?.buffered === true ? 'playback' : 'control';
   void tts.done.then(() => {
     if (ttsRef.current !== tts) return;
     ttsRef.current = null;
-    const doneMode = ttsUiDoneModeRef.current;
-    ttsUiDoneModeRef.current = 'control';
     if (tts.error) dispatch({ type: 'tts.error', reason: tts.error });
-    else if (doneMode === 'playback') dispatch({ type: 'tts.done' });
+    else dispatch({ type: 'tts.done' });
   });
 }
 
-function runStopTts(
-  ttsRef: React.MutableRefObject<TTSHandle | null>,
-  ttsUiDoneModeRef: React.MutableRefObject<'control' | 'playback'>,
-): void {
+function runStopTts(ttsRef: React.MutableRefObject<TTSHandle | null>): void {
   const tts = ttsRef.current;
   ttsRef.current = null;
-  ttsUiDoneModeRef.current = 'control';
   tts?.stop({ cancelRemote: false });
 }
 
 function runCancelReply(
   rtcRef: React.MutableRefObject<DrivingLoopOptions['rtc']>,
-  ttsUiDoneModeRef: React.MutableRefObject<'control' | 'playback'>,
   ttsRef: React.MutableRefObject<TTSHandle | null>,
 ): void {
   try {
@@ -457,7 +475,6 @@ function runCancelReply(
   }
   const tts = ttsRef.current;
   ttsRef.current = null;
-  ttsUiDoneModeRef.current = 'control';
   tts?.stop({ cancelRemote: false });
 }
 
@@ -516,6 +533,11 @@ export interface SessionSnapshotReplayPlan {
   transcript: CurrentTurnTranscript | null;
 }
 
+export interface SessionSnapshotReplayOptions {
+  deferTtsDone?: boolean;
+  deferTtsError?: boolean;
+}
+
 interface SnapshotHydrationPlan {
   hydration: DrivingHydration;
   transcript: CurrentTurnTranscript;
@@ -523,13 +545,17 @@ interface SnapshotHydrationPlan {
 
 export function sessionSnapshotReplayPlanFromControlMessage(
   msg: ControlMessage,
+  options: SessionSnapshotReplayOptions = {},
 ): SessionSnapshotReplayPlan | null {
   if (msg.t !== 'session.snapshot') return null;
-  const events = sessionSnapshotControlEvents(msg)
+  const controlEvents = sessionSnapshotControlEvents(msg);
+  const events = controlEvents
+    .filter((event) => !(options.deferTtsDone && event.t === 'tts.done'))
+    .filter((event) => !(options.deferTtsError && event.t === 'tts.error'))
     .map(drivingReplayEventFromControlMessage)
     .filter((event): event is DrivingReplayEvent => !!event);
   const snapshot = sessionSnapshotRecord(msg);
-  const hydrated = snapshot ? snapshotHydrationPlan(snapshot) : null;
+  const hydrated = snapshot ? snapshotHydrationPlan(snapshot, options) : null;
   if (!hydrated && events.length === 0) return null;
   return {
     event: {
@@ -593,7 +619,10 @@ function sessionSnapshotRecord(msg: ControlMessage): Record<string, unknown> | n
   return Object.keys(merged).length > 0 ? merged : null;
 }
 
-function snapshotHydrationPlan(source: Record<string, unknown>): SnapshotHydrationPlan | null {
+function snapshotHydrationPlan(
+  source: Record<string, unknown>,
+  options: SessionSnapshotReplayOptions = {},
+): SnapshotHydrationPlan | null {
   const phase = normalizeSnapshotPhase(
     firstString(source, ['phase', 'turnPhase', 'status', 'state']),
     source,
@@ -623,13 +652,15 @@ function snapshotHydrationPlan(source: Record<string, unknown>): SnapshotHydrati
   if (!phase) return null;
 
   if (phase === 'completed') {
+    const deferTtsTerminal = options.deferTtsDone || options.deferTtsError;
     return {
       hydration: {
         context: {
           ...initialContext,
-          state: 'idle',
+          state: deferTtsTerminal ? 'ai' : 'idle',
           lastUserText,
           lastReplyText: replyText,
+          liveReplyText: deferTtsTerminal ? replyText : '',
         },
         armTts: false,
       },
@@ -673,10 +704,11 @@ function snapshotHydrationPlan(source: Record<string, unknown>): SnapshotHydrati
       hydration: {
         context: {
           ...initialContext,
-          state: 'idle',
+          state: options.deferTtsError ? 'ai' : 'idle',
           lastUserText,
           lastReplyText: replyText,
-          error,
+          liveReplyText: options.deferTtsError ? replyText : '',
+          error: options.deferTtsError ? null : error,
         },
         armTts: false,
       },

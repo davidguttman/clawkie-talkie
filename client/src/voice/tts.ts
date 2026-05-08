@@ -85,7 +85,15 @@ export function getRemoteTtsAudioDebugSnapshot(): RemoteTtsAudioDebugSnapshot {
 }
 
 export interface TTSHandle {
+  // Resolves when the local playback lifecycle for this TTS turn is complete.
+  // For data-channel PCM this waits for the scheduled browser audio drain; for
+  // the WebRTC remote track we can only approximate completion from daemon EOF
+  // plus recorder cleanup because the remote element does not expose a per-turn
+  // drain/end signal.
   done: Promise<void>;
+  // Feed replayed daemon control messages (for example a tts.done nested inside
+  // a reconnect snapshot) into the same playback lifecycle as live controls.
+  handleControlMessage?(msg: { t: string; [k: string]: unknown }): void;
   stop(options?: { cancelRemote?: boolean }): void;
   readonly error?: string;
   readonly analyser?: AnalyserNode | null;
@@ -409,11 +417,12 @@ export function playPttPressTone(): void {
   }
 }
 
-// Start listening for a single TTS turn from the daemon. Resolves when
-// the daemon emits `tts.done` (or on `tts.error`, settling with an
-// error code on the handle). Caller should invoke this after it sees
-// `reply.done` so the player is armed before the daemon emits
-// `tts.start`.
+// Start listening for a single TTS turn from the daemon. The returned handle's
+// `done` promise resolves when local playback has completed: PCM waits for the
+// scheduled buffer drain, while WebRTC remote-track playback approximates the
+// turn end from daemon `tts.done`/recorder cleanup because the media element has
+// no reliable per-turn drain signal. Caller should invoke this after it sees
+// `reply.done` so the player is armed before the daemon emits `tts.start`.
 export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
   let resolveDone!: () => void;
   const done = new Promise<void>((resolve) => {
@@ -436,6 +445,18 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
     replayChunks: [] as ArrayBuffer[],
     replayBytes: 0,
     forcePcmPlayback: false,
+  };
+
+  let detachControl = () => {};
+  let detachBinary = () => {};
+
+  const detachListeners = () => {
+    const control = detachControl;
+    const binary = detachBinary;
+    detachControl = () => {};
+    detachBinary = () => {};
+    control();
+    binary();
   };
 
   const finishCleanup = () => {
@@ -461,8 +482,7 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
     } catch {
       // already disconnected
     }
-    detachControl();
-    detachBinary();
+    detachListeners();
     resolveDone();
   };
 
@@ -539,6 +559,10 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
     if (state.finished || state.stopped) return;
     if (msg.t === 'tts.start') {
       state.started = true;
+      if (state.drainTimer) {
+        clearTimeout(state.drainTimer);
+        state.drainTimer = null;
+      }
       setRemoteAudioSuppressed(false);
       state.replayChunks = [];
       state.replayBytes = 0;
@@ -547,6 +571,7 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
       state.remoteRecorder = state.forcePcmPlayback ? null : startRemoteReplyRecorder(attachedRemoteStream);
       const sr = typeof msg.sample_rate === 'number' ? msg.sample_rate : DEFAULT_SAMPLE_RATE;
       initAudio(sr);
+      state.nextStartTime = state.audioCtx?.currentTime ?? 0;
       return;
     }
     if (msg.t === 'tts.done') {
@@ -559,24 +584,31 @@ export function playDaemonTts(opts: TTSPlayerOptions): TTSHandle {
     }
   };
 
-  const detachControl = opts.addControlListener(handleControl);
-  if (opts.initialControlMessage) handleControl(opts.initialControlMessage);
+  detachControl = opts.addControlListener(handleControl);
 
-  const detachBinary = opts.addBinaryListener((bytes) => {
-    if (state.finished || state.stopped) return;
-    // When the daemon's WebRTC audio track is attached, the remote
-    // audio element is the source of truth. Ignore PCM frames so we
-    // don't double-play with subtle drift.
-    if (isRemoteAudioActive() && !state.forcePcmPlayback) return;
-    if (!state.audioCtx) initAudio(state.sampleRate);
-    if (!state.audioCtx || !state.gain) return;
-    state.replayChunks.push(bytes.slice(0));
-    state.replayBytes += bytes.byteLength;
-    schedulePcmChunk(state, bytes);
-  });
+  if (!state.finished && !state.stopped) {
+    detachBinary = opts.addBinaryListener((bytes) => {
+      if (state.finished || state.stopped) return;
+      // When the daemon's WebRTC audio track is attached, the remote
+      // audio element is the source of truth. Ignore PCM frames so we
+      // don't double-play with subtle drift.
+      if (isRemoteAudioActive() && !state.forcePcmPlayback) return;
+      if (!state.audioCtx) initAudio(state.sampleRate);
+      if (!state.audioCtx || !state.gain) return;
+      state.replayChunks.push(bytes.slice(0));
+      state.replayBytes += bytes.byteLength;
+      schedulePcmChunk(state, bytes);
+    });
+  }
+
+  if (!state.finished && !state.stopped && opts.initialControlMessage) {
+    handleControl(opts.initialControlMessage);
+  }
+  if (state.finished || state.stopped) detachListeners();
 
   return {
     done,
+    handleControlMessage: handleControl,
     stop(options?: { cancelRemote?: boolean }) {
       if (state.stopped) return;
       state.stopped = true;

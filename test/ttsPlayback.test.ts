@@ -412,6 +412,71 @@ describe('daemon TTS playback audio context', () => {
     await secondHandle.done;
   });
 
+  it('settles cleanly when an initial buffered start cannot create audio', async () => {
+    vi.stubGlobal('window', {});
+    const { playDaemonTts } = await import('../client/src/voice/tts');
+    const detachControl = vi.fn();
+    const detachBinary = vi.fn();
+    let handle: ReturnType<typeof playDaemonTts> | undefined;
+
+    expect(() => {
+      handle = playDaemonTts({
+        addControlListener: vi.fn(() => detachControl),
+        addBinaryListener: vi.fn(() => detachBinary),
+        sendControl: vi.fn(),
+        initialControlMessage: { t: 'tts.start', sample_rate: 24000, buffered: true },
+      });
+    }).not.toThrow();
+
+    expect(handle).toBeDefined();
+    await handle!.done;
+    expect(handle!.error).toBe('audio_unsupported');
+    expect(detachControl).toHaveBeenCalledTimes(1);
+    expect(detachBinary).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let a stale done timer finish before a following buffered replay start and EOF', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+      const { playDaemonTts } = await import('../client/src/voice/tts');
+      const controls: Array<(msg: { t: string; [k: string]: unknown }) => void> = [];
+      const binaries: Array<(bytes: ArrayBuffer) => void> = [];
+
+      const handle = playDaemonTts({
+        addControlListener(fn) {
+          controls.push(fn);
+          return vi.fn();
+        },
+        addBinaryListener(fn) {
+          binaries.push(fn);
+          return vi.fn();
+        },
+        sendControl: vi.fn(),
+      });
+      let settled = false;
+      void handle.done.then(() => {
+        settled = true;
+      });
+
+      controls[0]({ t: 'tts.start', sample_rate: 24000 });
+      controls[0]({ t: 'tts.done' });
+      controls[0]({ t: 'tts.start', sample_rate: 24000, buffered: true });
+      binaries[0](new Uint8Array([0, 0, 0xff, 0x7f]).buffer);
+
+      await vi.advanceTimersByTimeAsync(60);
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      controls[0]({ t: 'tts.done' });
+      await vi.advanceTimersByTimeAsync(60);
+      await handle.done;
+      expect(settled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('plays buffered reconnect PCM over the data channel even when a remote stream is attached', async () => {
     vi.stubGlobal('window', { AudioContext: FakeAudioContext });
     const audioEl = {

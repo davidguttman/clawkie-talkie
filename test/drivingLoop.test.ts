@@ -199,6 +199,7 @@ async function renderDrivingLoopHarness(initialOptions: { sessionId?: string; th
 }
 
 beforeEach(() => {
+  vi.clearAllMocks();
   activeMicAnalyser = null;
   activeHoldMusicAnalyser = null;
   activeOutputAnalysers = [];
@@ -206,7 +207,16 @@ beforeEach(() => {
 
 
 describe('driving loop old-daemon compatibility', () => {
-  it('completes the legacy stt/reply/tts control sequence without a session snapshot', async () => {
+  it('waits for local live TTS playback completion after wire tts.done', async () => {
+    const ttsModule = await import('../client/src/voice/tts');
+    const playDaemonTts = vi.mocked(ttsModule.playDaemonTts);
+    let resolveDone!: () => void;
+    playDaemonTts.mockReturnValueOnce({
+      analyser: null,
+      done: new Promise<void>((resolve) => { resolveDone = resolve; }),
+      error: null,
+      stop: vi.fn(),
+    });
     const rendered = await renderDrivingLoopHarness();
     try {
       expect(rendered.loop().state).toBe('idle');
@@ -242,6 +252,12 @@ describe('driving loop old-daemon compatibility', () => {
       await act(async () => {
         rendered.rtc.emitControl({ t: 'tts.done' });
       });
+      expect(rendered.loop().state).toBe('ai');
+
+      await act(async () => {
+        resolveDone();
+        await Promise.resolve();
+      });
       expect(rendered.loop().state).toBe('idle');
       expect(rendered.loop().lastTurn).toEqual({ who: 'ai', text: 'spoken reply' });
     } finally {
@@ -249,7 +265,187 @@ describe('driving loop old-daemon compatibility', () => {
     }
   });
 
-  it('arms TTS immediately for daemon-buffered reconnect audio and resets after tts.done', async () => {
+  it('feeds snapshot tts.done to the active TTS handle without closing UI before local playback completes', async () => {
+    const ttsModule = await import('../client/src/voice/tts');
+    const playDaemonTts = vi.mocked(ttsModule.playDaemonTts);
+    let resolveDone!: () => void;
+    const handleControlMessage = vi.fn();
+    playDaemonTts.mockReturnValueOnce({
+      analyser: null,
+      done: new Promise<void>((resolve) => { resolveDone = resolve; }),
+      error: null,
+      handleControlMessage,
+      stop: vi.fn(),
+    });
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      await act(async () => {
+        rendered.rtc.emitControl({ t: 'stt.done', text: 'hello' });
+      });
+      await act(async () => {
+        rendered.rtc.emitControl({ t: 'reply.done', text: 'spoken reply' });
+      });
+      await act(async () => {
+        rendered.rtc.emitControl({ t: 'tts.start', sample_rate: 24000 });
+      });
+      expect(rendered.loop().state).toBe('ai');
+
+      await act(async () => {
+        rendered.rtc.emitControl({
+          t: 'session.snapshot',
+          snapshot: {
+            phase: 'completed',
+            userText: 'hello',
+            replyText: 'spoken reply',
+          },
+          events: [{ msg: { t: 'tts.done' } }],
+        });
+      });
+
+      expect(handleControlMessage).toHaveBeenCalledWith({ t: 'tts.done' });
+      expect(rendered.loop().state).toBe('ai');
+
+      await act(async () => {
+        resolveDone();
+        await Promise.resolve();
+      });
+      expect(rendered.loop().state).toBe('idle');
+      expect(rendered.loop().lastTurn).toEqual({ who: 'ai', text: 'spoken reply' });
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
+  it('does not overwrite an active TTS handle when a speaking snapshot replays without terminal audio', async () => {
+    const ttsModule = await import('../client/src/voice/tts');
+    const playDaemonTts = vi.mocked(ttsModule.playDaemonTts);
+    let resolveDone!: () => void;
+    const stop = vi.fn();
+    const handleControlMessage = vi.fn();
+    playDaemonTts.mockReturnValueOnce({
+      analyser: null,
+      done: new Promise<void>((resolve) => { resolveDone = resolve; }),
+      error: null,
+      handleControlMessage,
+      stop,
+    });
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      await act(async () => {
+        rendered.rtc.emitControl({ t: 'stt.done', text: 'hello' });
+      });
+      await act(async () => {
+        rendered.rtc.emitControl({ t: 'reply.done', text: 'spoken reply' });
+      });
+      expect(playDaemonTts).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        rendered.rtc.emitControl({ t: 'tts.start', sample_rate: 24000 });
+      });
+      expect(rendered.loop().state).toBe('ai');
+
+      await act(async () => {
+        rendered.rtc.emitControl({
+          t: 'session.snapshot',
+          snapshot: {
+            phase: 'speaking',
+            userText: 'hello',
+            replyText: 'spoken reply',
+          },
+          events: [],
+        });
+      });
+
+      expect(playDaemonTts).toHaveBeenCalledTimes(1);
+      expect(stop).not.toHaveBeenCalled();
+      expect(handleControlMessage).not.toHaveBeenCalled();
+      expect(rendered.loop().state).toBe('ai');
+
+      await act(async () => {
+        resolveDone();
+        await Promise.resolve();
+      });
+      expect(rendered.loop().state).toBe('idle');
+      expect(rendered.loop().lastTurn).toEqual({ who: 'ai', text: 'spoken reply' });
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
+  it('feeds snapshot tts.error to the active TTS handle and surfaces one local playback error', async () => {
+    const ttsModule = await import('../client/src/voice/tts');
+    const playDaemonTts = vi.mocked(ttsModule.playDaemonTts);
+    let resolveDone!: () => void;
+    let handleError: string | undefined;
+    const handleControlMessage = vi.fn((msg: { t: string; [k: string]: unknown }) => {
+      if (msg.t !== 'tts.error') return;
+      handleError = typeof msg.message === 'string' ? msg.message : 'tts_error';
+      resolveDone();
+    });
+    playDaemonTts.mockReturnValueOnce({
+      analyser: null,
+      done: new Promise<void>((resolve) => { resolveDone = resolve; }),
+      get error() {
+        return handleError;
+      },
+      handleControlMessage,
+      stop: vi.fn(),
+    });
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      await act(async () => {
+        rendered.rtc.emitControl({ t: 'stt.done', text: 'hello' });
+      });
+      await act(async () => {
+        rendered.rtc.emitControl({ t: 'reply.done', text: 'spoken reply' });
+      });
+      await act(async () => {
+        rendered.rtc.emitControl({ t: 'tts.start', sample_rate: 24000 });
+      });
+      expect(rendered.loop().state).toBe('ai');
+
+      await act(async () => {
+        rendered.rtc.emitControl({
+          t: 'session.snapshot',
+          snapshot: {
+            phase: 'error',
+            userText: 'hello',
+            replyText: 'spoken reply',
+            error: 'snapshot_phase_error',
+          },
+          events: [{ msg: { t: 'tts.error', message: 'openclaw_infer_tts_failed' } }],
+        });
+        await Promise.resolve();
+      });
+
+      expect(handleControlMessage).toHaveBeenCalledTimes(1);
+      expect(handleControlMessage).toHaveBeenCalledWith({ t: 'tts.error', message: 'openclaw_infer_tts_failed' });
+      expect(rendered.loop().state).toBe('idle');
+      expect(rendered.loop().error).toBe('openclaw_infer_tts_failed');
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
+  it('arms TTS immediately for daemon-buffered reconnect audio and resets after local playback completion', async () => {
     const ttsModule = await import('../client/src/voice/tts');
     const playDaemonTts = vi.mocked(ttsModule.playDaemonTts);
     let resolveDone!: () => void;
@@ -273,7 +469,12 @@ describe('driving loop old-daemon compatibility', () => {
 
       await act(async () => {
         rendered.rtc.emitControl({ t: 'tts.done' });
+      });
+      expect(rendered.loop().state).toBe('ai');
+
+      await act(async () => {
         resolveDone();
+        await Promise.resolve();
       });
       expect(rendered.loop().state).toBe('idle');
       expect(rendered.loop().lastTurn).toEqual({ who: 'ai', text: 'missed reply' });
@@ -327,7 +528,41 @@ describe('driving loop old-daemon compatibility', () => {
     }
   });
 
-  it('shows daemon-buffered reconnect audio as active AI playback even without text', async () => {
+  it('surfaces tts.error promptly without waiting for the local TTS handle', async () => {
+    const ttsModule = await import('../client/src/voice/tts');
+    const playDaemonTts = vi.mocked(ttsModule.playDaemonTts);
+    let resolveDone!: () => void;
+    playDaemonTts.mockReturnValueOnce({
+      analyser: null,
+      done: new Promise<void>((resolve) => { resolveDone = resolve; }),
+      error: 'late_handle_error',
+      stop: vi.fn(),
+    });
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      await act(async () => {
+        rendered.rtc.emitControl({ t: 'tts.start', sample_rate: 24000, buffered: true, text: 'spoken reply' });
+      });
+      expect(rendered.loop().state).toBe('ai');
+
+      await act(async () => {
+        rendered.rtc.emitControl({ t: 'tts.error', message: 'openclaw_infer_tts_failed' });
+      });
+      expect(rendered.loop().state).toBe('idle');
+      expect(rendered.loop().error).toBe('openclaw_infer_tts_failed');
+
+      await act(async () => {
+        resolveDone();
+        await Promise.resolve();
+      });
+      expect(rendered.loop().state).toBe('idle');
+      expect(rendered.loop().error).toBe('openclaw_infer_tts_failed');
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
+  it('shows daemon-buffered reconnect audio as active AI playback even without text and lets silence stop it', async () => {
     const ttsModule = await import('../client/src/voice/tts');
     const playDaemonTts = vi.mocked(ttsModule.playDaemonTts);
     const stop = vi.fn();
@@ -359,16 +594,44 @@ describe('driving loop old-daemon compatibility', () => {
     }
   });
 
-
-  it('resets local TTS/UI state when switching sessions without sending remote reply.cancel', async () => {
+  it('lets tap stop active TTS playback through the same local handle', async () => {
     const ttsModule = await import('../client/src/voice/tts');
     const playDaemonTts = vi.mocked(ttsModule.playDaemonTts);
+    const stop = vi.fn();
+    playDaemonTts.mockReturnValueOnce({
+      analyser: null,
+      done: new Promise<void>(() => undefined),
+      error: null,
+      stop,
+    });
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      await act(async () => {
+        rendered.rtc.emitControl({ t: 'tts.start', sample_rate: 24000, buffered: true, text: 'spoken reply' });
+      });
+      expect(rendered.loop().state).toBe('ai');
+
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      expect(rendered.loop().state).toBe('idle');
+      expect(stop).toHaveBeenCalledWith({ cancelRemote: false });
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
+
+  it('resets local TTS/UI state when switching sessions without sending remote reply.cancel or accepting stale completion', async () => {
+    const ttsModule = await import('../client/src/voice/tts');
+    const playDaemonTts = vi.mocked(ttsModule.playDaemonTts);
+    let resolveDone!: () => void;
     const stop = vi.fn((options?: { cancelRemote?: boolean }) => {
       if (options?.cancelRemote !== false) rendered.rtc.sendControl({ t: 'reply.cancel' });
     });
     playDaemonTts.mockReturnValueOnce({
       analyser: null,
-      done: new Promise<void>(() => undefined),
+      done: new Promise<void>((resolve) => { resolveDone = resolve; }),
       error: null,
       stop,
     });
@@ -387,6 +650,13 @@ describe('driving loop old-daemon compatibility', () => {
       expect(rendered.loop().lastTurn).toBeNull();
       expect(stop).toHaveBeenCalledWith({ cancelRemote: false });
       expect(rendered.rtc.sentControl).not.toContainEqual({ t: 'reply.cancel' });
+
+      await act(async () => {
+        resolveDone();
+        await Promise.resolve();
+      });
+      expect(rendered.loop().state).toBe('idle');
+      expect(rendered.loop().lastTurn).toBeNull();
     } finally {
       await rendered.unmount();
     }
