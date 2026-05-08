@@ -371,7 +371,7 @@ describe('favorite recent session storage', () => {
           },
           {
             sessionId: 'session-1',
-            sessionKey: 'fresh-key',
+            sessionKey: 'stable-key',
             agent: 'kamaji',
             channel: 'discord',
             target: 'channel:fresh',
@@ -380,8 +380,8 @@ describe('favorite recent session storage', () => {
         ],
         [
           {
-            sessionId: 'session-1',
-            sessionKey: 'stale-key',
+            sessionId: 'stale-session-id',
+            sessionKey: 'stable-key',
             agent: 'old',
             displayLabel: 'Stale stored label',
           },
@@ -399,7 +399,7 @@ describe('favorite recent session storage', () => {
     ).toEqual([
       {
         sessionId: 'session-1',
-        sessionKey: 'fresh-key',
+        sessionKey: 'stable-key',
         agent: 'kamaji',
         channel: 'discord',
         target: 'channel:fresh',
@@ -436,14 +436,14 @@ describe('favorite recent session storage', () => {
 
     saveFavoriteRecentSession('host-1', {
       sessionId: 'session-1',
-      sessionKey: 'stale-key',
+      sessionKey: 'stable-key',
       agent: 'old',
       displayLabel: 'Stale',
     });
     reconcileFavoriteRecentSessions('host-1', [
       {
-        sessionId: 'session-1',
-        sessionKey: 'fresh-key',
+        sessionId: 'session-2',
+        sessionKey: 'stable-key',
         agent: 'kamaji',
         channel: 'discord',
         target: 'channel:fresh',
@@ -451,12 +451,91 @@ describe('favorite recent session storage', () => {
       },
     ]);
     expect(loadFavoriteRecentSessions('host-1')[0]).toMatchObject({
-      sessionKey: 'fresh-key',
+      sessionId: 'session-2',
+      sessionKey: 'stable-key',
       target: 'channel:fresh',
       displayLabel: 'Fresh',
     });
 
-    removeFavoriteRecentSession('host-1', { sessionId: ' session-1 ' });
+    removeFavoriteRecentSession('host-1', { sessionId: ' session-9 ', sessionKey: ' stable-key ' });
     expect(loadFavoriteRecentSessions('host-1')).toEqual([]);
+  });
+
+  it('can remove a stored favorite from a legacy session-id-only reference', async () => {
+    const {
+      loadFavoriteRecentSessions,
+      removeFavoriteRecentSession,
+      saveFavoriteRecentSession,
+    } = await import('../client/src/storage');
+
+    saveFavoriteRecentSession('host-1', {
+      sessionId: 'legacy-session-id',
+      sessionKey: 'stable-key',
+      agent: 'kamaji',
+      displayLabel: 'Stored',
+    });
+
+    removeFavoriteRecentSession('host-1', { sessionId: ' legacy-session-id ' });
+    expect(loadFavoriteRecentSessions('host-1')).toEqual([]);
+  });
+
+  it('rekeys favorites by stable session key when OpenClaw changes the session id', async () => {
+    const {
+      loadFavoriteRecentSessions,
+      mergeRecentSessionsWithFavorites,
+      reconcileFavoriteRecentSessions,
+      saveFavoriteRecentSession,
+    } = await import('../client/src/storage');
+
+    saveFavoriteRecentSession('host-1', {
+      sessionId: 'old-session-uuid',
+      sessionKey: 'agent:kamaji:discord:channel:thread-1',
+      agent: 'kamaji',
+      channel: 'discord',
+      target: 'channel:thread-1',
+      accountId: 'acct-1',
+      lastActivity: '2026-05-07T18:30:00.000Z',
+      displayLabel: 'Old daemon label',
+    });
+
+    const daemonSessions = [
+      {
+        sessionId: 'new-session-uuid',
+        sessionKey: 'agent:kamaji:discord:channel:thread-1',
+        agent: 'kamaji',
+        channel: 'discord',
+        target: 'channel:thread-1',
+        accountId: 'acct-2',
+        lastActivity: '2026-05-08T17:30:00.000Z',
+        displayLabel: 'Fresh daemon label',
+      },
+    ];
+
+    expect(reconcileFavoriteRecentSessions('host-1', daemonSessions)).toEqual([
+      {
+        sessionId: 'new-session-uuid',
+        sessionKey: 'agent:kamaji:discord:channel:thread-1',
+        agent: 'kamaji',
+        channel: 'discord',
+        target: 'channel:thread-1',
+        accountId: 'acct-2',
+        lastActivity: '2026-05-08T17:30:00.000Z',
+        displayLabel: 'Fresh daemon label',
+      },
+    ]);
+    expect(loadFavoriteRecentSessions('host-1')).toHaveLength(1);
+    expect(mergeRecentSessionsWithFavorites(daemonSessions, loadFavoriteRecentSessions('host-1'))).toEqual([
+      {
+        sessionId: 'new-session-uuid',
+        sessionKey: 'agent:kamaji:discord:channel:thread-1',
+        agent: 'kamaji',
+        channel: 'discord',
+        target: 'channel:thread-1',
+        accountId: 'acct-2',
+        lastActivity: '2026-05-08T17:30:00.000Z',
+        displayLabel: 'Fresh daemon label',
+        favorite: true,
+      },
+    ]);
   });
 });

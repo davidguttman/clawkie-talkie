@@ -14,6 +14,7 @@ import {
 import { RtcClient, type ControlMessage, type RtcStatus } from './client';
 import {
   loadFavoriteRecentSessions,
+  favoriteRecentSessionIdentity,
   mergeRecentSessionsWithFavorites,
   normalizeFavoriteRecentSession,
   reconcileFavoriteRecentSessions,
@@ -523,7 +524,8 @@ export function RtcProvider({
     const normalized = normalizeFavoriteRecentSession(session);
     if (!hostPeerId || !normalized) return;
     const current = loadFavoriteRecentSessions(hostPeerId);
-    const favorite = current.some((item) => item.sessionId === normalized.sessionId);
+    const identity = favoriteRecentSessionIdentity(normalized);
+    const favorite = !!identity && current.some((item) => favoriteRecentSessionIdentity(item) === identity);
     if (favorite) {
       removeFavoriteRecentSession(hostPeerId, normalized);
     } else {
