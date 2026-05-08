@@ -119,6 +119,7 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
 
   const sttRef = useRef<STTHandle | null>(null);
   const ttsRef = useRef<TTSHandle | null>(null);
+  const ttsUiDoneModeRef = useRef<'control' | 'playback'>('control');
   const holdMusicRef = useRef<HoldMusicController | null>(null);
   const micBandsRef = useRef<number[]>([...QUIET_INTENSITIES]);
   const renderedBandsRef = useRef<number[]>([...IDLE_INTENSITIES]);
@@ -146,7 +147,7 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     accumulatedRef.current = [];
     setCurrentTurnTranscript({ active: false, sttDone: false, text: '' });
     runCancelMic(sttRef);
-    runStopTts(ttsRef);
+    runStopTts(ttsRef, ttsUiDoneModeRef);
     dispatch({ type: 'session.reset' });
   }, [opts.sessionId, opts.threadId, opts.hostPeerId]);
 
@@ -223,8 +224,9 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
       if (msg.t === 'tts.start') {
         stopHoldMusicForControlMessage(msg, holdMusicRef.current);
         const replayStart = msg.buffered === true;
+        if (replayStart) ttsUiDoneModeRef.current = 'playback';
         if (replayStart && !ttsRef.current) {
-          runArmTts(rtcRef, ttsRef, dispatch, msg);
+          runArmTts(rtcRef, ttsRef, ttsUiDoneModeRef, dispatch, msg);
         }
         dispatch({
           type: 'tts.start',
@@ -234,6 +236,7 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
       }
       if (msg.t === 'tts.done') {
         stopHoldMusicForControlMessage(msg, holdMusicRef.current);
+        if (ttsUiDoneModeRef.current === 'playback' && ttsRef.current) return;
         dispatch({ type: 'tts.done' });
         return;
       }
@@ -256,9 +259,9 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
       }
       else if (s.kind === 'stopMic') runStopMic(sttRef);
       else if (s.kind === 'cancelMic') runCancelMic(sttRef);
-      else if (s.kind === 'armTts') runArmTts(rtcRef, ttsRef, dispatch);
-      else if (s.kind === 'stopTts') runStopTts(ttsRef);
-      else if (s.kind === 'cancelReply') runCancelReply(rtcRef, ttsRef);
+      else if (s.kind === 'armTts') runArmTts(rtcRef, ttsRef, ttsUiDoneModeRef, dispatch);
+      else if (s.kind === 'stopTts') runStopTts(ttsRef, ttsUiDoneModeRef);
+      else if (s.kind === 'cancelReply') runCancelReply(rtcRef, ttsUiDoneModeRef, ttsRef);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [side]);
@@ -299,6 +302,7 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     return () => {
       sttRef.current?.cancel();
       ttsRef.current?.stop();
+      ttsUiDoneModeRef.current = 'control';
       holdMusicRef.current?.stop();
     };
   }, []);
@@ -409,6 +413,7 @@ function runCancelMic(sttRef: React.MutableRefObject<STTHandle | null>): void {
 function runArmTts(
   rtcRef: React.MutableRefObject<DrivingLoopOptions['rtc']>,
   ttsRef: React.MutableRefObject<TTSHandle | null>,
+  ttsUiDoneModeRef: React.MutableRefObject<'control' | 'playback'>,
   dispatch: Dispatch,
   initialControlMessage?: ControlMessage,
 ): void {
@@ -419,21 +424,30 @@ function runArmTts(
     ...(initialControlMessage ? { initialControlMessage } : {}),
   });
   ttsRef.current = tts;
+  ttsUiDoneModeRef.current = initialControlMessage?.buffered === true ? 'playback' : 'control';
   void tts.done.then(() => {
     if (ttsRef.current !== tts) return;
     ttsRef.current = null;
+    const doneMode = ttsUiDoneModeRef.current;
+    ttsUiDoneModeRef.current = 'control';
     if (tts.error) dispatch({ type: 'tts.error', reason: tts.error });
+    else if (doneMode === 'playback') dispatch({ type: 'tts.done' });
   });
 }
 
-function runStopTts(ttsRef: React.MutableRefObject<TTSHandle | null>): void {
+function runStopTts(
+  ttsRef: React.MutableRefObject<TTSHandle | null>,
+  ttsUiDoneModeRef: React.MutableRefObject<'control' | 'playback'>,
+): void {
   const tts = ttsRef.current;
   ttsRef.current = null;
+  ttsUiDoneModeRef.current = 'control';
   tts?.stop({ cancelRemote: false });
 }
 
 function runCancelReply(
   rtcRef: React.MutableRefObject<DrivingLoopOptions['rtc']>,
+  ttsUiDoneModeRef: React.MutableRefObject<'control' | 'playback'>,
   ttsRef: React.MutableRefObject<TTSHandle | null>,
 ): void {
   try {
@@ -443,6 +457,7 @@ function runCancelReply(
   }
   const tts = ttsRef.current;
   ttsRef.current = null;
+  ttsUiDoneModeRef.current = 'control';
   tts?.stop({ cancelRemote: false });
 }
 

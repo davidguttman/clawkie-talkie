@@ -282,6 +282,51 @@ describe('driving loop old-daemon compatibility', () => {
     }
   });
 
+  it('keeps daemon-buffered replay in AI state after the wire tts.done until local playback drains', async () => {
+    const ttsModule = await import('../client/src/voice/tts');
+    const { readTargetBands } = await import('../client/src/voice/drivingLoop');
+    const playDaemonTts = vi.mocked(ttsModule.playDaemonTts);
+    const analyser = new FakeAnalyser();
+    let resolveDone!: () => void;
+    const ttsHandle = {
+      analyser: analyser as unknown as AnalyserNode,
+      done: new Promise<void>((resolve) => { resolveDone = resolve; }),
+      error: null,
+      stop: vi.fn(),
+    };
+    playDaemonTts.mockReturnValueOnce(ttsHandle);
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      await act(async () => {
+        // Actual missed-replay reconnect ordering can include the live turn's
+        // stale done immediately before the daemon drains buffered PCM. The
+        // buffered done means "all PCM sent", not "browser playback ended".
+        rendered.rtc.emitControl({ t: 'tts.done' });
+        rendered.rtc.emitControl({ t: 'tts.start', sample_rate: 24000, buffered: true, text: 'missed reply' });
+        rendered.rtc.emitControl({ t: 'tts.done' });
+      });
+
+      expect(playDaemonTts).toHaveBeenCalledWith(expect.objectContaining({
+        initialControlMessage: { t: 'tts.start', sample_rate: 24000, buffered: true, text: 'missed reply' },
+      }));
+      expect(rendered.loop().state).toBe('ai');
+      expect(rendered.loop().liveText).toBe('missed reply');
+
+      analyser.pushFrame([[10, 240]]);
+      const bands = readTargetBands(rendered.loop().state, [], ttsHandle, new WeakMap<AnalyserNode, AnalyserScratch>());
+      expect(Math.max(...bands)).toBeGreaterThan(0.1);
+
+      await act(async () => {
+        resolveDone();
+        await Promise.resolve();
+      });
+      expect(rendered.loop().state).toBe('idle');
+      expect(rendered.loop().lastTurn).toEqual({ who: 'ai', text: 'missed reply' });
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
   it('shows daemon-buffered reconnect audio as active AI playback even without text', async () => {
     const ttsModule = await import('../client/src/voice/tts');
     const playDaemonTts = vi.mocked(ttsModule.playDaemonTts);
