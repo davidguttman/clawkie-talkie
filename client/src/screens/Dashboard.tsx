@@ -91,26 +91,15 @@ export function DashboardScreen({
     >
       <header style={{ display: 'flex', alignItems: 'flex-start', gap: 10, minWidth: 0 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div
-            style={{
-              fontFamily: HIFI.fonts.mono,
-              fontSize: 11,
-              fontWeight: 800,
-              letterSpacing: 1.5,
-              color: HIFI.ink2,
-            }}
-          >
-            CLAWKIE-TALKIE DASHBOARD
-          </div>
           <h1
             style={{
-              margin: '8px 0 0',
+              margin: 0,
               fontSize: compact ? 26 : 30,
               lineHeight: 1.05,
               letterSpacing: -0.8,
             }}
           >
-            Pick a session
+            Recent Sessions
           </h1>
         </div>
         {(onHistory || onSettings) && (

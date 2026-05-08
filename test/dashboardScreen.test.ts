@@ -18,8 +18,10 @@ describe('Dashboard session discovery state guards', () => {
     expect(source).toContain("? 'Session discovery is unavailable for this daemon.'");
   });
 
-  it('uses the full product name in the dashboard label', () => {
-    expect(source).toContain('CLAWKIE-TALKIE DASHBOARD');
+  it('uses Recent Sessions as the dashboard heading without the eyebrow label', () => {
+    expect(source).toContain('Recent Sessions');
+    expect(source).not.toContain('Pick a session');
+    expect(source).not.toContain('CLAWKIE-TALKIE DASHBOARD');
     expect(source).not.toContain('CLAWKIE DASHBOARD');
   });
 
