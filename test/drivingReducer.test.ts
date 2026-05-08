@@ -247,6 +247,51 @@ describe('full happy-path sequence', () => {
 
 
 describe('session snapshot replay', () => {
+  it('lets old snapshot terminal replay events beat incomplete authoritative hydration', () => {
+    const { next, side } = reduce(thinking, {
+      type: 'session.replay',
+      events: [
+        { type: 'reply.done', text: 'done already' },
+        { type: 'tts.start' },
+        { type: 'tts.done' },
+      ],
+      hydration: {
+        context: {
+          ...initialContext,
+          state: 'thinking',
+          lastUserText: 'hello?',
+        },
+        armTts: false,
+      },
+    });
+
+    expect(next.state).toBe('idle');
+    expect(next.pendingReplyText).toBe('');
+    expect(next.liveReplyText).toBe('');
+    expect(side).toEqual([]);
+  });
+
+  it('does not let snapshot hydration override a replayed tts.done back into ai', () => {
+    const { next, side } = reduce(ai, {
+      type: 'session.replay',
+      events: [{ type: 'tts.done' }],
+      hydration: {
+        context: {
+          ...initialContext,
+          state: 'ai',
+          lastUserText: 'hello?',
+          lastReplyText: 'still speaking?',
+          liveReplyText: 'still speaking?',
+        },
+        armTts: true,
+      },
+    });
+
+    expect(next.state).toBe('idle');
+    expect(next.liveReplyText).toBe('');
+    expect(side).toEqual([]);
+  });
+
   it('hydrates a completed reconnect snapshot after missed reply/tts events from a fresh idle reducer', () => {
     const { next, side } = reduce(idle, {
       type: 'session.replay',

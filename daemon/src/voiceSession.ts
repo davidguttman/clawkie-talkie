@@ -132,6 +132,8 @@ interface TtsAudioTurn {
   sampleRate: number;
   chunks: Buffer[];
   byteLength: number;
+  started: boolean;
+  abandoned: boolean;
   complete: boolean;
   drained: boolean;
   overflowed: boolean;
@@ -577,7 +579,11 @@ export class VoiceSession {
     if (this.state.turnInFlight && !this.closing) {
       const turn = this.ttsAudioTurn;
       if (turn?.turnId === this.turnToken) {
-        this.markTtsAudioReplayOnReconnect(turn.turnId, 0);
+        if (turn.started) {
+          this.abandonTtsAudioTurn(turn.turnId);
+        } else {
+          this.markTtsAudioReplayOnReconnect(turn.turnId, 0);
+        }
       }
     }
     const shouldCompletePendingTrackTts = this.audioPumpAwaitingDone && this.state.turnInFlight && !this.closing;
@@ -654,6 +660,7 @@ export class VoiceSession {
       }
       try {
         source.onData({ samples: frame, sampleRate: WEBRTC_SAMPLE_RATE, channelCount: 1 });
+        this.markTtsAudioStarted(token);
       } catch (err) {
         console.error(`[voice ${this.roomId}] audioSource.onData failed: ${sanitizedErrorMessage(err)}`);
       }
@@ -962,6 +969,8 @@ export class VoiceSession {
       sampleRate: TTS_SAMPLE_RATE,
       chunks: [],
       byteLength: 0,
+      started: false,
+      abandoned: false,
       complete: false,
       drained: false,
       overflowed: false,
@@ -973,13 +982,29 @@ export class VoiceSession {
 
   private markTtsAudioReplayOnReconnect(token?: number, fromChunkIndex?: number): void {
     const turn = this.ttsAudioTurn;
-    if (!turn || turn.drained || turn.overflowed) return;
+    if (!turn || turn.drained || turn.overflowed || turn.abandoned) return;
     if (token !== undefined && turn.turnId !== token) return;
     const replayStart = Math.max(0, Math.min(fromChunkIndex ?? 0, turn.chunks.length));
     turn.replayFromChunkIndex = turn.replayOnReconnect
       ? Math.min(turn.replayFromChunkIndex, replayStart)
       : replayStart;
     turn.replayOnReconnect = true;
+  }
+
+  private markTtsAudioStarted(token?: number): void {
+    const turn = this.ttsAudioTurn;
+    if (!turn || turn.abandoned) return;
+    if (token !== undefined && turn.turnId !== token) return;
+    turn.started = true;
+  }
+
+  private abandonTtsAudioTurn(token?: number): void {
+    const turn = this.ttsAudioTurn;
+    if (!turn || turn.drained) return;
+    if (token !== undefined && turn.turnId !== token) return;
+    turn.abandoned = true;
+    turn.replayOnReconnect = false;
+    turn.replayFromChunkIndex = 0;
   }
 
   private appendTtsAudioPcm(token: number, pcm: Uint8Array): { chunk: Buffer; retained: boolean } | null {
@@ -1007,14 +1032,19 @@ export class VoiceSession {
 
   private drainLiveDataTtsAudio(token: number): void {
     const turn = this.ttsAudioTurn;
-    if (!turn || turn.turnId !== token || turn.drained || turn.overflowed) return;
+    if (!turn || turn.turnId !== token || turn.drained || turn.overflowed || turn.abandoned) return;
     if (turn.replayOnReconnect) return;
     while (turn.liveDataCursor < turn.chunks.length) {
       const chunk = turn.chunks[turn.liveDataCursor];
       if (!this.sendBinary(chunk)) {
-        this.markTtsAudioReplayOnReconnect(token, turn.liveDataCursor);
+        if (turn.started) {
+          this.abandonTtsAudioTurn(token);
+        } else {
+          this.markTtsAudioReplayOnReconnect(token, turn.liveDataCursor);
+        }
         return;
       }
+      this.markTtsAudioStarted(token);
       turn.liveDataCursor += 1;
     }
   }
@@ -1035,7 +1065,7 @@ export class VoiceSession {
     if (
       audioTurn &&
       audioTurn.turnId === this.turnToken &&
-      (!audioTurn.replayOnReconnect || audioTurn.overflowed || audioTurn.replayFromChunkIndex >= audioTurn.chunks.length)
+      (audioTurn.abandoned || !audioTurn.replayOnReconnect || audioTurn.overflowed || audioTurn.replayFromChunkIndex >= audioTurn.chunks.length)
     ) {
       this.clearTtsAudioTurn();
     }
@@ -1051,6 +1081,10 @@ export class VoiceSession {
   private drainTtsAudioReplay(peer: SimplePeer.Instance): void {
     const turn = this.ttsAudioTurn;
     if (!turn || turn.drained || !turn.complete || turn.overflowed) return;
+    if (turn.abandoned) {
+      this.clearTtsAudioTurn();
+      return;
+    }
     if (!turn.replayOnReconnect) return;
     const chunks = turn.chunks.slice(turn.replayFromChunkIndex);
     if (chunks.length === 0) {
@@ -1094,9 +1128,9 @@ export class VoiceSession {
           if (!audio) return;
           if (useTrack) {
             const turn = this.ttsAudioTurn;
-            if (this.connected && this.audioSource && (!turn?.replayOnReconnect || turn.overflowed)) {
+            if (this.connected && this.audioSource && turn && !turn.abandoned && (!turn.replayOnReconnect || turn.overflowed)) {
               this.enqueueTtsPcm(audio.chunk);
-            } else if (audio.retained) {
+            } else if (audio.retained && !turn?.abandoned) {
               this.markTtsAudioReplayOnReconnect(token, 0);
             }
             return;

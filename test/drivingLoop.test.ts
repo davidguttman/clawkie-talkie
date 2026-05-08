@@ -11,6 +11,8 @@ const root = resolve(__dirname, '..');
 let activeMicAnalyser: AnalyserNode | null = null;
 let activeHoldMusicAnalyser: AnalyserNode | null = null;
 let activeOutputAnalysers: AnalyserNode[] = [];
+let holdMusicStartCount = 0;
+let holdMusicStopCount = 0;
 
 vi.mock('../client/src/voice/audioSource', async (importActual) => ({
   ...(await importActual<typeof import('../client/src/voice/audioSource')>()),
@@ -42,8 +44,8 @@ vi.mock('../client/src/storage', () => ({
 
 vi.mock('../client/src/voice/holdMusic', () => ({
   HoldMusicController: class {
-    start(): void {}
-    stop(): void {}
+    start(): void { holdMusicStartCount += 1; }
+    stop(): void { holdMusicStopCount += 1; }
     unlock(): Promise<void> {
       return Promise.resolve();
     }
@@ -118,11 +120,13 @@ function installMinimalDom(): void {
 
 type FakeDrivingRtc = DrivingLoopOptions['rtc'] & {
   emitControl(msg: ControlMessage): void;
+  emitBinary(bytes: Uint8Array): void;
   sentControl: ControlMessage[];
 };
 
 function createFakeDrivingRtc(): FakeDrivingRtc {
   const controlListeners = new Set<(msg: ControlMessage) => void>();
+  const binaryListeners = new Set<(bytes: ArrayBuffer) => void>();
   const sentControl: ControlMessage[] = [];
   return {
     status: 'open' as RtcStatus,
@@ -136,9 +140,15 @@ function createFakeDrivingRtc(): FakeDrivingRtc {
       controlListeners.add(fn);
       return () => controlListeners.delete(fn);
     },
-    addBinaryListener: () => () => undefined,
+    addBinaryListener(fn: (bytes: ArrayBuffer) => void): () => void {
+      binaryListeners.add(fn);
+      return () => binaryListeners.delete(fn);
+    },
     emitControl(msg: ControlMessage): void {
       for (const fn of [...controlListeners]) fn(msg);
+    },
+    emitBinary(bytes: Uint8Array): void {
+      for (const fn of [...binaryListeners]) fn(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
     },
   };
 }
@@ -203,10 +213,114 @@ beforeEach(() => {
   activeMicAnalyser = null;
   activeHoldMusicAnalyser = null;
   activeOutputAnalysers = [];
+  holdMusicStartCount = 0;
+  holdMusicStopCount = 0;
 });
 
 
 describe('driving loop old-daemon compatibility', () => {
+  it('consumes old snapshot nested terminal reply/tts events ahead of incomplete snapshot phase', async () => {
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      expect(rendered.loop().state).toBe('thinking');
+      expect(holdMusicStartCount).toBeGreaterThan(0);
+
+      await act(async () => {
+        rendered.rtc.emitControl({
+          t: 'session.snapshot',
+          snapshot: {
+            phase: 'thinking',
+            userText: 'hello?',
+          },
+          events: [
+            { id: 1, msg: { t: 'reply.done', text: 'done already' } },
+            { id: 2, msg: { t: 'tts.start', sample_rate: 24000 } },
+            { id: 3, msg: { t: 'tts.done' } },
+          ],
+        });
+      });
+
+      expect(rendered.loop().state).toBe('idle');
+      expect(rendered.loop().liveText).toBe('');
+      expect(holdMusicStopCount).toBeGreaterThan(0);
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
+  it('treats old snapshot nested tts.done with no active TTS handle as normal completion that stops hold music', async () => {
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      expect(rendered.loop().state).toBe('thinking');
+      expect(holdMusicStartCount).toBeGreaterThan(0);
+
+      await act(async () => {
+        rendered.rtc.emitControl({
+          t: 'session.snapshot',
+          snapshot: {
+            phase: 'thinking',
+            userText: 'waiting turn',
+          },
+          events: [{ id: 9, msg: { t: 'tts.done' } }],
+        });
+      });
+
+      expect(holdMusicStopCount).toBeGreaterThan(0);
+      expect(rendered.loop().state).toBe('idle');
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
+  it('reattaches a completed old-daemon snapshot as idle without synthetic TTS or hold music', async () => {
+    const ttsModule = await import('../client/src/voice/tts');
+    const storageModule = await import('../client/src/storage');
+    const playDaemonTts = vi.mocked(ttsModule.playDaemonTts);
+    const appendTranscriptTurn = vi.mocked(storageModule.appendTranscriptTurn);
+    const rendered = await renderDrivingLoopHarness({ sessionId: 'completed-session', threadId: 'thread-done' });
+    try {
+      await act(async () => {
+        rendered.rtc.emitControl({
+          t: 'session.snapshot',
+          snapshot: {
+            phase: 'completed',
+            userText: 'hello',
+            replyText: 'finished reply',
+          },
+          events: [
+            { id: 1, msg: { t: 'reply.done', text: 'finished reply' } },
+            { id: 2, msg: { t: 'tts.start', sample_rate: 24000 } },
+            { id: 3, msg: { t: 'tts.done' } },
+          ],
+        });
+      });
+
+      expect(rendered.loop().state).toBe('idle');
+      expect(rendered.loop().liveText).toBe('');
+      expect(playDaemonTts).not.toHaveBeenCalled();
+      expect(holdMusicStartCount).toBe(0);
+      expect(holdMusicStopCount).toBe(0);
+      expect(appendTranscriptTurn).toHaveBeenCalledWith(
+        { sessionId: 'completed-session', threadId: 'thread-done', hostPeerId: 'host-1' },
+        { role: 'assistant', text: 'finished reply' },
+      );
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
   it('waits for local live TTS playback completion after wire tts.done', async () => {
     const ttsModule = await import('../client/src/voice/tts');
     const playDaemonTts = vi.mocked(ttsModule.playDaemonTts);
@@ -470,6 +584,58 @@ describe('driving loop old-daemon compatibility', () => {
       await act(async () => {
         rendered.rtc.emitControl({ t: 'tts.done' });
       });
+      expect(rendered.loop().state).toBe('ai');
+
+      await act(async () => {
+        resolveDone();
+        await Promise.resolve();
+      });
+      expect(rendered.loop().state).toBe('idle');
+      expect(rendered.loop().lastTurn).toEqual({ who: 'ai', text: 'missed reply' });
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
+  it('keeps full buffered reconnect audio attached until local playback drains', async () => {
+    const ttsModule = await import('../client/src/voice/tts');
+    const playDaemonTts = vi.mocked(ttsModule.playDaemonTts);
+    const playedChunks: Buffer[] = [];
+    const observedControls: Array<{ t: string; [k: string]: unknown }> = [];
+    let resolveDone!: () => void;
+    playDaemonTts.mockImplementationOnce((opts) => {
+      opts.addBinaryListener((bytes) => {
+        playedChunks.push(Buffer.from(bytes));
+      });
+      opts.addControlListener((msg) => {
+        observedControls.push(msg);
+      });
+      return {
+        analyser: null,
+        done: new Promise<void>((resolve) => { resolveDone = resolve; }),
+        error: null,
+        stop: vi.fn(),
+      };
+    });
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      await act(async () => {
+        rendered.rtc.emitControl({ t: 'tts.start', sample_rate: 24000, buffered: true, turnId: 12, text: 'missed reply' });
+      });
+
+      expect(playDaemonTts).toHaveBeenCalledWith(expect.objectContaining({
+        initialControlMessage: { t: 'tts.start', sample_rate: 24000, buffered: true, turnId: 12, text: 'missed reply' },
+      }));
+      expect(rendered.loop().state).toBe('ai');
+
+      await act(async () => {
+        rendered.rtc.emitBinary(new Uint8Array([1, 2, 3]));
+        rendered.rtc.emitBinary(new Uint8Array([4, 5]));
+        rendered.rtc.emitControl({ t: 'tts.done' });
+      });
+
+      expect(playedChunks).toEqual([Buffer.from([1, 2, 3]), Buffer.from([4, 5])]);
+      expect(observedControls).toContainEqual({ t: 'tts.done' });
       expect(rendered.loop().state).toBe('ai');
 
       await act(async () => {
@@ -786,6 +952,67 @@ describe('driving loop visualizer frame rendering', () => {
 
 
 describe('driving loop session snapshot reconnect hydration', () => {
+  it.each([
+    ['thinking', { phase: 'thinking', userText: 'Still working?' }],
+    ['speaking', { phase: 'speaking', userText: 'Say hi', replyText: 'Hi there.' }],
+  ] as const)('does not synthesize active %s UI from a bare old snapshot without replay events', async (_phase, snapshot) => {
+    const { sessionSnapshotReplayPlanFromControlMessage } = await import('../client/src/voice/drivingLoop');
+
+    const plan = sessionSnapshotReplayPlanFromControlMessage({
+      t: 'session.snapshot',
+      snapshot,
+    });
+
+    const hydration = plan?.event.hydration;
+    expect(hydration?.context.state ?? 'idle').toBe('idle');
+    expect(hydration?.context.pendingReplyText ?? '').toBe('');
+    expect(hydration?.context.liveReplyText ?? '').toBe('');
+    expect(hydration?.armTts ?? false).toBe(false);
+  });
+
+  it('does not arm TTS from a bare old reply-ready snapshot without a replayed reply.done event', async () => {
+    const { sessionSnapshotReplayPlanFromControlMessage } = await import('../client/src/voice/drivingLoop');
+
+    const plan = sessionSnapshotReplayPlanFromControlMessage({
+      t: 'session.snapshot',
+      snapshot: {
+        phase: 'reply-ready',
+        userText: 'Are you there?',
+        replyText: 'One moment.',
+      },
+    });
+
+    const hydration = plan?.event.hydration;
+    expect(hydration?.armTts ?? false).toBe(false);
+    expect(hydration?.context.pendingReplyText ?? '').toBe('');
+    expect(hydration?.context.liveReplyText ?? '').toBe('');
+  });
+
+  it('still lets replayed terminal events win over active snapshot metadata', async () => {
+    const { sessionSnapshotReplayPlanFromControlMessage } = await import('../client/src/voice/drivingLoop');
+
+    const plan = sessionSnapshotReplayPlanFromControlMessage({
+      t: 'session.snapshot',
+      snapshot: {
+        phase: 'speaking',
+        userText: 'Say hi',
+        replyText: 'Hi there.',
+      },
+      events: [
+        { id: 1, msg: { t: 'reply.done', text: 'Hi there.' } },
+        { id: 2, msg: { t: 'tts.start', sample_rate: 24000 } },
+        { id: 3, msg: { t: 'tts.done' } },
+      ],
+    });
+
+    expect(plan?.event.events).toEqual([
+      { type: 'reply.done', text: 'Hi there.' },
+      { type: 'tts.start' },
+      { type: 'tts.done' },
+    ]);
+    expect(plan?.transcript).toEqual({ active: false, sttDone: false, text: '' });
+  });
+
   it('builds an authoritative completed hydration even when missed events are present', async () => {
     const { sessionSnapshotReplayPlanFromControlMessage } = await import('../client/src/voice/drivingLoop');
 

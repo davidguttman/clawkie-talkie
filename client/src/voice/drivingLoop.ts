@@ -555,15 +555,20 @@ export function sessionSnapshotReplayPlanFromControlMessage(
     .map(drivingReplayEventFromControlMessage)
     .filter((event): event is DrivingReplayEvent => !!event);
   const snapshot = sessionSnapshotRecord(msg);
-  const hydrated = snapshot ? snapshotHydrationPlan(snapshot, options) : null;
+  const hydrated = snapshot ? snapshotHydrationPlan(snapshot, options, events) : null;
   if (!hydrated && events.length === 0) return null;
+  const terminalReplayWins = !!hydrated
+    && hydrated.hydration.context.state !== 'idle'
+    && events.some(isTerminalReplayEvent);
   return {
     event: {
       type: 'session.replay',
       events,
       ...(hydrated ? { hydration: hydrated.hydration } : {}),
     },
-    transcript: hydrated?.transcript ?? null,
+    transcript: terminalReplayWins
+      ? { active: false, sttDone: false, text: '' }
+      : hydrated?.transcript ?? null,
   };
 }
 
@@ -581,6 +586,13 @@ export function sessionSnapshotControlEvents(msg: ControlMessage): ControlMessag
       return null;
     })
     .filter((event): event is ControlMessage => !!event);
+}
+
+function isTerminalReplayEvent(event: DrivingReplayEvent): boolean {
+  return event.type === 'tts.done'
+    || event.type === 'tts.error'
+    || event.type === 'reply.error'
+    || event.type === 'stt.error';
 }
 
 export function drivingReplayEventFromControlMessage(msg: ControlMessage): DrivingReplayEvent | null {
@@ -622,6 +634,7 @@ function sessionSnapshotRecord(msg: ControlMessage): Record<string, unknown> | n
 function snapshotHydrationPlan(
   source: Record<string, unknown>,
   options: SessionSnapshotReplayOptions = {},
+  replayEvents: readonly DrivingReplayEvent[] = [],
 ): SnapshotHydrationPlan | null {
   const phase = normalizeSnapshotPhase(
     firstString(source, ['phase', 'turnPhase', 'status', 'state']),
@@ -669,6 +682,7 @@ function snapshotHydrationPlan(
   }
 
   if (phase === 'reply-ready') {
+    if (!hasReplayEvent(replayEvents, 'reply.done')) return null;
     return {
       hydration: {
         context: {
@@ -684,6 +698,7 @@ function snapshotHydrationPlan(
   }
 
   if (phase === 'speaking') {
+    if (!hasReplayEvent(replayEvents, 'tts.start')) return null;
     return {
       hydration: {
         context: {
@@ -717,6 +732,7 @@ function snapshotHydrationPlan(
   }
 
   if (phase === 'thinking') {
+    if (!hasReplayEvent(replayEvents, 'stt.done')) return null;
     return {
       hydration: {
         context: {
@@ -756,6 +772,13 @@ function snapshotHydrationPlan(
     },
     transcript: { active: false, sttDone: false, text: '' },
   };
+}
+
+function hasReplayEvent(
+  events: readonly DrivingReplayEvent[],
+  type: DrivingReplayEvent['type'],
+): boolean {
+  return events.some((event) => event.type === type);
 }
 
 type SnapshotPhase = 'idle' | 'recording' | 'thinking' | 'reply-ready' | 'speaking' | 'completed' | 'error';

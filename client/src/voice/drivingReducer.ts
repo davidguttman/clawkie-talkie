@@ -199,19 +199,33 @@ function reduceSessionReplay(
 ): Reduction {
   let next = ctx;
   let side: DrivingSideEffect[] = [];
+  const hasTerminalReplayEvent = event.events.some(isTerminalReplayEvent);
   for (const replayEvent of event.events) {
     const reduced = reduce(next, replayEvent);
     next = reduced.next;
     side.push(...reduced.side);
   }
   if (event.hydration) {
-    next = event.hydration.context;
-    if (!event.hydration.armTts && next.state === 'idle' && !next.pendingReplyText) {
-      side = side.filter((item) => item.kind !== 'armTts');
+    const terminalReplayWins =
+      hasTerminalReplayEvent && next.state === 'idle' && event.hydration.context.state !== 'idle';
+    if (terminalReplayWins) {
+      next = { ...next, pendingReplyText: '', liveReplyText: '' };
+    } else {
+      next = event.hydration.context;
+      if (event.hydration.armTts && !side.some((item) => item.kind === 'armTts')) {
+        side.push({ kind: 'armTts' });
+      }
     }
-    if (event.hydration.armTts && !side.some((item) => item.kind === 'armTts')) {
-      side.push({ kind: 'armTts' });
+    if ((!event.hydration.armTts || terminalReplayWins) && next.state === 'idle' && !next.pendingReplyText) {
+      side = side.filter((item) => item.kind !== 'armTts');
     }
   }
   return { next, side };
+}
+
+function isTerminalReplayEvent(event: DrivingReplayEvent): boolean {
+  return event.type === 'tts.done'
+    || event.type === 'tts.error'
+    || event.type === 'reply.error'
+    || event.type === 'stt.error';
 }
