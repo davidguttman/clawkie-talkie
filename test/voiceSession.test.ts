@@ -1052,7 +1052,7 @@ describe('voice session OpenClaw infer STT runtime', () => {
     expect(sentBinary(reconnectPeer)).not.toContainEqual(Buffer.from([1, 1]));
   });
 
-  it('buffers WebRTC-track TTS chunks generated after the phone switches away and replays them as PCM on reconnect', async () => {
+  it('replays full WebRTC-track TTS when the phone switches away after live track audio already started', async () => {
     chatMocks.runChat.mockResolvedValue({ text: 'spoken reply' });
     const { session, peer } = makeVoiceSession();
     const audioSource = { onData: vi.fn() };
@@ -1068,12 +1068,13 @@ describe('voice session OpenClaw infer STT runtime', () => {
     fakeTts.cb.onOpen();
     expect(sentJson(peer)).toContainEqual({ t: 'tts.start', sample_rate: 48000 });
 
+    fakeTts.cb.onAudio(new Uint8Array([1, 2]));
+    expect(sentBinary(peer)).toEqual([]);
+
     (session as unknown as { tearDownPeer(reason: string, peer?: unknown): void }).tearDownPeer('peer_closed', peer);
     fakeTts.cb.onAudio(new Uint8Array([4, 5, 6]));
     fakeTts.cb.onAudio(new Uint8Array([7, 8]));
     fakeTts.cb.onDone();
-
-    expect(audioSource.onData).not.toHaveBeenCalled();
 
     const reconnectPeer = { send: vi.fn() };
     (session as unknown as { sendCatchUpSnapshot(peer: unknown): void }).sendCatchUpSnapshot(reconnectPeer);
@@ -1081,8 +1082,94 @@ describe('voice session OpenClaw infer STT runtime', () => {
     expect(sentJson(reconnectPeer).filter((msg) => msg.t === 'tts.start' && msg.buffered === true)).toEqual([
       { t: 'tts.start', sample_rate: 24000, buffered: true, turnId: expect.any(Number), text: 'spoken reply' },
     ]);
-    expect(sentBinary(reconnectPeer)).toEqual([Buffer.from([4, 5, 6]), Buffer.from([7, 8])]);
+    expect(sentBinary(reconnectPeer)).toEqual([Buffer.from([1, 2]), Buffer.from([4, 5, 6]), Buffer.from([7, 8])]);
     expect(sentJson(reconnectPeer)).toContainEqual({ t: 'tts.done' });
+  });
+
+  it('drains completed WebRTC-track replay to an already-reconnected peer when reconnect happens before TTS completes', async () => {
+    chatMocks.runChat.mockResolvedValue({ text: 'spoken reply' });
+    const { session, peer } = makeVoiceSession();
+    const initialAudioSource = { onData: vi.fn() };
+    (session as unknown as { audioSource: typeof initialAudioSource; outboundStream: unknown }).audioSource = initialAudioSource;
+    (session as unknown as { outboundStream: unknown }).outboundStream = { active: true };
+
+    sendControl(session, { t: 'stt.start' });
+    await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+    sttMocks.inferCtor.mock.results[0].value.cb.onDone('hello');
+    await vi.waitFor(() => expect(ttsMocks.inferTtsCtor).toHaveBeenCalledTimes(1));
+    const fakeTts = ttsMocks.inferTtsCtor.mock.results[0].value;
+
+    fakeTts.cb.onOpen();
+    fakeTts.cb.onAudio(new Uint8Array([1, 0]));
+    expect(sentBinary(peer)).toEqual([]);
+
+    (session as unknown as { tearDownPeer(reason: string, peer?: unknown): void }).tearDownPeer('peer_closed', peer);
+
+    const reconnectPeer = { destroyed: false, send: vi.fn() };
+    const reconnectAudioSource = { onData: vi.fn() };
+    (session as unknown as { peer: typeof reconnectPeer; connected: boolean }).peer = reconnectPeer;
+    (session as unknown as { connected: boolean }).connected = true;
+    (session as unknown as { audioSource: typeof reconnectAudioSource; outboundStream: unknown }).audioSource = reconnectAudioSource;
+    (session as unknown as { outboundStream: unknown }).outboundStream = { active: true };
+
+    (session as unknown as { sendCatchUpSnapshot(peer: unknown): void }).sendCatchUpSnapshot(reconnectPeer);
+    expect(sentJson(reconnectPeer).filter((msg) => msg.t === 'tts.start' && msg.buffered === true)).toHaveLength(0);
+    expect(sentBinary(reconnectPeer)).toEqual([]);
+
+    vi.useFakeTimers();
+    try {
+      fakeTts.cb.onAudio(new Uint8Array([2, 0]));
+      fakeTts.cb.onDone();
+      await vi.advanceTimersByTimeAsync(30);
+
+      expect(reconnectAudioSource.onData).toHaveBeenCalled();
+      expect(sentJson(reconnectPeer).filter((msg) => msg.t === 'tts.start' && msg.buffered === true)).toEqual([
+        { t: 'tts.start', sample_rate: 24000, buffered: true, turnId: expect.any(Number), text: 'spoken reply' },
+      ]);
+      expect(sentBinary(reconnectPeer)).toEqual([Buffer.from([1, 0]), Buffer.from([2, 0])]);
+      expect(sentJson(reconnectPeer)).toContainEqual({ t: 'tts.done' });
+
+      const duplicateReconnect = { send: vi.fn() };
+      (session as unknown as { sendCatchUpSnapshot(peer: unknown): void }).sendCatchUpSnapshot(duplicateReconnect);
+      expect(sentJson(duplicateReconnect).filter((msg) => msg.t === 'tts.start' && msg.buffered === true)).toHaveLength(0);
+      expect(sentBinary(duplicateReconnect)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not replay stale WebRTC-track TTS after normal live playback completes without a session switch', async () => {
+    chatMocks.runChat.mockResolvedValue({ text: 'heard reply' });
+    const { session, peer } = makeVoiceSession();
+    const audioSource = { onData: vi.fn() };
+    (session as unknown as { audioSource: typeof audioSource; outboundStream: unknown }).audioSource = audioSource;
+    (session as unknown as { outboundStream: unknown }).outboundStream = { active: true };
+
+    sendControl(session, { t: 'stt.start' });
+    await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+    sttMocks.inferCtor.mock.results[0].value.cb.onDone('hello');
+    await vi.waitFor(() => expect(ttsMocks.inferTtsCtor).toHaveBeenCalledTimes(1));
+    const fakeTts = ttsMocks.inferTtsCtor.mock.results[0].value;
+
+    vi.useFakeTimers();
+    try {
+      fakeTts.cb.onOpen();
+      fakeTts.cb.onAudio(new Uint8Array([11, 0, 12, 0]));
+      fakeTts.cb.onDone();
+      await vi.advanceTimersByTimeAsync(30);
+
+      expect(audioSource.onData).toHaveBeenCalled();
+      expect((session as unknown as { state: { turnInFlight: boolean } }).state.turnInFlight).toBe(false);
+      expect(sentJson(peer)).toContainEqual({ t: 'tts.done' });
+
+      const reconnectPeer = { send: vi.fn() };
+      (session as unknown as { sendCatchUpSnapshot(peer: unknown): void }).sendCatchUpSnapshot(reconnectPeer);
+
+      expect(sentJson(reconnectPeer).filter((msg) => msg.t === 'tts.start' && msg.buffered === true)).toHaveLength(0);
+      expect(sentBinary(reconnectPeer)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([

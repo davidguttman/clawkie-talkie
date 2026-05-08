@@ -132,6 +132,7 @@ interface BufferedTtsTurn {
   complete: boolean;
   drained: boolean;
   overflowed: boolean;
+  replayOnReconnect: boolean;
 }
 
 export interface SttSessionLike {
@@ -567,6 +568,9 @@ export class VoiceSession {
   }
 
   private closeOutboundAudio(): void {
+    if (this.audioSource && this.state.turnInFlight && !this.closing) {
+      this.markBufferedTtsReplayOnReconnect();
+    }
     const shouldCompletePendingTrackTts = this.audioPumpAwaitingDone && this.state.turnInFlight && !this.closing;
     this.stopAudioPump();
     this.audioPumpTurnToken = null;
@@ -952,7 +956,15 @@ export class VoiceSession {
       complete: false,
       drained: false,
       overflowed: false,
+      replayOnReconnect: false,
     };
+  }
+
+  private markBufferedTtsReplayOnReconnect(token?: number): void {
+    const turn = this.bufferedTtsTurn;
+    if (!turn || turn.drained || turn.overflowed) return;
+    if (token !== undefined && turn.turnId !== token) return;
+    turn.replayOnReconnect = true;
   }
 
   private appendBufferedTtsPcm(token: number, pcm: Uint8Array): void {
@@ -982,8 +994,15 @@ export class VoiceSession {
 
   private completeTtsTurn(reason: string): void {
     this.markBufferedTtsComplete(this.turnToken);
+    const bufferedTurn = this.bufferedTtsTurn;
+    if (bufferedTurn && bufferedTurn.turnId === this.turnToken && !bufferedTurn.replayOnReconnect) {
+      this.clearBufferedTtsTurn();
+    }
     this.audioPumpAwaitingDone = false;
     this.send(daemonToPhone.ttsDone());
+    if (reason !== 'tts_audio_transport_closed' && this.connected && this.peer && !this.peer.destroyed) {
+      this.drainBufferedTtsTurn(this.peer);
+    }
     this.tts = null;
     this.resetTurn(reason);
   }
@@ -991,6 +1010,7 @@ export class VoiceSession {
   private drainBufferedTtsTurn(peer: SimplePeer.Instance): void {
     const turn = this.bufferedTtsTurn;
     if (!turn || turn.drained || !turn.complete || turn.overflowed || turn.chunks.length === 0) return;
+    if (!turn.replayOnReconnect) return;
     if (!this.sendToPeer(peer, daemonToPhone.ttsStart(turn.sampleRate, {
       buffered: true,
       turnId: turn.turnId,
@@ -1024,11 +1044,18 @@ export class VoiceSession {
         onAudio: (pcm) => {
           if (!this.isTurnActive(token)) return;
           if (useTrack) {
-            if (this.connected && this.audioSource) this.enqueueTtsPcm(pcm);
-            else this.appendBufferedTtsPcm(token, pcm);
+            this.appendBufferedTtsPcm(token, pcm);
+            if (this.connected && this.audioSource) {
+              this.enqueueTtsPcm(pcm);
+            } else {
+              this.markBufferedTtsReplayOnReconnect(token);
+            }
             return;
           }
-          if (!this.sendBinary(pcm)) this.appendBufferedTtsPcm(token, pcm);
+          if (!this.sendBinary(pcm)) {
+            this.appendBufferedTtsPcm(token, pcm);
+            this.markBufferedTtsReplayOnReconnect(token);
+          }
         },
         onDone: () => {
           if (!this.isTurnActive(token)) return;
