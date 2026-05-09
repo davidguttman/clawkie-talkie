@@ -13,38 +13,9 @@ class FakeAudioNode {
   disconnect = vi.fn();
 }
 
-class FakeBiquadFilterNode extends FakeAudioNode {
-  type: BiquadFilterType = 'lowpass';
-  frequency = new FakeAudioParam();
-  Q = new FakeAudioParam();
-  gain = new FakeAudioParam();
-}
-
 class FakeGainNode extends FakeAudioNode {
   gain = new FakeAudioParam();
 }
-
-class FakeWaveShaperNode extends FakeAudioNode {
-  curve: Float32Array | null = null;
-  oversample: OverSampleType = 'none';
-}
-
-class FakeDynamicsCompressorNode extends FakeAudioNode {
-  threshold = new FakeAudioParam();
-  knee = new FakeAudioParam();
-  ratio = new FakeAudioParam();
-  attack = new FakeAudioParam();
-  release = new FakeAudioParam();
-}
-
-class FakeOscillatorNode extends FakeAudioNode {
-  type: OscillatorType = 'sine';
-  frequency = new FakeAudioParam();
-  start = vi.fn();
-  stop = vi.fn();
-}
-
-class FakeMediaElementSourceNode extends FakeAudioNode {}
 
 class FakeAnalyserNode extends FakeAudioNode {
   fftSize = 2048;
@@ -74,21 +45,21 @@ class FakeAudioBuffer {
   }
 }
 
+class FakeMediaElementSourceNode extends FakeAudioNode {
+  constructor(public element: FakeAudioElement) {
+    super();
+  }
+}
+
 class FakeAudioContext {
   static instances: FakeAudioContext[] = [];
-  static audioWorkletAddModule: ReturnType<typeof vi.fn> | null = null;
 
   state: AudioContextState = 'suspended';
   sampleRate = 48000;
   currentTime = 0;
   destination = {};
-  audioWorklet?: { addModule: ReturnType<typeof vi.fn> };
   mediaElementSources: FakeMediaElementSourceNode[] = [];
-  biquads: FakeBiquadFilterNode[] = [];
   gains: FakeGainNode[] = [];
-  waveShapers: FakeWaveShaperNode[] = [];
-  compressors: FakeDynamicsCompressorNode[] = [];
-  oscillators: FakeOscillatorNode[] = [];
   bufferSources: FakeAudioBufferSourceNode[] = [];
   analysers: FakeAnalyserNode[] = [];
   resume = vi.fn(() => {
@@ -97,46 +68,19 @@ class FakeAudioContext {
   });
 
   constructor() {
-    if (FakeAudioContext.audioWorkletAddModule) {
-      this.audioWorklet = { addModule: FakeAudioContext.audioWorkletAddModule };
-    }
     FakeAudioContext.instances.push(this);
   }
 
-  createMediaElementSource(): FakeMediaElementSourceNode {
-    const source = new FakeMediaElementSourceNode();
+  createMediaElementSource(audio: FakeAudioElement): FakeMediaElementSourceNode {
+    const source = new FakeMediaElementSourceNode(audio);
     this.mediaElementSources.push(source);
     return source;
-  }
-
-  createBiquadFilter(): FakeBiquadFilterNode {
-    const filter = new FakeBiquadFilterNode();
-    this.biquads.push(filter);
-    return filter;
   }
 
   createGain(): FakeGainNode {
     const gain = new FakeGainNode();
     this.gains.push(gain);
     return gain;
-  }
-
-  createWaveShaper(): FakeWaveShaperNode {
-    const shaper = new FakeWaveShaperNode();
-    this.waveShapers.push(shaper);
-    return shaper;
-  }
-
-  createDynamicsCompressor(): FakeDynamicsCompressorNode {
-    const compressor = new FakeDynamicsCompressorNode();
-    this.compressors.push(compressor);
-    return compressor;
-  }
-
-  createOscillator(): FakeOscillatorNode {
-    const oscillator = new FakeOscillatorNode();
-    this.oscillators.push(oscillator);
-    return oscillator;
   }
 
   createBuffer(_channels: number, length: number): FakeAudioBuffer {
@@ -156,23 +100,6 @@ class FakeAudioContext {
   }
 }
 
-class FakeAudioWorkletNode extends FakeAudioNode {
-  static instances: FakeAudioWorkletNode[] = [];
-
-  parameters = new Map([
-    ['bits', new FakeAudioParam()],
-    ['normFreq', new FakeAudioParam()],
-  ]);
-
-  constructor(
-    public context: AudioContext,
-    public name: string,
-  ) {
-    super();
-    FakeAudioWorkletNode.instances.push(this);
-  }
-}
-
 class FakeAudioElement {
   static instances: FakeAudioElement[] = [];
 
@@ -181,6 +108,7 @@ class FakeAudioElement {
   loop = false;
   muted = false;
   preload = '';
+  volume = 1;
   play = vi.fn(() => Promise.resolve());
   pause = vi.fn();
   load = vi.fn();
@@ -211,8 +139,6 @@ afterEach(() => {
   vi.doUnmock('virtual:hold-music-tracks');
   vi.resetModules();
   FakeAudioContext.instances = [];
-  FakeAudioContext.audioWorkletAddModule = null;
-  FakeAudioWorkletNode.instances = [];
   FakeAudioElement.instances = [];
 });
 
@@ -259,7 +185,7 @@ describe('radio static generation', () => {
     expect(countSamplesAbove(crackle, 0.25)).toBe(countSamplesAbove(crackle, 0));
   });
 
-  it('builds the AM-IFY drive saturation curve', async () => {
+  it('builds the AM-IFY drive saturation curve used by the regeneration script design', async () => {
     const { createAmifySaturationCurve } = await import('../client/src/voice/holdMusic');
 
     const curve = createAmifySaturationCurve(9, 0.5);
@@ -285,8 +211,7 @@ describe('HoldMusicController', () => {
     expect(audio.load).toHaveBeenCalledTimes(1);
   });
 
-  it('consumes the preloaded track for playback and preloads the next track after stop', async () => {
-    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+  it('plays the processed music and static layers as plain media elements', async () => {
     vi.stubGlobal('Audio', FakeAudioElement);
     const { HoldMusicController } = await import('../client/src/voice/holdMusic');
     const preloaded = FakeAudioElement.instances[0];
@@ -294,22 +219,39 @@ describe('HoldMusicController', () => {
     const controller = new HoldMusicController();
     controller.start();
 
-    expect(FakeAudioElement.instances).toHaveLength(1);
-    expect(FakeAudioContext.instances[0].mediaElementSources).toHaveLength(1);
+    expect(FakeAudioElement.instances).toHaveLength(3);
+    expect(FakeAudioContext.instances).toHaveLength(0);
+    expect(preloaded.loop).toBe(true);
+    expect(preloaded.preload).toBe('auto');
+    expect(preloaded.volume).toBeCloseTo(0.15);
+    expect(FakeAudioElement.instances[1].src).toBe('/music-layers/hiss.mp3');
+    expect(FakeAudioElement.instances[1].loop).toBe(true);
+    expect(FakeAudioElement.instances[1].volume).toBeCloseTo(0.018);
+    expect(FakeAudioElement.instances[2].src).toBe('/music-layers/crackle.mp3');
+    expect(FakeAudioElement.instances[2].loop).toBe(true);
+    expect(FakeAudioElement.instances[2].volume).toBeCloseTo(0.026);
+    expect(preloaded.play).not.toHaveBeenCalled();
+
     preloaded.duration = 100;
     preloaded.dispatch('loadedmetadata');
+
+    expect(preloaded.currentTime).toBeGreaterThanOrEqual(15);
+    expect(preloaded.currentTime).toBeLessThanOrEqual(50);
     expect(preloaded.play).toHaveBeenCalledTimes(1);
+    expect(FakeAudioElement.instances[1].play).toHaveBeenCalledTimes(1);
+    expect(FakeAudioElement.instances[2].play).toHaveBeenCalledTimes(1);
 
     controller.stop();
 
-    expect(FakeAudioElement.instances).toHaveLength(2);
-    expect(FakeAudioElement.instances[1]).not.toBe(preloaded);
-    expect(FakeAudioElement.instances[1].preload).toBe('auto');
-    expect(FakeAudioElement.instances[1].load).toHaveBeenCalledTimes(1);
+    expect(preloaded.pause).toHaveBeenCalled();
+    expect(FakeAudioElement.instances[1].pause).toHaveBeenCalled();
+    expect(FakeAudioElement.instances[2].pause).toHaveBeenCalled();
+    expect(FakeAudioElement.instances).toHaveLength(4);
+    expect(FakeAudioElement.instances[3]).not.toBe(preloaded);
+    expect(FakeAudioElement.instances[3].preload).toBe('auto');
   });
 
   it('ignores stale play rejections after a newer session has started', async () => {
-    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
     vi.stubGlobal('Audio', FakeAudioElement);
     const firstPlay = createDeferred<void>();
     const { HoldMusicController } = await import('../client/src/voice/holdMusic');
@@ -323,7 +265,7 @@ describe('HoldMusicController', () => {
     expect(firstAudio.play).toHaveBeenCalledTimes(1);
 
     controller.start();
-    const secondAudio = FakeAudioElement.instances[1];
+    const secondAudio = FakeAudioElement.instances[3];
     secondAudio.duration = 100;
     secondAudio.dispatch('loadedmetadata');
     expect(secondAudio.play).toHaveBeenCalledTimes(1);
@@ -333,12 +275,10 @@ describe('HoldMusicController', () => {
 
     expect(secondAudio.pause).not.toHaveBeenCalled();
     expect(secondAudio.removeAttribute).not.toHaveBeenCalled();
-    expect(FakeAudioElement.instances).toHaveLength(2);
   });
 
-  it('does not create preload or playback audio when the hold music manifest is empty', async () => {
+  it('does not create preload, playback, or layer audio when the hold music manifest is empty', async () => {
     vi.doMock('virtual:hold-music-tracks', () => ({ HOLD_MUSIC_TRACKS: [] }));
-    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
     vi.stubGlobal('Audio', FakeAudioElement);
     const { HoldMusicController, pickHoldMusicUrl } = await import('../client/src/voice/holdMusic');
 
@@ -350,7 +290,7 @@ describe('HoldMusicController', () => {
     expect(FakeAudioElement.instances).toHaveLength(0);
   });
 
-  it('persists mute preference and applies it to the active music and static bed', async () => {
+  it('persists mute preference and applies it to the active music and static media layers', async () => {
     const storage = new Map<string, string>();
     vi.stubGlobal('localStorage', {
       getItem: vi.fn((key: string) => storage.get(key) ?? null),
@@ -358,7 +298,6 @@ describe('HoldMusicController', () => {
       removeItem: vi.fn((key: string) => storage.delete(key)),
     });
     storage.set('clawkie.holdMusic.muted.v1', '1');
-    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
     vi.stubGlobal('Audio', FakeAudioElement);
     const { HoldMusicController, getHoldMusicMuted, setHoldMusicMuted } = await import(
       '../client/src/voice/holdMusic'
@@ -367,134 +306,25 @@ describe('HoldMusicController', () => {
     const controller = new HoldMusicController();
     controller.start();
 
-    const ctx = FakeAudioContext.instances[0];
-    const audio = FakeAudioElement.instances[0];
+    const [music, hiss, crackle] = FakeAudioElement.instances;
     expect(getHoldMusicMuted()).toBe(true);
-    expect(audio.muted).toBe(true);
-    expect(ctx.gains[3].gain.value).toBe(0);
-    expect(ctx.gains[4].gain.value).toBe(0);
+    for (const audio of [music, hiss, crackle]) {
+      expect(audio.muted).toBe(true);
+      expect(audio.volume).toBe(0);
+    }
 
     setHoldMusicMuted(false);
 
     expect(storage.has('clawkie.holdMusic.muted.v1')).toBe(false);
-    expect(audio.muted).toBe(false);
-    expect(ctx.gains[3].gain.value).toBeCloseTo(0.15);
-    expect(ctx.gains[4].gain.value).toBeCloseTo(0.001);
+    expect(music.muted).toBe(false);
+    expect(music.volume).toBeCloseTo(0.15);
+    expect(hiss.muted).toBe(false);
+    expect(hiss.volume).toBeCloseTo(0.018);
+    expect(crackle.muted).toBe(false);
+    expect(crackle.volume).toBeCloseTo(0.026);
   });
 
-  it('waits for metadata, seeks into the middle of the track, loops, and routes through Web Audio', async () => {
-    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
-    vi.stubGlobal('Audio', FakeAudioElement);
-    const { HoldMusicController } = await import('../client/src/voice/holdMusic');
-
-    const controller = new HoldMusicController();
-    controller.start();
-
-    const ctx = FakeAudioContext.instances[0];
-    const audio = FakeAudioElement.instances[0];
-    expect(audio.loop).toBe(true);
-    expect(audio.preload).toBe('auto');
-    expect(audio.play).not.toHaveBeenCalled();
-
-    audio.duration = 100;
-    audio.dispatch('loadedmetadata');
-
-    expect(audio.currentTime).toBeGreaterThanOrEqual(15);
-    expect(audio.currentTime).toBeLessThanOrEqual(50);
-    expect(audio.play).toHaveBeenCalledTimes(1);
-    expect(ctx.mediaElementSources).toHaveLength(1);
-    expect(ctx.biquads[0].type).toBe('highpass');
-    expect(ctx.biquads[0].frequency.value).toBe(300);
-    expect(ctx.biquads[1].type).toBe('lowpass');
-    expect(ctx.biquads[1].frequency.value).toBe(4500);
-    expect(ctx.biquads[2].type).toBe('peaking');
-    expect(ctx.biquads[2].frequency.value).toBe(1500);
-    expect(ctx.biquads[2].gain.value).toBe(5);
-    expect(ctx.biquads[2].Q.value).toBe(1.2);
-    expect(ctx.waveShapers[0].curve).toBeInstanceOf(Float32Array);
-    expect(ctx.waveShapers[0].oversample).toBe('4x');
-    expect(ctx.compressors[0].threshold.value).toBe(-24);
-    expect(ctx.compressors[0].ratio.value).toBe(8);
-    expect(ctx.compressors[0].attack.value).toBe(0.003);
-    expect(ctx.compressors[0].release.value).toBe(0.1);
-    expect(ctx.gains[1].gain.value).toBe(1);
-    expect(ctx.gains[2].gain.value).toBeCloseTo(0.05);
-    expect(ctx.gains[3].gain.value).toBeCloseTo(0.15);
-    expect(ctx.oscillators[0].type).toBe('sine');
-    expect(ctx.oscillators[0].frequency.value).toBeCloseTo(0.4);
-    expect(ctx.biquads[3].type).toBe('highpass');
-    expect(ctx.biquads[3].frequency.value).toBe(300);
-    expect(ctx.biquads[4].type).toBe('lowpass');
-    expect(ctx.biquads[4].frequency.value).toBe(4500);
-    expect(ctx.biquads[5].type).toBe('peaking');
-    expect(ctx.biquads[5].frequency.value).toBe(2000);
-    expect(ctx.biquads[5].gain.value).toBe(5);
-    expect(ctx.mediaElementSources[0].connect).toHaveBeenCalledWith(ctx.biquads[0]);
-    expect(ctx.biquads[0].connect).toHaveBeenCalledWith(ctx.gains[0]);
-    expect(ctx.gains[0].connect).toHaveBeenCalledWith(ctx.biquads[1]);
-    expect(ctx.biquads[1].connect).toHaveBeenCalledWith(ctx.biquads[2]);
-    expect(ctx.biquads[2].connect).toHaveBeenCalledWith(ctx.waveShapers[0]);
-    expect(ctx.waveShapers[0].connect).toHaveBeenCalledWith(ctx.compressors[0]);
-    expect(ctx.compressors[0].connect).toHaveBeenCalledWith(ctx.gains[1]);
-    expect(ctx.gains[1].connect).toHaveBeenCalledWith(ctx.gains[3]);
-    expect(ctx.gains[3].connect).toHaveBeenCalledWith(ctx.destination);
-    expect(ctx.oscillators[0].connect).toHaveBeenCalledWith(ctx.gains[2]);
-    expect(ctx.gains[2].connect).toHaveBeenCalledWith(ctx.gains[1].gain);
-    expect(ctx.bufferSources[0].connect).toHaveBeenCalledWith(ctx.biquads[3]);
-    expect(ctx.bufferSources[1].connect).toHaveBeenCalledWith(ctx.biquads[3]);
-    expect(ctx.biquads[3].connect).toHaveBeenCalledWith(ctx.biquads[4]);
-    expect(ctx.biquads[4].connect).toHaveBeenCalledWith(ctx.biquads[5]);
-    expect(ctx.biquads[5].connect).toHaveBeenCalledWith(ctx.gains[4]);
-    expect(ctx.gains[4].gain.value).toBeCloseTo(0.001);
-    expect(ctx.gains[4].connect).toHaveBeenCalledWith(ctx.destination);
-    expect(ctx.bufferSources[0].buffer).not.toBe(ctx.bufferSources[1].buffer);
-    expect(countSamplesAbove(ctx.bufferSources[0].buffer?.getChannelData(0) ?? new Float32Array(), 0))
-      .toBeGreaterThan(90000);
-    expect(countSamplesAbove(ctx.bufferSources[1].buffer?.getChannelData(0) ?? new Float32Array(), 0))
-      .toBeLessThan(200);
-    expect(ctx.bufferSources[0].loop).toBe(true);
-    expect(ctx.bufferSources[1].loop).toBe(true);
-    expect(ctx.oscillators[0].start).toHaveBeenCalledWith(0);
-    expect(ctx.bufferSources[0].start).toHaveBeenCalledWith(0);
-    expect(ctx.bufferSources[1].start).toHaveBeenCalledWith(0);
-
-    controller.stop();
-
-    expect(audio.pause).toHaveBeenCalled();
-    expect(ctx.bufferSources[0].stop).toHaveBeenCalled();
-    expect(ctx.bufferSources[1].stop).toHaveBeenCalled();
-    expect(ctx.oscillators[0].stop).toHaveBeenCalled();
-    expect(ctx.mediaElementSources[0].disconnect).toHaveBeenCalled();
-  });
-
-  it('loads the bitcrusher worklet and inserts it before the music lowpass when supported', async () => {
-    const addModule = vi.fn(() => Promise.resolve());
-    FakeAudioContext.audioWorkletAddModule = addModule;
-    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
-    vi.stubGlobal('Audio', FakeAudioElement);
-    vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode);
-    const { HoldMusicController } = await import('../client/src/voice/holdMusic');
-
-    const controller = new HoldMusicController();
-    controller.start();
-    await flushPromises();
-
-    const ctx = FakeAudioContext.instances[0];
-    const worklet = FakeAudioWorkletNode.instances[0];
-    expect(addModule).toHaveBeenCalledWith('/audio/bitcrusher-processor.js');
-    expect(worklet.name).toBe('hold-music-bitcrusher');
-    expect(worklet.parameters.get('bits')?.value).toBe(8);
-    expect(worklet.parameters.get('normFreq')?.value).toBe(0.4);
-    expect(ctx.biquads[0].disconnect).toHaveBeenCalledWith(ctx.gains[0]);
-    expect(ctx.gains[0].disconnect).toHaveBeenCalledWith(ctx.biquads[1]);
-    expect(ctx.biquads[0].connect).toHaveBeenCalledWith(worklet);
-    expect(worklet.connect).toHaveBeenCalledWith(ctx.biquads[1]);
-
-    controller.stop();
-    expect(worklet.disconnect).toHaveBeenCalled();
-  });
-
-  it('exposes a hold music analyser tapped from the music bed and clears it on stop', async () => {
+  it('exposes a best-effort analyser without routing audible playback through Web Audio', async () => {
     vi.stubGlobal('window', { AudioContext: FakeAudioContext });
     vi.stubGlobal('Audio', FakeAudioElement);
     const { HoldMusicController, getActiveHoldMusicAnalyser } = await import(
@@ -506,6 +336,10 @@ describe('HoldMusicController', () => {
     const controller = new HoldMusicController();
     controller.start();
 
+    const music = FakeAudioElement.instances[0];
+    music.duration = 100;
+    music.dispatch('loadedmetadata');
+
     const ctx = FakeAudioContext.instances[0];
     expect(ctx.analysers).toHaveLength(1);
     const analyser = ctx.analysers[0];
@@ -513,8 +347,10 @@ describe('HoldMusicController', () => {
     expect(analyser.smoothingTimeConstant).toBeCloseTo(0.1);
     expect(analyser.minDecibels).toBe(-90);
     expect(analyser.maxDecibels).toBe(-10);
-    expect(ctx.gains[3].connect).toHaveBeenCalledWith(ctx.destination);
-    expect(ctx.gains[3].connect).toHaveBeenCalledWith(analyser);
+    expect(ctx.mediaElementSources).toHaveLength(1);
+    expect(ctx.mediaElementSources[0].element).not.toBe(music);
+    expect(ctx.mediaElementSources[0].connect).toHaveBeenCalledWith(analyser);
+    expect(ctx.mediaElementSources[0].connect).not.toHaveBeenCalledWith(ctx.destination);
     expect(getActiveHoldMusicAnalyser()).toBe(analyser as unknown as AnalyserNode);
 
     controller.stop();
@@ -523,27 +359,68 @@ describe('HoldMusicController', () => {
     expect(getActiveHoldMusicAnalyser()).toBeNull();
   });
 
-  it('keeps the fallback bitcrusher slot when the worklet fails to load', async () => {
-    const addModule = vi.fn(() => Promise.reject(new Error('no worklet')));
-    FakeAudioContext.audioWorkletAddModule = addModule;
+
+  it('does not create the duplicate analyser playback while hold music is muted', async () => {
+    const storage = new Map<string, string>([['clawkie.holdMusic.muted.v1', '1']]);
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn((key: string) => storage.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => storage.set(key, value)),
+      removeItem: vi.fn((key: string) => storage.delete(key)),
+    });
     vi.stubGlobal('window', { AudioContext: FakeAudioContext });
     vi.stubGlobal('Audio', FakeAudioElement);
-    vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode);
-    const { HoldMusicController } = await import('../client/src/voice/holdMusic');
+    const { HoldMusicController, getActiveHoldMusicAnalyser } = await import(
+      '../client/src/voice/holdMusic'
+    );
 
     const controller = new HoldMusicController();
     controller.start();
-    const ctx = FakeAudioContext.instances[0];
-    const audio = FakeAudioElement.instances[0];
-    audio.duration = 100;
-    audio.dispatch('loadedmetadata');
-    await flushPromises();
 
-    expect(addModule).toHaveBeenCalledWith('/audio/bitcrusher-processor.js');
-    expect(FakeAudioWorkletNode.instances).toHaveLength(0);
-    expect(ctx.biquads[0].connect).toHaveBeenCalledWith(ctx.gains[0]);
-    expect(ctx.gains[0].connect).toHaveBeenCalledWith(ctx.biquads[1]);
-    expect(audio.play).toHaveBeenCalledTimes(1);
+    const music = FakeAudioElement.instances[0];
+    music.duration = 100;
+    music.dispatch('loadedmetadata');
+
+    expect(FakeAudioElement.instances).toHaveLength(3);
+    expect(FakeAudioContext.instances).toHaveLength(0);
+    expect(getActiveHoldMusicAnalyser()).toBeNull();
+  });
+
+  it('stops and clears the hold music analyser when muted during playback', async () => {
+    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+    vi.stubGlobal('Audio', FakeAudioElement);
+    const { HoldMusicController, getActiveHoldMusicAnalyser, setHoldMusicMuted } = await import(
+      '../client/src/voice/holdMusic'
+    );
+
+    const controller = new HoldMusicController();
+    controller.start();
+
+    const music = FakeAudioElement.instances[0];
+    music.duration = 100;
+    music.dispatch('loadedmetadata');
+
+    const ctx = FakeAudioContext.instances[0];
+    const source = ctx.mediaElementSources[0];
+    const analyser = ctx.analysers[0];
+    const analyserAudio = source.element;
+    expect(getActiveHoldMusicAnalyser()).toBe(analyser as unknown as AnalyserNode);
+
+    setHoldMusicMuted(true);
+
+    expect(music.muted).toBe(true);
+    expect(music.volume).toBe(0);
+    expect(FakeAudioElement.instances[1].muted).toBe(true);
+    expect(FakeAudioElement.instances[2].muted).toBe(true);
+    expect(analyserAudio.pause).toHaveBeenCalled();
+    expect(analyserAudio.removeAttribute).toHaveBeenCalledWith('src');
+    expect(source.disconnect).toHaveBeenCalled();
+    expect(analyser.disconnect).toHaveBeenCalled();
+    expect(getActiveHoldMusicAnalyser()).toBeNull();
+
+    setHoldMusicMuted(false);
+
+    expect(getActiveHoldMusicAnalyser()).toBeNull();
+    expect(ctx.analysers).toHaveLength(1);
   });
 });
 

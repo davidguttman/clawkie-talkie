@@ -1,24 +1,17 @@
 import { HOLD_MUSIC_TRACKS } from 'virtual:hold-music-tracks';
 
-const MUSIC_GAIN = 0.15;
-const NOISE_GAIN = 0.001;
-const MUSIC_HIGHPASS_HZ = 300;
-const MUSIC_LOWPASS_HZ = 4500;
-const MUSIC_MIDRANGE_HZ = 1500;
-const MUSIC_MIDRANGE_GAIN_DB = 5;
-const MUSIC_MIDRANGE_Q = 1.2;
+const MUSIC_VOLUME = 0.15;
+const HISS_VOLUME = 0.018;
+const CRACKLE_VOLUME = 0.026;
+const HOLD_MUSIC_LAYER_TRACKS: readonly HoldMusicLayerSpec[] = [
+  { url: '/music-layers/hiss.mp3', volume: HISS_VOLUME },
+  { url: '/music-layers/crackle.mp3', volume: CRACKLE_VOLUME },
+];
 const MUSIC_SATURATION_DRIVE = 0.35;
-const MUSIC_WOBBLE_HZ = 0.4;
-const MUSIC_WOBBLE_DEPTH = 0.05;
-const NOISE_FREQ_HZ = 2000;
 const NOISE_BUFFER_SECONDS = 2;
 const CRACKLES_PER_SECOND = 5;
 const CRACKLE_MIN_AMPLITUDE = 0.28;
 const CRACKLE_EXTRA_AMPLITUDE = 0.22;
-const BITCRUSHER_WORKLET_URL = '/audio/bitcrusher-processor.js';
-const BITCRUSHER_PROCESSOR_NAME = 'hold-music-bitcrusher';
-const BITCRUSHER_BITS = 8;
-const BITCRUSHER_NORM_FREQ = 0.4;
 const HOLD_MUSIC_FFT_SIZE = 64;
 const HOLD_MUSIC_SMOOTHING = 0.1;
 const HOLD_MUSIC_MIN_DECIBELS = -90;
@@ -29,6 +22,16 @@ let activeHoldMusicAnalyser: AnalyserNode | null = null;
 
 interface PreloadedHoldMusicTrack {
   audio: HTMLAudioElement;
+}
+
+interface HoldMusicLayerSpec {
+  url: string;
+  volume: number;
+}
+
+interface HoldMusicAudioEntry {
+  audio: HTMLAudioElement;
+  volume: number;
 }
 
 let shuffledHoldMusicDeck: string[] = [];
@@ -46,9 +49,8 @@ const muteListeners = new Set<(muted: boolean) => void>();
 const activeMuteTargets = new Set<HoldMusicMuteTarget>();
 
 interface HoldMusicMuteTarget {
-  audio: HTMLAudioElement;
-  musicGain: GainNode;
-  noiseGain: GainNode;
+  entries: readonly HoldMusicAudioEntry[];
+  onMuteChanged?: (muted: boolean) => void;
 }
 
 function readMuteFromStorage(): boolean {
@@ -81,7 +83,10 @@ export function setHoldMusicMuted(muted: boolean): void {
   if (holdMusicMuted === next) return;
   holdMusicMuted = next;
   writeMuteToStorage(next);
-  for (const target of activeMuteTargets) applyHoldMusicMute(target, next);
+  for (const target of activeMuteTargets) {
+    applyHoldMusicMute(target, next);
+    try { target.onMuteChanged?.(next); } catch { /* target errors must not break audio */ }
+  }
   for (const listener of muteListeners) {
     try { listener(next); } catch { /* listener errors must not break audio */ }
   }
@@ -93,32 +98,27 @@ export function subscribeHoldMusicMuted(listener: (muted: boolean) => void): () 
 }
 
 function applyHoldMusicMute(target: HoldMusicMuteTarget, muted: boolean): void {
-  target.audio.muted = muted;
-  target.musicGain.gain.value = muted ? 0 : MUSIC_GAIN;
-  target.noiseGain.gain.value = muted ? 0 : NOISE_GAIN;
+  for (const entry of target.entries) {
+    try {
+      entry.audio.muted = muted;
+      entry.audio.volume = muted ? 0 : entry.volume;
+    } catch {
+      // Element volume/mute can fail in unusual browser states; keep the rest of the bed alive.
+    }
+  }
+}
+
+interface HoldMusicAnalyserSession {
+  audio: HTMLAudioElement;
+  source: MediaElementAudioSourceNode;
+  analyser: AnalyserNode;
 }
 
 interface HoldMusicSession {
   audio: HTMLAudioElement;
+  layers: HoldMusicAudioEntry[];
   muteTarget: HoldMusicMuteTarget;
-  source: MediaElementAudioSourceNode;
-  musicHighpass: BiquadFilterNode;
-  musicBitcrusher: AudioNode;
-  musicLowpass: BiquadFilterNode;
-  musicMidPeak: BiquadFilterNode;
-  musicSaturation: WaveShaperNode;
-  musicCompressor: DynamicsCompressorNode;
-  musicWobble: GainNode;
-  musicWobbleOscillator: OscillatorNode;
-  musicWobbleDepth: GainNode;
-  musicGain: GainNode;
-  musicAnalyser: AnalyserNode | null;
-  hissSource: AudioBufferSourceNode;
-  crackleSource: AudioBufferSourceNode;
-  noiseHighpass: BiquadFilterNode;
-  noiseLowpass: BiquadFilterNode;
-  noiseMidPeak: BiquadFilterNode;
-  noiseGain: GainNode;
+  analyserSession: HoldMusicAnalyserSession | null;
   started: boolean;
   stopped: boolean;
   onMetadata: () => void;
@@ -137,9 +137,7 @@ export class HoldMusicController {
   start(): void {
     this.stop();
 
-    const audioCtx = getSharedHoldAudioContext();
-    if (!audioCtx || typeof Audio === 'undefined') return;
-    void resumeAudioContext(audioCtx);
+    if (typeof Audio === 'undefined') return;
 
     try {
       const audio = consumePreloadedHoldMusicAudio();
@@ -147,139 +145,27 @@ export class HoldMusicController {
       audio.loop = true;
       audio.preload = 'auto';
 
-      const source = audioCtx.createMediaElementSource(audio);
-      const musicHighpass = audioCtx.createBiquadFilter();
-      const musicBitcrusher = audioCtx.createGain();
-      const musicLowpass = audioCtx.createBiquadFilter();
-      const musicMidPeak = audioCtx.createBiquadFilter();
-      const musicSaturation = audioCtx.createWaveShaper();
-      const musicCompressor = audioCtx.createDynamicsCompressor();
-      const musicWobble = audioCtx.createGain();
-      const musicWobbleOscillator = audioCtx.createOscillator();
-      const musicWobbleDepth = audioCtx.createGain();
-      const musicGain = audioCtx.createGain();
-      const hissSource = createHissSource(audioCtx);
-      const crackleSource = createCrackleSource(audioCtx);
-      const noiseHighpass = audioCtx.createBiquadFilter();
-      const noiseLowpass = audioCtx.createBiquadFilter();
-      const noiseMidPeak = audioCtx.createBiquadFilter();
-      const noiseGain = audioCtx.createGain();
-      let session: HoldMusicSession;
+      const layers = createHoldMusicLayerEntries();
+      const entries = [{ audio, volume: MUSIC_VOLUME }, ...layers];
+      const muteTarget: HoldMusicMuteTarget = { entries };
 
-      musicHighpass.type = 'highpass';
-      musicHighpass.frequency.value = MUSIC_HIGHPASS_HZ;
-      musicHighpass.Q.value = 0.8;
-
-      musicLowpass.type = 'lowpass';
-      musicLowpass.frequency.value = MUSIC_LOWPASS_HZ;
-      musicLowpass.Q.value = 0.7;
-
-      musicMidPeak.type = 'peaking';
-      musicMidPeak.frequency.value = MUSIC_MIDRANGE_HZ;
-      musicMidPeak.Q.value = MUSIC_MIDRANGE_Q;
-      musicMidPeak.gain.value = MUSIC_MIDRANGE_GAIN_DB;
-
-      musicSaturation.curve = createAmifySaturationCurve();
-      musicSaturation.oversample = '4x';
-
-      musicCompressor.threshold.value = -24;
-      musicCompressor.knee.value = 18;
-      musicCompressor.ratio.value = 8;
-      musicCompressor.attack.value = 0.003;
-      musicCompressor.release.value = 0.1;
-
-      musicWobble.gain.value = 1;
-      musicWobbleOscillator.type = 'sine';
-      musicWobbleOscillator.frequency.value = MUSIC_WOBBLE_HZ;
-      musicWobbleDepth.gain.value = MUSIC_WOBBLE_DEPTH;
-      musicGain.gain.value = MUSIC_GAIN;
-
-      noiseHighpass.type = 'highpass';
-      noiseHighpass.frequency.value = MUSIC_HIGHPASS_HZ;
-      noiseHighpass.Q.value = 0.8;
-
-      noiseLowpass.type = 'lowpass';
-      noiseLowpass.frequency.value = MUSIC_LOWPASS_HZ;
-      noiseLowpass.Q.value = 0.7;
-
-      noiseMidPeak.type = 'peaking';
-      noiseMidPeak.frequency.value = NOISE_FREQ_HZ;
-      noiseMidPeak.Q.value = MUSIC_MIDRANGE_Q;
-      noiseMidPeak.gain.value = MUSIC_MIDRANGE_GAIN_DB;
-
-      noiseGain.gain.value = NOISE_GAIN;
-      const muteTarget = { audio, musicGain, noiseGain };
-      applyHoldMusicMute(muteTarget, getHoldMusicMuted());
-
-      source.connect(musicHighpass);
-      musicHighpass.connect(musicBitcrusher);
-      musicBitcrusher.connect(musicLowpass);
-      musicLowpass.connect(musicMidPeak);
-      musicMidPeak.connect(musicSaturation);
-      musicSaturation.connect(musicCompressor);
-      musicCompressor.connect(musicWobble);
-      musicWobble.connect(musicGain);
-      musicGain.connect(audioCtx.destination);
-      const musicAnalyser = createHoldMusicAnalyser(audioCtx);
-      if (musicAnalyser) {
-        try {
-          musicGain.connect(musicAnalyser);
-        } catch {
-          // analyser tap is best-effort; never block playback
-        }
-      }
-      musicWobbleOscillator.connect(musicWobbleDepth);
-      musicWobbleDepth.connect(musicWobble.gain);
-
-      hissSource.connect(noiseHighpass);
-      crackleSource.connect(noiseHighpass);
-      noiseHighpass.connect(noiseLowpass);
-      noiseLowpass.connect(noiseMidPeak);
-      noiseMidPeak.connect(noiseGain);
-      noiseGain.connect(audioCtx.destination);
-
-      void installBitcrusherWorklet(
-        audioCtx,
-        musicHighpass,
-        musicBitcrusher,
-        musicLowpass,
-        () => this.session === session && !session.stopped,
-      ).then((workletNode) => {
-        if (workletNode && this.session === session && !session.stopped) {
-          session.musicBitcrusher = workletNode;
-        }
-      });
-
-      session = {
+      const session: HoldMusicSession = {
         audio,
+        layers,
         muteTarget,
-        source,
-        musicHighpass,
-        musicBitcrusher,
-        musicLowpass,
-        musicMidPeak,
-        musicSaturation,
-        musicCompressor,
-        musicWobble,
-        musicWobbleOscillator,
-        musicWobbleDepth,
-        musicGain,
-        musicAnalyser,
-        hissSource,
-        crackleSource,
-        noiseHighpass,
-        noiseLowpass,
-        noiseMidPeak,
-        noiseGain,
+        analyserSession: null,
         started: false,
         stopped: false,
         onMetadata: () => {
           this.beginSession(session);
         },
       };
+      muteTarget.onMuteChanged = (muted) => {
+        this.handleSessionMuteChange(session, muted);
+      };
+      applyHoldMusicMute(muteTarget, getHoldMusicMuted());
       this.session = session;
       activeMuteTargets.add(muteTarget);
-      activeHoldMusicAnalyser = musicAnalyser;
 
       if (hasKnownDuration(audio)) {
         this.beginSession(session);
@@ -301,66 +187,19 @@ export class HoldMusicController {
       return;
     }
     session.stopped = true;
-    if (session.musicAnalyser && activeHoldMusicAnalyser === session.musicAnalyser) {
-      activeHoldMusicAnalyser = null;
-    }
     activeMuteTargets.delete(session.muteTarget);
+    cleanupAnalyserSession(session.analyserSession);
+    session.analyserSession = null;
 
     try {
       session.audio.removeEventListener('loadedmetadata', session.onMetadata);
       session.audio.removeEventListener('durationchange', session.onMetadata);
-      session.audio.pause();
-      session.audio.removeAttribute('src');
-      session.audio.load();
     } catch {
       // best-effort cleanup
     }
+    cleanupAudioElement(session.audio);
 
-    try {
-      session.hissSource.stop();
-    } catch {
-      // already stopped or never started
-    }
-
-    try {
-      session.crackleSource.stop();
-    } catch {
-      // already stopped or never started
-    }
-
-    try {
-      session.musicWobbleOscillator.stop();
-    } catch {
-      // already stopped or never started
-    }
-
-    for (const node of [
-      session.source,
-      session.musicHighpass,
-      session.musicBitcrusher,
-      session.musicLowpass,
-      session.musicMidPeak,
-      session.musicSaturation,
-      session.musicCompressor,
-      session.musicWobble,
-      session.musicWobbleOscillator,
-      session.musicWobbleDepth,
-      session.musicGain,
-      session.musicAnalyser,
-      session.hissSource,
-      session.crackleSource,
-      session.noiseHighpass,
-      session.noiseLowpass,
-      session.noiseMidPeak,
-      session.noiseGain,
-    ]) {
-      if (!node) continue;
-      try {
-        node.disconnect();
-      } catch {
-        // already disconnected
-      }
-    }
+    for (const layer of session.layers) cleanupAudioElement(layer.audio);
 
     preloadNextHoldMusicTrack();
   }
@@ -370,15 +209,57 @@ export class HoldMusicController {
     if (!hasKnownDuration(session.audio)) return;
 
     session.started = true;
-    session.audio.currentTime = pickRandomStartTime(session.audio.duration);
-    session.musicWobbleOscillator.start(0);
-    session.hissSource.start(0);
-    session.crackleSource.start(0);
-    void session.audio.play().catch(() => {
+    const startTime = pickRandomStartTime(session.audio.duration);
+    try {
+      session.audio.currentTime = startTime;
+    } catch {
+      // Some browsers reject seeks until more data is buffered; starting at zero is acceptable.
+    }
+
+    if (!getHoldMusicMuted()) {
+      const analyserSession = createBestEffortAnalyserSession(session.audio.src, startTime);
+      session.analyserSession = analyserSession;
+      if (analyserSession) activeHoldMusicAnalyser = analyserSession.analyser;
+    }
+
+    const playMain = session.audio.play();
+    void playMain.catch(() => {
       if (this.session === session && !session.stopped) {
         this.stop();
       }
     });
+
+    for (const layer of session.layers) {
+      try {
+        layer.audio.currentTime = 0;
+      } catch {
+        // best-effort layer alignment
+      }
+      void layer.audio.play().catch(() => {
+        // Static layers are decorative; main hold music should keep playing without them.
+      });
+    }
+
+    if (session.analyserSession) {
+      const analyserSession = session.analyserSession;
+      try {
+        analyserSession.audio.currentTime = startTime;
+      } catch {
+        // analyser is non-essential
+      }
+      void analyserSession.audio.play().catch(() => {
+        if (this.session === session && session.analyserSession === analyserSession) {
+          cleanupAnalyserSession(analyserSession);
+          session.analyserSession = null;
+        }
+      });
+    }
+  }
+
+  private handleSessionMuteChange(session: HoldMusicSession, muted: boolean): void {
+    if (!muted || this.session !== session || session.stopped || !session.analyserSession) return;
+    cleanupAnalyserSession(session.analyserSession);
+    session.analyserSession = null;
   }
 }
 
@@ -444,6 +325,23 @@ function holdMusicTrackUrl(track: string): string {
   return `/music/${encodeURIComponent(track)}`;
 }
 
+function createHoldMusicLayerEntries(): HoldMusicAudioEntry[] {
+  if (typeof Audio === 'undefined') return [];
+  const entries: HoldMusicAudioEntry[] = [];
+  for (const layer of HOLD_MUSIC_LAYER_TRACKS) {
+    try {
+      const audio = new Audio(layer.url);
+      audio.loop = true;
+      audio.preload = 'auto';
+      audio.load();
+      entries.push({ audio, volume: layer.volume });
+    } catch {
+      // Static layers are nice-to-have; do not block the music track.
+    }
+  }
+  return entries;
+}
+
 preloadNextHoldMusicTrack();
 
 export function pickRandomStartTime(duration: number, random: () => number = Math.random): number {
@@ -454,6 +352,60 @@ export function pickRandomStartTime(duration: number, random: () => number = Mat
 
 function hasKnownDuration(audio: HTMLAudioElement): boolean {
   return Number.isFinite(audio.duration) && audio.duration > 0;
+}
+
+function cleanupAudioElement(audio: HTMLAudioElement): void {
+  try {
+    audio.pause();
+    audio.removeAttribute('src');
+    audio.load();
+  } catch {
+    // best-effort cleanup
+  }
+}
+
+function createBestEffortAnalyserSession(
+  trackUrl: string,
+  startTime: number,
+): HoldMusicAnalyserSession | null {
+  if (typeof Audio === 'undefined') return null;
+  const audioCtx = getSharedHoldAudioContext();
+  if (!audioCtx) return null;
+  void resumeAudioContext(audioCtx);
+
+  try {
+    const audio = new Audio(trackUrl);
+    audio.loop = true;
+    audio.preload = 'auto';
+    const source = audioCtx.createMediaElementSource(audio);
+    const analyser = createHoldMusicAnalyser(audioCtx);
+    if (!analyser) {
+      source.disconnect();
+      return null;
+    }
+    source.connect(analyser);
+    try {
+      audio.currentTime = startTime;
+    } catch {
+      // analyser is non-essential
+    }
+    return { audio, source, analyser };
+  } catch {
+    return null;
+  }
+}
+
+function cleanupAnalyserSession(session: HoldMusicAnalyserSession | null): void {
+  if (!session) return;
+  if (activeHoldMusicAnalyser === session.analyser) activeHoldMusicAnalyser = null;
+  cleanupAudioElement(session.audio);
+  for (const node of [session.source, session.analyser]) {
+    try {
+      node.disconnect();
+    } catch {
+      // already disconnected
+    }
+  }
 }
 
 function getSharedHoldAudioContext(): AudioContext | null {
@@ -564,57 +516,6 @@ function createHoldMusicAnalyser(audioCtx: AudioContext): AnalyserNode | null {
     analyser.minDecibels = HOLD_MUSIC_MIN_DECIBELS;
     analyser.maxDecibels = HOLD_MUSIC_MAX_DECIBELS;
     return analyser;
-  } catch {
-    return null;
-  }
-}
-
-function createHissSource(audioCtx: AudioContext): AudioBufferSourceNode {
-  const length = Math.max(1, Math.floor((audioCtx.sampleRate || 48000) * NOISE_BUFFER_SECONDS));
-  const buffer = audioCtx.createBuffer(1, length, audioCtx.sampleRate || 48000);
-  const samples = buffer.getChannelData(0);
-  samples.set(generateRadioHissSamples({ sampleRate: audioCtx.sampleRate || 48000 }));
-  const source = audioCtx.createBufferSource();
-  source.buffer = buffer;
-  source.loop = true;
-  return source;
-}
-
-function createCrackleSource(audioCtx: AudioContext): AudioBufferSourceNode {
-  const length = Math.max(1, Math.floor((audioCtx.sampleRate || 48000) * NOISE_BUFFER_SECONDS));
-  const buffer = audioCtx.createBuffer(1, length, audioCtx.sampleRate || 48000);
-  const samples = buffer.getChannelData(0);
-  samples.set(generateRadioCrackleSamples({ sampleRate: audioCtx.sampleRate || 48000 }));
-  const source = audioCtx.createBufferSource();
-  source.buffer = buffer;
-  source.loop = true;
-  return source;
-}
-
-async function installBitcrusherWorklet(
-  audioCtx: AudioContext,
-  upstream: AudioNode,
-  fallback: AudioNode,
-  downstream: AudioNode,
-  shouldInstall: () => boolean,
-): Promise<AudioWorkletNode | null> {
-  if (!audioCtx.audioWorklet || typeof AudioWorkletNode === 'undefined') return null;
-
-  try {
-    await audioCtx.audioWorklet.addModule(BITCRUSHER_WORKLET_URL);
-    if (!shouldInstall()) return null;
-
-    const workletNode = new AudioWorkletNode(audioCtx, BITCRUSHER_PROCESSOR_NAME);
-    workletNode.parameters.get('bits')?.setValueAtTime(BITCRUSHER_BITS, audioCtx.currentTime);
-    workletNode.parameters
-      .get('normFreq')
-      ?.setValueAtTime(BITCRUSHER_NORM_FREQ, audioCtx.currentTime);
-
-    upstream.disconnect(fallback);
-    fallback.disconnect(downstream);
-    upstream.connect(workletNode);
-    workletNode.connect(downstream);
-    return workletNode;
   } catch {
     return null;
   }
