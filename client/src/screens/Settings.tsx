@@ -1,9 +1,9 @@
-import { useEffect, type Dispatch, type ReactNode, type SetStateAction } from 'react';
+import { useEffect, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { HIFI } from '../tokens';
 import { ScreenHeader, ScrollBody } from '../components/ScreenChrome';
 import { DEFAULT_MUSIC_SETTINGS, type MusicSettings, type Settings } from '../storage';
 import { setHoldMusicSettings, subscribeHoldMusicMuted } from '../voice/holdMusic';
-import { getHoldMusicTrackOptions } from '../voice/holdMusicCatalog';
+import { getHoldMusicTrackOptions, type HoldMusicTrackOption } from '../voice/holdMusicCatalog';
 import type { SttCatalog, SttSelection, TtsCatalog, TtsSelection } from '../voice/protocol';
 
 // TTS provider credentials are NOT stored on the phone — OpenClaw owns
@@ -249,28 +249,26 @@ export function SettingsScreen({
 
         <SettingsSection title="MUSIC">
           <ToggleRow
-            label="Mute hold music"
-            sub="Silence the waiting-room bed while Clawkie is thinking."
-            value={musicSettings.muted}
-            setValue={(muted) => updateMusicSettings({ ...musicSettings, muted })}
+            label="Hold music"
+            sub="Play hold music while waiting for a response"
+            value={!musicSettings.muted}
+            setValue={(enabled) => updateMusicSettings({ ...musicSettings, muted: !enabled })}
           />
           <ToggleRow
             label="Audio effects"
-            sub="Adds the hiss and crackle layer over the public hold tracks."
+            sub="Add hiss, crackle, and distortion for that true “on hold” feel"
             value={musicSettings.effects}
             setValue={(effects) => updateMusicSettings({ ...musicSettings, effects })}
           />
-          {musicTracks.length > 0 ? musicTracks.map((track) => (
-            <ToggleRow
-              key={track.id}
-              label={track.label}
-              sub={track.id}
-              value={!musicSettings.disabledTracks.includes(track.id)}
-              setValue={(enabled) => updateMusicSettings(
-                musicSettingsWithTrackEnabled(musicSettings, track.id, enabled),
+          {musicTracks.length > 0 ? (
+            <SongsSubCategory
+              tracks={musicTracks}
+              disabledTrackIds={musicSettings.disabledTracks}
+              onToggle={(trackId, enabled) => updateMusicSettings(
+                musicSettingsWithTrackEnabled(musicSettings, trackId, enabled),
               )}
             />
-          )) : (
+          ) : (
             <StatusRow text="No hold music tracks available" />
           )}
         </SettingsSection>
@@ -806,6 +804,89 @@ function StatusRow({ text, onRefresh }: { text: string; onRefresh?: () => void }
         >
           Refresh
         </button>
+      )}
+    </div>
+  );
+}
+
+function SongsSubCategory({
+  tracks,
+  disabledTrackIds,
+  onToggle,
+}: {
+  tracks: HoldMusicTrackOption[];
+  disabledTrackIds: string[];
+  onToggle: (trackId: string, enabled: boolean) => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const noneEnabled = tracks.every((t) => disabledTrackIds.includes(t.id));
+
+  return (
+    <div style={{ borderBottom: `1px solid ${HIFI.stroke}` }}>
+      <div
+        style={{
+          padding: '13px 14px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          cursor: 'pointer',
+          userSelect: 'none',
+        }}
+        onClick={() => setOpen((v) => !v)}
+        role="button"
+        aria-expanded={open}
+        aria-label="Songs, expand"
+      >
+        <div
+          style={{
+            fontSize: 13,
+            color: HIFI.ink,
+            fontFamily: HIFI.fonts.sans,
+          }}
+        >
+          Songs
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {!open && noneEnabled && (
+            <span
+              style={{
+                fontSize: 11,
+                fontFamily: HIFI.fonts.mono,
+                fontWeight: 700,
+                letterSpacing: 1,
+                textTransform: 'uppercase',
+                color: HIFI.ink3,
+              }}
+            >
+              None
+            </span>
+          )}
+          <span
+            style={{
+              fontSize: 16,
+              color: HIFI.ink3,
+              lineHeight: 1,
+              transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
+              transition: 'transform 200ms',
+            }}
+            aria-hidden
+          >
+            ▼
+          </span>
+        </div>
+      </div>
+      {open && (
+        <div>
+          {tracks.map((track) => (
+            <ToggleRow
+              key={track.id}
+              label={track.label}
+              value={!disabledTrackIds.includes(track.id)}
+              setValue={(enabled) => onToggle(track.id, enabled)}
+            />
+          ))}
+        </div>
       )}
     </div>
   );

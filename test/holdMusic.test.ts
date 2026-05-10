@@ -249,10 +249,10 @@ describe('HoldMusicController', () => {
     expect(preloaded.volume).toBeCloseTo(0.15);
     expect(FakeAudioElement.instances[1].src).toBe('/music-layers/hiss.mp3');
     expect(FakeAudioElement.instances[1].loop).toBe(true);
-    expect(FakeAudioElement.instances[1].volume).toBeCloseTo(0.0045);
+    expect(FakeAudioElement.instances[1].volume).toBeCloseTo(0.00225);
     expect(FakeAudioElement.instances[2].src).toBe('/music-layers/crackle.mp3');
     expect(FakeAudioElement.instances[2].loop).toBe(true);
-    expect(FakeAudioElement.instances[2].volume).toBeCloseTo(0.0065);
+    expect(FakeAudioElement.instances[2].volume).toBeCloseTo(0.00325);
     expect(preloaded.play).not.toHaveBeenCalled();
 
     preloaded.duration = 100;
@@ -464,9 +464,9 @@ describe('HoldMusicController', () => {
     expect(music.muted).toBe(false);
     expect(music.volume).toBeCloseTo(0.15);
     expect(hiss.muted).toBe(false);
-    expect(hiss.volume).toBeCloseTo(0.0045);
+    expect(hiss.volume).toBeCloseTo(0.00225);
     expect(crackle.muted).toBe(false);
-    expect(crackle.volume).toBeCloseTo(0.0065);
+    expect(crackle.volume).toBeCloseTo(0.00325);
   });
 
   it('notifies mute subscribers for external mute changes', async () => {

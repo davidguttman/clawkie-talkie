@@ -122,14 +122,14 @@ describe('SettingsScreen toggle accessibility', () => {
         (button) => button.getAttribute('aria-label') === label,
       );
       const includeTimestamps = switchByLabel('Include timestamps');
-      const muteHoldMusic = switchByLabel('Mute hold music');
+      const holdMusic = switchByLabel('Hold music');
       const audioEffects = switchByLabel('Audio effects');
 
       expect(includeTimestamps?.getAttribute('aria-checked')).toBe('true');
-      expect(muteHoldMusic?.getAttribute('aria-checked')).toBe('false');
+      expect(holdMusic?.getAttribute('aria-checked')).toBe('true');
       expect(audioEffects?.getAttribute('aria-checked')).toBe('true');
 
-      for (const toggle of [includeTimestamps, muteHoldMusic, audioEffects]) {
+      for (const toggle of [includeTimestamps, holdMusic, audioEffects]) {
         expect(toggle).toBeDefined();
         expect(toggle?.style.width).toBe('44px');
         expect(toggle?.style.height).toBe('44px');
@@ -140,6 +140,77 @@ describe('SettingsScreen toggle accessibility', () => {
         expect(visualSwitch?.style.width).toBe('40px');
         expect(visualSwitch?.style.height).toBe('24px');
       }
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('renders song picker rows as named switches with positive enabled semantics', async () => {
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    holdMusicMock.setHoldMusicSettings.mockClear();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const initialSettings: Settings = {
+      voice: '',
+      tts: {},
+      stt: {},
+      format: 'md',
+      timestamps: false,
+      music: { muted: false, effects: true, disabledTracks: ['Soft Hold Tone.mp3'] },
+    };
+
+    function Harness() {
+      const [settings, setSettings] = useState(initialSettings);
+      return createElement(SettingsScreen, {
+        onBack: () => undefined,
+        settings,
+        setSettings,
+        ttsCatalog: null,
+        sttCatalog: null,
+        compact: true,
+      });
+    }
+
+    try {
+      await act(async () => {
+        root.render(createElement(Harness));
+      });
+
+      expect(container.querySelector('input[type="checkbox"]')).toBeNull();
+
+      await act(async () => {
+        container.querySelector<HTMLDivElement>('[role="button"][aria-label="Songs, expand"]')?.click();
+      });
+
+      const softHoldTone = () => container.querySelector<HTMLButtonElement>(
+        'button[role="switch"][aria-label="Soft Hold Tone"]',
+      );
+      const docksideHold = container.querySelector<HTMLButtonElement>(
+        'button[role="switch"][aria-label="Dockside Hold"]',
+      );
+
+      expect(container.querySelector('input[type="checkbox"]')).toBeNull();
+      expect(container.querySelector('[aria-label="Soft Hold Tone.mp3"]')).toBeNull();
+      expect(softHoldTone()?.getAttribute('aria-checked')).toBe('false');
+      expect(docksideHold?.getAttribute('aria-checked')).toBe('true');
+      expect(softHoldTone()?.style.width).toBe('44px');
+      expect(softHoldTone()?.style.height).toBe('44px');
+
+      await act(async () => {
+        softHoldTone()?.click();
+      });
+
+      expect(softHoldTone()?.getAttribute('aria-checked')).toBe('true');
+      expect(holdMusicMock.setHoldMusicSettings).toHaveBeenLastCalledWith({
+        muted: false,
+        effects: true,
+        disabledTracks: [],
+      });
     } finally {
       await act(async () => {
         root.unmount();
@@ -181,18 +252,18 @@ describe('SettingsScreen toggle accessibility', () => {
       await act(async () => {
         root.render(createElement(Harness));
       });
-      const muteSwitch = () => container.querySelector<HTMLButtonElement>(
-        'button[role="switch"][aria-label="Mute hold music"]',
+      const holdMusicSwitch = () => container.querySelector<HTMLButtonElement>(
+        'button[role="switch"][aria-label="Hold music"]',
       );
 
-      expect(muteSwitch()?.getAttribute('aria-checked')).toBe('false');
+      expect(holdMusicSwitch()?.getAttribute('aria-checked')).toBe('true');
       expect(holdMusicMock.subscribeHoldMusicMuted).toHaveBeenCalledTimes(1);
 
       await act(async () => {
         holdMusicMock.muteListener?.(true);
       });
 
-      expect(muteSwitch()?.getAttribute('aria-checked')).toBe('true');
+      expect(holdMusicSwitch()?.getAttribute('aria-checked')).toBe('false');
     } finally {
       await act(async () => {
         root.unmount();

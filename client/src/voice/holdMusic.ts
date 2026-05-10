@@ -2,8 +2,8 @@ import { loadMusicSettings, saveMusicSettings, type MusicSettings } from '../sto
 import { getHoldMusicTracks, holdMusicTrackUrl } from './holdMusicCatalog';
 
 const MUSIC_VOLUME = 0.15;
-const HISS_VOLUME = 0.0045;
-const CRACKLE_VOLUME = 0.0065;
+const HISS_VOLUME = 0.00225;
+const CRACKLE_VOLUME = 0.00325;
 const HOLD_MUSIC_LAYER_TRACKS: readonly HoldMusicLayerSpec[] = [
   { url: '/music-layers/hiss.mp3', volume: HISS_VOLUME },
   { url: '/music-layers/crackle.mp3', volume: CRACKLE_VOLUME },
