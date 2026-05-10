@@ -149,6 +149,29 @@ describe('hold music selection', () => {
     expect(pickHoldMusicUrl(() => 0)).toBe('/music/Dial%20Tone%20Reverie.mp3');
     expect(pickHoldMusicUrl(() => 6 / 11)).toBe('/music/Pehli%20Dastak.mp3');
     expect(pickHoldMusicUrl(() => 0.999)).toBe('/music/Soft%20Hold%20Tone.mp3');
+    expect(pickHoldMusicUrl(() => 0, {
+      muted: false,
+      effects: false,
+      disabledTracks: [],
+    })).toBe('/music-original/Dial%20Tone%20Reverie.mp3');
+  });
+
+
+  it('skips disabled songs and returns an empty URL when every song is off', async () => {
+    const { getHoldMusicTracks } = await import('../client/src/voice/holdMusicCatalog');
+    const { pickHoldMusicUrl } = await import('../client/src/voice/holdMusic');
+    const tracks = getHoldMusicTracks();
+
+    expect(pickHoldMusicUrl(() => 0, {
+      muted: false,
+      effects: true,
+      disabledTracks: [tracks[0]],
+    })).toBe('/music/Dockside%20Hold.mp3');
+    expect(pickHoldMusicUrl(() => 0.999, {
+      muted: false,
+      effects: true,
+      disabledTracks: [...tracks],
+    })).toBe('');
   });
 
   it('starts between 15% and 50% of the track duration', async () => {
@@ -290,6 +313,128 @@ describe('HoldMusicController', () => {
     expect(FakeAudioElement.instances).toHaveLength(0);
   });
 
+
+  it('does not create preload, playback, or layer audio when every song is disabled', async () => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn((key: string) => storage.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => storage.set(key, value)),
+      removeItem: vi.fn((key: string) => storage.delete(key)),
+    });
+    storage.set('clawkie.settings.v1', JSON.stringify({
+      music: {
+        muted: false,
+        effects: true,
+        disabledTracks: [
+          'Dial Tone Reverie.mp3',
+          'Dockside Hold.mp3',
+          'Looped Hold Tone.mp3',
+          'Maré de Espera.mp3',
+          'Muted Waiting Room.mp3',
+          'Palm Reader Queue.mp3',
+          'Paper Cup Loop.mp3',
+          'Pehli Dastak.mp3',
+          'Pixel Queue.mp3',
+          'Poolside Hold.mp3',
+          'Rotary Hush.mp3',
+          'Shelf Cue Drift.mp3',
+          'Soft Hold Tone.mp3',
+        ],
+      },
+    }));
+    vi.stubGlobal('Audio', FakeAudioElement);
+    const { HoldMusicController } = await import('../client/src/voice/holdMusic');
+
+    expect(FakeAudioElement.instances).toHaveLength(0);
+    const controller = new HoldMusicController();
+    expect(() => controller.start()).not.toThrow();
+    expect(FakeAudioElement.instances).toHaveLength(0);
+  });
+
+  it('does not create static layers when audio effects are disabled', async () => {
+    const storage = new Map<string, string>([[
+      'clawkie.settings.v1',
+      JSON.stringify({ music: { muted: false, effects: false, disabledTracks: [] } }),
+    ]]);
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn((key: string) => storage.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => storage.set(key, value)),
+      removeItem: vi.fn((key: string) => storage.delete(key)),
+    });
+    vi.stubGlobal('Audio', FakeAudioElement);
+    const { HoldMusicController } = await import('../client/src/voice/holdMusic');
+    const preloaded = FakeAudioElement.instances[0];
+
+    const controller = new HoldMusicController();
+    controller.start();
+
+    expect(FakeAudioElement.instances).toHaveLength(1);
+    expect(preloaded.src).toMatch(/^\/music-original\/.+\.mp3$/);
+    expect(preloaded.volume).toBeCloseTo(0.15);
+    preloaded.duration = 100;
+    preloaded.dispatch('loadedmetadata');
+    expect(preloaded.play).toHaveBeenCalledTimes(1);
+  });
+
+
+  it('restarts an active session when effects are disabled so processed audio and static layers stop', async () => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn((key: string) => storage.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => storage.set(key, value)),
+      removeItem: vi.fn((key: string) => storage.delete(key)),
+    });
+    vi.stubGlobal('Audio', FakeAudioElement);
+    const { HoldMusicController, setHoldMusicSettings } = await import('../client/src/voice/holdMusic');
+
+    const controller = new HoldMusicController();
+    controller.start();
+
+    const [processedMusic, hiss, crackle] = FakeAudioElement.instances;
+    expect(processedMusic.src).toMatch(/^\/music\/.+\.mp3$/);
+    expect(hiss.src).toBe('/music-layers/hiss.mp3');
+    expect(crackle.src).toBe('/music-layers/crackle.mp3');
+
+    setHoldMusicSettings({ muted: false, effects: false, disabledTracks: [] });
+
+    expect(processedMusic.pause).toHaveBeenCalled();
+    expect(hiss.pause).toHaveBeenCalled();
+    expect(crackle.pause).toHaveBeenCalled();
+    expect(FakeAudioElement.instances).toHaveLength(4);
+    expect(FakeAudioElement.instances[3].src).toMatch(/^\/music-original\/.+\.mp3$/);
+  });
+
+  it('stops an active session when every song is disabled and resumes when songs return', async () => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn((key: string) => storage.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => storage.set(key, value)),
+      removeItem: vi.fn((key: string) => storage.delete(key)),
+    });
+    vi.stubGlobal('Audio', FakeAudioElement);
+    const { getHoldMusicTracks } = await import('../client/src/voice/holdMusicCatalog');
+    const { HoldMusicController, setHoldMusicSettings } = await import('../client/src/voice/holdMusic');
+    const tracks = [...getHoldMusicTracks()];
+
+    const controller = new HoldMusicController();
+    controller.start();
+    const [music, hiss, crackle] = FakeAudioElement.instances;
+
+    setHoldMusicSettings({ muted: false, effects: true, disabledTracks: tracks });
+
+    expect(music.pause).toHaveBeenCalled();
+    expect(hiss.pause).toHaveBeenCalled();
+    expect(crackle.pause).toHaveBeenCalled();
+    expect(FakeAudioElement.instances).toHaveLength(3);
+
+    setHoldMusicSettings({ muted: false, effects: true, disabledTracks: [] });
+
+    expect(FakeAudioElement.instances).toHaveLength(6);
+    expect(FakeAudioElement.instances[3].src).toMatch(/^\/music\/.+\.mp3$/);
+    expect(FakeAudioElement.instances[4].src).toBe('/music-layers/hiss.mp3');
+    expect(FakeAudioElement.instances[5].src).toBe('/music-layers/crackle.mp3');
+  });
+
   it('persists mute preference and applies it to the active music and static media layers', async () => {
     const storage = new Map<string, string>();
     vi.stubGlobal('localStorage', {
@@ -322,6 +467,25 @@ describe('HoldMusicController', () => {
     expect(hiss.volume).toBeCloseTo(0.0045);
     expect(crackle.muted).toBe(false);
     expect(crackle.volume).toBeCloseTo(0.0065);
+  });
+
+  it('notifies mute subscribers for external mute changes', async () => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn((key: string) => storage.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => storage.set(key, value)),
+      removeItem: vi.fn((key: string) => storage.delete(key)),
+    });
+    const { setHoldMusicMuted, subscribeHoldMusicMuted } = await import('../client/src/voice/holdMusic');
+    const listener = vi.fn();
+
+    const unsubscribe = subscribeHoldMusicMuted(listener);
+    setHoldMusicMuted(true);
+    unsubscribe();
+    setHoldMusicMuted(false);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(true);
   });
 
   it('exposes a best-effort analyser without routing audible playback through Web Audio', async () => {

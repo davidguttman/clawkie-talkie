@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { HIFI } from './tokens';
 import { HiFiPhone } from './components/Phone';
 import { DrivingScreen } from './screens/Driving';
@@ -467,7 +467,7 @@ function SettingsOverlay({
 }: {
   setSettingsOpen: (open: boolean) => void;
   settings: Settings;
-  setSettings: (next: Settings) => void;
+  setSettings: Dispatch<SetStateAction<Settings>>;
   compact: boolean;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);

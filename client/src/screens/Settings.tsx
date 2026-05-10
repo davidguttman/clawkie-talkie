@@ -1,7 +1,9 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { HIFI } from '../tokens';
 import { ScreenHeader, ScrollBody } from '../components/ScreenChrome';
-import type { Settings } from '../storage';
+import { DEFAULT_MUSIC_SETTINGS, type MusicSettings, type Settings } from '../storage';
+import { setHoldMusicSettings, subscribeHoldMusicMuted } from '../voice/holdMusic';
+import { getHoldMusicTrackOptions } from '../voice/holdMusicCatalog';
 import type { SttCatalog, SttSelection, TtsCatalog, TtsSelection } from '../voice/protocol';
 
 // TTS provider credentials are NOT stored on the phone — OpenClaw owns
@@ -49,7 +51,7 @@ export function SettingsScreen({
 }: {
   onBack: () => void;
   settings: Settings;
-  setSettings: (next: Settings) => void;
+  setSettings: Dispatch<SetStateAction<Settings>>;
   ttsCatalog: TtsCatalog | null;
   onRefreshTtsCatalog?: () => void;
   sttCatalog: SttCatalog | null;
@@ -64,11 +66,24 @@ export function SettingsScreen({
   }, [sttCatalog, onRefreshSttCatalog]);
 
   const update = <K extends keyof Settings>(k: K, v: Settings[K]) =>
-    setSettings({ ...settings, [k]: v });
+    setSettings((current) => ({ ...current, [k]: v }));
   const updateTtsSelection = (selection: TtsSelection) =>
     setSettings(withTtsSelection(settings, selection));
   const updateSttSelection = (selection: SttSelection) =>
     setSettings(withSttSelection(settings, selection));
+  const updateMusicSettings = (music: MusicSettings) => {
+    const normalized = normalizeScreenMusicSettings(music);
+    setHoldMusicSettings(normalized);
+    setSettings((current) => withMusicSettings(current, normalized));
+  };
+
+  useEffect(() => subscribeHoldMusicMuted((muted) => {
+    setSettings((current) => {
+      const music = normalizeScreenMusicSettings(current.music);
+      if (music.muted === muted) return current;
+      return withMusicSettings(current, { ...music, muted });
+    });
+  }), [setSettings]);
 
   const providerOptions = configuredTtsProviders(ttsCatalog);
   const currentProvider = providerForSelection(providerOptions, settings.tts);
@@ -106,6 +121,8 @@ export function SettingsScreen({
     currentSttProvider,
     isDefaultSttSelection(settings.stt),
   );
+  const musicSettings = normalizeScreenMusicSettings(settings.music);
+  const musicTracks = getHoldMusicTrackOptions();
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', color: HIFI.ink }}>
@@ -229,6 +246,34 @@ export function SettingsScreen({
             setValue={(v) => update('timestamps', v)}
           />
         </SettingsSection>
+
+        <SettingsSection title="MUSIC">
+          <ToggleRow
+            label="Mute hold music"
+            sub="Silence the waiting-room bed while Clawkie is thinking."
+            value={musicSettings.muted}
+            setValue={(muted) => updateMusicSettings({ ...musicSettings, muted })}
+          />
+          <ToggleRow
+            label="Audio effects"
+            sub="Adds the hiss and crackle layer over the public hold tracks."
+            value={musicSettings.effects}
+            setValue={(effects) => updateMusicSettings({ ...musicSettings, effects })}
+          />
+          {musicTracks.length > 0 ? musicTracks.map((track) => (
+            <ToggleRow
+              key={track.id}
+              label={track.label}
+              sub={track.id}
+              value={!musicSettings.disabledTracks.includes(track.id)}
+              setValue={(enabled) => updateMusicSettings(
+                musicSettingsWithTrackEnabled(musicSettings, track.id, enabled),
+              )}
+            />
+          )) : (
+            <StatusRow text="No hold music tracks available" />
+          )}
+        </SettingsSection>
       </ScrollBody>
 
       <div
@@ -333,6 +378,49 @@ export function withTtsSelection(settings: Settings, selection: TtsSelection): S
 
 export function withSttSelection(settings: Settings, selection: SttSelection): Settings {
   return { ...settings, stt: selection };
+}
+
+export function withMusicSettings(settings: Settings, music: MusicSettings): Settings {
+  return { ...settings, music: normalizeScreenMusicSettings(music) };
+}
+
+export function withMusicMuted(settings: Settings, muted: boolean): Settings {
+  return withMusicSettings(settings, { ...normalizeScreenMusicSettings(settings.music), muted });
+}
+
+export function withMusicEffects(settings: Settings, effects: boolean): Settings {
+  return withMusicSettings(settings, { ...normalizeScreenMusicSettings(settings.music), effects });
+}
+
+export function withMusicTrackEnabled(
+  settings: Settings,
+  track: string,
+  enabled: boolean,
+): Settings {
+  return withMusicSettings(
+    settings,
+    musicSettingsWithTrackEnabled(normalizeScreenMusicSettings(settings.music), track, enabled),
+  );
+}
+
+export function musicSettingsWithTrackEnabled(
+  music: MusicSettings,
+  track: string,
+  enabled: boolean,
+): MusicSettings {
+  const normalized = normalizeScreenMusicSettings(music);
+  const disabledTracks = enabled
+    ? normalized.disabledTracks.filter((item) => item !== track)
+    : [...normalized.disabledTracks.filter((item) => item !== track), track];
+  return { ...normalized, disabledTracks };
+}
+
+function normalizeScreenMusicSettings(value: Partial<MusicSettings> | undefined): MusicSettings {
+  return {
+    muted: typeof value?.muted === 'boolean' ? value.muted : DEFAULT_MUSIC_SETTINGS.muted,
+    effects: typeof value?.effects === 'boolean' ? value.effects : DEFAULT_MUSIC_SETTINGS.effects,
+    disabledTracks: Array.isArray(value?.disabledTracks) ? [...value.disabledTracks] : [],
+  };
 }
 
 export function isDefaultTtsSelection(selection: TtsSelection): boolean {
@@ -571,32 +659,53 @@ function ToggleRow({
         )}
       </div>
       <button
+        type="button"
+        role="switch"
+        aria-checked={value}
+        aria-label={label}
         onClick={() => setValue(!value)}
         style={{
-          width: 40,
-          height: 24,
-          borderRadius: 12,
+          width: 44,
+          height: 44,
+          minWidth: 44,
+          minHeight: 44,
+          borderRadius: 14,
           position: 'relative',
           border: 'none',
           cursor: 'pointer',
           flexShrink: 0,
-          background: value ? '#ff9e3b' : HIFI.surface2,
-          boxShadow: value ? '0 0 10px rgba(255,158,59,0.4)' : 'none',
-          transition: 'background 200ms',
+          background: 'transparent',
+          padding: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
         }}
       >
         <span
+          aria-hidden="true"
           style={{
-            position: 'absolute',
-            top: 2,
-            left: value ? 18 : 2,
-            width: 20,
-            height: 20,
-            borderRadius: '50%',
-            background: value ? '#000' : HIFI.ink3,
-            transition: 'left 200ms',
+            width: 40,
+            height: 24,
+            borderRadius: 12,
+            position: 'relative',
+            background: value ? '#ff9e3b' : HIFI.surface2,
+            boxShadow: value ? '0 0 10px rgba(255,158,59,0.4)' : 'none',
+            transition: 'background 200ms',
           }}
-        />
+        >
+          <span
+            style={{
+              position: 'absolute',
+              top: 2,
+              left: value ? 18 : 2,
+              width: 20,
+              height: 20,
+              borderRadius: '50%',
+              background: value ? '#000' : HIFI.ink3,
+              transition: 'left 200ms',
+            }}
+          />
+        </span>
       </button>
     </div>
   );
