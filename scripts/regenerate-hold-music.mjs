@@ -34,6 +34,8 @@ const MUSIC_COMPRESSOR_KNEE_DB = 18;
 const MUSIC_COMPRESSOR_RATIO = 8;
 const MUSIC_COMPRESSOR_ATTACK_MS = 3;
 const MUSIC_COMPRESSOR_RELEASE_MS = 100;
+const HISS_LAYER_GAIN_DB = -10;
+const CRACKLE_LAYER_GAIN_DB = -10;
 
 const bitcrusherSampleHold = 1 / BITCRUSHER_NORM_FREQ;
 const compressorThreshold = dbToLinear(MUSIC_COMPRESSOR_THRESHOLD_DB);
@@ -66,12 +68,14 @@ const hissFilter = [
   'lowpass=f=4500',
   'equalizer=f=2000:t=q:w=1.2:g=5',
   'loudnorm=I=-30:TP=-4:LRA=8',
+  `volume=${HISS_LAYER_GAIN_DB}dB`,
 ].join(',');
 
 const crackleFilter = [
   'highpass=f=300',
   'lowpass=f=4500',
   'alimiter=limit=0.8',
+  `volume=${CRACKLE_LAYER_GAIN_DB}dB`,
 ].join(',');
 
 await main();
