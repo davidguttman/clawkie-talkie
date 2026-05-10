@@ -226,10 +226,10 @@ describe('HoldMusicController', () => {
     expect(preloaded.volume).toBeCloseTo(0.15);
     expect(FakeAudioElement.instances[1].src).toBe('/music-layers/hiss.mp3');
     expect(FakeAudioElement.instances[1].loop).toBe(true);
-    expect(FakeAudioElement.instances[1].volume).toBeCloseTo(0.018);
+    expect(FakeAudioElement.instances[1].volume).toBeCloseTo(0.0045);
     expect(FakeAudioElement.instances[2].src).toBe('/music-layers/crackle.mp3');
     expect(FakeAudioElement.instances[2].loop).toBe(true);
-    expect(FakeAudioElement.instances[2].volume).toBeCloseTo(0.026);
+    expect(FakeAudioElement.instances[2].volume).toBeCloseTo(0.0065);
     expect(preloaded.play).not.toHaveBeenCalled();
 
     preloaded.duration = 100;
@@ -319,9 +319,9 @@ describe('HoldMusicController', () => {
     expect(music.muted).toBe(false);
     expect(music.volume).toBeCloseTo(0.15);
     expect(hiss.muted).toBe(false);
-    expect(hiss.volume).toBeCloseTo(0.018);
+    expect(hiss.volume).toBeCloseTo(0.0045);
     expect(crackle.muted).toBe(false);
-    expect(crackle.volume).toBeCloseTo(0.026);
+    expect(crackle.volume).toBeCloseTo(0.0065);
   });
 
   it('exposes a best-effort analyser without routing audible playback through Web Audio', async () => {

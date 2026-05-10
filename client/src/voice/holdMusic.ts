@@ -1,8 +1,8 @@
 import { HOLD_MUSIC_TRACKS } from 'virtual:hold-music-tracks';
 
 const MUSIC_VOLUME = 0.15;
-const HISS_VOLUME = 0.018;
-const CRACKLE_VOLUME = 0.026;
+const HISS_VOLUME = 0.0045;
+const CRACKLE_VOLUME = 0.0065;
 const HOLD_MUSIC_LAYER_TRACKS: readonly HoldMusicLayerSpec[] = [
   { url: '/music-layers/hiss.mp3', volume: HISS_VOLUME },
   { url: '/music-layers/crackle.mp3', volume: CRACKLE_VOLUME },
