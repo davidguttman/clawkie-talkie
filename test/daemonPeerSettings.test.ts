@@ -44,6 +44,28 @@ function makeRendezvousPeer() {
   };
 }
 
+function makeJoin(sessionId: string) {
+  return JSON.stringify({
+    t: 'rendezvous.join',
+    sessionId,
+    delivery: { channel: 'discord', target: `channel:${sessionId}` },
+  });
+}
+
+function makeManagedVoiceSession(options: {
+  lastUsedAtMs: number;
+  canEvictForVoiceSessionLimit?: boolean;
+}) {
+  const session = {
+    applyVoiceSettings: vi.fn(() => session.touchActivity()),
+    close: vi.fn(),
+    touchActivity: vi.fn(),
+    lastUsedAtMs: options.lastUsedAtMs,
+    canEvictForVoiceSessionLimit: options.canEvictForVoiceSessionLimit ?? true,
+  };
+  return session;
+}
+
 describe('DaemonPeer rendezvous voice settings', () => {
   it('clears existing same-session settings when a reconnecting Default client omits settings', async () => {
     const { DaemonPeer } = await import('../daemon/src/peer');
@@ -57,6 +79,7 @@ describe('DaemonPeer rendezvous voice settings', () => {
     const applyVoiceSettings = vi.fn();
     (peer as unknown as { voiceSessions: Map<string, unknown> }).voiceSessions.set(roomId, {
       applyVoiceSettings,
+      touchActivity: vi.fn(),
     });
     const rendezvousPeer = makeRendezvousPeer();
 
@@ -139,6 +162,118 @@ describe('DaemonPeer rendezvous voice settings', () => {
 
     expect(rendezvousPeer.peer.send).toHaveBeenCalledWith(
       JSON.stringify({ t: 'rendezvous.error', message: 'unexpected_message' }),
+    );
+
+    clearTimeout(rendezvousPeer.timeout);
+    peer.close();
+  });
+
+
+  it('evicts the least-recently-used idle voice session when the session limit is full', async () => {
+    const { DaemonPeer } = await import('../daemon/src/peer');
+    const peer = new DaemonPeer({
+      peerId: 'host-1',
+      signalServer: 'https://signal.example',
+      iceServers: [],
+      maxVoiceSessions: 2,
+      onReady: vi.fn(),
+    });
+    const olderRoomId = makeVoiceRoomId({ hostPeerId: 'host-1', sessionId: 'session-older' });
+    const newerRoomId = makeVoiceRoomId({ hostPeerId: 'host-1', sessionId: 'session-newer' });
+    const incomingRoomId = makeVoiceRoomId({ hostPeerId: 'host-1', sessionId: 'session-incoming' });
+    const older = makeManagedVoiceSession({ lastUsedAtMs: 10 });
+    const newer = makeManagedVoiceSession({ lastUsedAtMs: 20 });
+    const sessions = (peer as unknown as { voiceSessions: Map<string, unknown> }).voiceSessions;
+    sessions.set(olderRoomId, older);
+    sessions.set(newerRoomId, newer);
+    const rendezvousPeer = makeRendezvousPeer();
+
+    (peer as unknown as {
+      handleRendezvousData(rp: unknown, data: unknown): void;
+    }).handleRendezvousData(rendezvousPeer, makeJoin('session-incoming'));
+
+    expect(older.close).toHaveBeenCalledTimes(1);
+    expect(newer.close).not.toHaveBeenCalled();
+    expect((peer as unknown as { activeRoomIds: string[] }).activeRoomIds).toEqual([
+      newerRoomId,
+      incomingRoomId,
+    ]);
+    expect(rendezvousPeer.peer.send).toHaveBeenCalledWith(
+      JSON.stringify({ t: 'rendezvous.accept', roomId: incomingRoomId }),
+    );
+
+    clearTimeout(rendezvousPeer.timeout);
+    peer.close();
+  });
+
+  it('does not evict when the incoming session already maps to an existing room at the limit', async () => {
+    const { DaemonPeer } = await import('../daemon/src/peer');
+    const peer = new DaemonPeer({
+      peerId: 'host-1',
+      signalServer: 'https://signal.example',
+      iceServers: [],
+      maxVoiceSessions: 2,
+      onReady: vi.fn(),
+    });
+    const existingRoomId = makeVoiceRoomId({ hostPeerId: 'host-1', sessionId: 'session-existing' });
+    const otherRoomId = makeVoiceRoomId({ hostPeerId: 'host-1', sessionId: 'session-other' });
+    const existing = makeManagedVoiceSession({ lastUsedAtMs: 10 });
+    const other = makeManagedVoiceSession({ lastUsedAtMs: 20 });
+    const sessions = (peer as unknown as { voiceSessions: Map<string, unknown> }).voiceSessions;
+    sessions.set(existingRoomId, existing);
+    sessions.set(otherRoomId, other);
+    const rendezvousPeer = makeRendezvousPeer();
+
+    (peer as unknown as {
+      handleRendezvousData(rp: unknown, data: unknown): void;
+    }).handleRendezvousData(rendezvousPeer, makeJoin('session-existing'));
+
+    expect(existing.close).not.toHaveBeenCalled();
+    expect(other.close).not.toHaveBeenCalled();
+    expect(existing.applyVoiceSettings).toHaveBeenCalledWith({});
+    expect(existing.touchActivity).toHaveBeenCalled();
+    expect((peer as unknown as { activeRoomIds: string[] }).activeRoomIds).toEqual([
+      existingRoomId,
+      otherRoomId,
+    ]);
+    expect(rendezvousPeer.peer.send).toHaveBeenCalledWith(
+      JSON.stringify({ t: 'rendezvous.accept', roomId: existingRoomId }),
+    );
+
+    clearTimeout(rendezvousPeer.timeout);
+    peer.close();
+  });
+
+  it('returns too_many_voice_sessions when every room is active or in flight', async () => {
+    const { DaemonPeer } = await import('../daemon/src/peer');
+    const peer = new DaemonPeer({
+      peerId: 'host-1',
+      signalServer: 'https://signal.example',
+      iceServers: [],
+      maxVoiceSessions: 2,
+      onReady: vi.fn(),
+    });
+    const activeRoomId = makeVoiceRoomId({ hostPeerId: 'host-1', sessionId: 'session-active' });
+    const inFlightRoomId = makeVoiceRoomId({ hostPeerId: 'host-1', sessionId: 'session-in-flight' });
+    const active = makeManagedVoiceSession({ lastUsedAtMs: 10, canEvictForVoiceSessionLimit: false });
+    const inFlight = makeManagedVoiceSession({ lastUsedAtMs: 20, canEvictForVoiceSessionLimit: false });
+    const sessions = (peer as unknown as { voiceSessions: Map<string, unknown> }).voiceSessions;
+    sessions.set(activeRoomId, active);
+    sessions.set(inFlightRoomId, inFlight);
+    const rendezvousPeer = makeRendezvousPeer();
+
+    (peer as unknown as {
+      handleRendezvousData(rp: unknown, data: unknown): void;
+    }).handleRendezvousData(rendezvousPeer, makeJoin('session-incoming'));
+
+    expect(active.close).not.toHaveBeenCalled();
+    expect(inFlight.close).not.toHaveBeenCalled();
+    expect((peer as unknown as { activeRoomIds: string[] }).activeRoomIds).toEqual([
+      activeRoomId,
+      inFlightRoomId,
+    ]);
+    expect(rendezvousPeer.peer.send).toHaveBeenCalledWith(
+      JSON.stringify({ t: 'rendezvous.error', message: 'too_many_voice_sessions' }),
     );
 
     clearTimeout(rendezvousPeer.timeout);

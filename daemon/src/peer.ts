@@ -38,6 +38,9 @@ const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
 
 const RENDEZVOUS_TIMEOUT_MS = 12_000;
 const RECENT_SESSIONS_SUBSCRIPTION_INTERVAL_MS = 60_000;
+// Conservative resource guard for simultaneous WebRTC/STT/TTS lanes;
+// not a mathematically derived capacity limit.
+const DEFAULT_MAX_VOICE_SESSIONS = 8;
 
 export interface DaemonPeerOptions {
   sttLanguage?: string;
@@ -82,7 +85,7 @@ export class DaemonPeer {
   constructor(private readonly opts: DaemonPeerOptions) {
     this.iceServers = opts.iceServers ?? DEFAULT_ICE_SERVERS;
     this.signalServer = opts.signalServer ?? DEFAULT_SIGNAL_SERVER;
-    this.maxVoiceSessions = opts.maxVoiceSessions ?? 8;
+    this.maxVoiceSessions = opts.maxVoiceSessions ?? DEFAULT_MAX_VOICE_SESSIONS;
 
     this.signalClient = new SignalClient({
       signalServer: this.signalServer,
@@ -322,15 +325,12 @@ export class DaemonPeer {
     }
     const delivery = deliveryValidation.delivery;
 
-    if (this.voiceSessions.size >= this.maxVoiceSessions) {
-      const existing = this.voiceSessions.get(makeVoiceRoomId({ hostPeerId: this.opts.peerId, sessionId }));
-      if (!existing) {
-        this.sendRendezvous(rp, daemonToPhone.rendezvousError('too_many_voice_sessions'));
-        return;
-      }
-    }
-
     const roomId = makeVoiceRoomId({ hostPeerId: this.opts.peerId, sessionId });
+
+    if (!this.ensureVoiceSessionCapacityFor(roomId)) {
+      this.sendRendezvous(rp, daemonToPhone.rendezvousError('too_many_voice_sessions'));
+      return;
+    }
 
     const existingSession = this.voiceSessions.get(roomId);
     if (!existingSession) {
@@ -365,6 +365,31 @@ export class DaemonPeer {
     // Drop the rendezvous lane after accept — the browser will open a
     // fresh peer connection to `roomId` for actual voice traffic.
     setTimeout(() => this.dropRendezvous(rp.remoteId), 250).unref?.();
+  }
+
+  private ensureVoiceSessionCapacityFor(roomId: string): boolean {
+    if (this.voiceSessions.has(roomId)) return true;
+    if (this.voiceSessions.size < this.maxVoiceSessions) return true;
+
+    let oldestRoomId: string | null = null;
+    let oldestSession: VoiceSession | null = null;
+    for (const [candidateRoomId, session] of this.voiceSessions) {
+      if (!session.canEvictForVoiceSessionLimit) continue;
+      if (!oldestSession || session.lastUsedAtMs < oldestSession.lastUsedAtMs) {
+        oldestRoomId = candidateRoomId;
+        oldestSession = session;
+      }
+    }
+    if (!oldestRoomId || !oldestSession) return false;
+
+    console.error(`[peer] evicting idle voice session room=${oldestRoomId} to admit room=${roomId}`);
+    this.voiceSessions.delete(oldestRoomId);
+    try {
+      oldestSession.close();
+    } catch (err) {
+      console.error(`[peer] evicted voice session close failed: ${err instanceof Error ? err.message : err}`);
+    }
+    return true;
   }
 
   private keepRendezvousOpenForDashboard(rp: RendezvousPeer): void {

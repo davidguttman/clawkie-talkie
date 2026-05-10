@@ -292,6 +292,25 @@ describe('voice session state', () => {
       }),
     ).toBe('replace_existing');
   });
+
+
+  it('exposes LRU eviction state for idle versus active or in-flight sessions', () => {
+    const idleCase = makeVoiceSession();
+    (idleCase.session as unknown as { peer: null; connected: boolean }).peer = null;
+    (idleCase.session as unknown as { connected: boolean }).connected = false;
+    idleCase.session.touchActivity(123);
+    expect(idleCase.session.lastUsedAtMs).toBe(123);
+    expect(idleCase.session.canEvictForVoiceSessionLimit).toBe(true);
+
+    const activeCase = makeVoiceSession();
+    expect(activeCase.session.canEvictForVoiceSessionLimit).toBe(false);
+
+    const inFlightCase = makeVoiceSession();
+    (inFlightCase.session as unknown as { peer: null; connected: boolean }).peer = null;
+    (inFlightCase.session as unknown as { connected: boolean }).connected = false;
+    (inFlightCase.session as unknown as { beginTurn(): number }).beginTurn();
+    expect(inFlightCase.session.canEvictForVoiceSessionLimit).toBe(false);
+  });
 });
 
 describe('voice session TTS catalog runtime', () => {

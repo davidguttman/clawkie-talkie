@@ -179,5 +179,7 @@ Daemon → phone (voice lane):
 
 - One phone per voice room at a time.
 - A daemon caps active voice rooms at `maxVoiceSessions` (default 8) to keep
-  resource usage bounded. New rendezvous attempts past the cap return
-  `rendezvous.error("too_many_voice_sessions")`.
+  resource usage bounded. When a new voice room arrives at the cap, the daemon
+  evicts the least-recently-used idle/detached room if one is safe to close.
+  If every room is active, connected, or mid-turn, the new rendezvous attempt
+  returns `rendezvous.error("too_many_voice_sessions")`.

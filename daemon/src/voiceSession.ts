@@ -246,6 +246,7 @@ export class VoiceSession {
   private controlEventId = 0;
   private lastPeerDetachEventId = 0;
   private lastPeerDetachAtMs: number | null = null;
+  private lastUsedAtMsValue = Date.now();
   private readonly controlHistory: ControlEventRecord[] = [];
   private ttsAudioTurn: TtsAudioTurn | null = null;
   private turnSnapshot: VoiceTurnSnapshot = {
@@ -346,8 +347,22 @@ export class VoiceSession {
   }
 
   applyVoiceSettings(settings: VoiceSettings | null | undefined): void {
+    this.touchActivity();
     this.ttsSelection = normalizeTtsSelection(settings);
     this.sttSelection = normalizeSttSelection(settings);
+  }
+
+  touchActivity(atMs = Date.now()): void {
+    this.lastUsedAtMsValue = atMs;
+  }
+
+  get lastUsedAtMs(): number {
+    return this.lastUsedAtMsValue;
+  }
+
+  get canEvictForVoiceSessionLimit(): boolean {
+    const hasLivePeer = !!this.peer && !this.peer.destroyed;
+    return !this.closing && !hasLivePeer && !this.connected && !this.state.turnInFlight;
   }
 
   // Test/manager hooks so callers can inspect the selection currently
@@ -388,6 +403,7 @@ export class VoiceSession {
 
   private acceptPhone(remoteId: string, initiator: boolean, initialSignal?: SignalPayload): void {
     if (this.replacedRemoteIds.has(remoteId)) return;
+    this.touchActivity();
 
     const decision = decidePhoneConnection({
       hasCurrentPeer: !!this.peer && !this.peer.destroyed,
@@ -441,6 +457,7 @@ export class VoiceSession {
 
     peer.on('connect', () => {
       if (this.peer !== peer) return;
+      this.touchActivity();
       this.clearConnectionTimeout();
       this.connected = true;
       console.error(`[voice ${this.roomId}] data channel connected`);
@@ -532,6 +549,7 @@ export class VoiceSession {
 
   private tearDownPeer(reason: string, peer?: SimplePeer.Instance): void {
     if (peer && this.peer !== peer) return;
+    this.touchActivity();
     console.error(`[voice ${this.roomId}] tearDownPeer reason=${reason}`);
     this.lastPeerDetachEventId = this.controlEventId;
     this.lastPeerDetachAtMs = Date.now();
@@ -697,6 +715,7 @@ export class VoiceSession {
   }
 
   private handlePeerData(data: unknown): void {
+    this.touchActivity();
     const bytes = toBytes(data);
     if (!bytes) return;
     const text = tryDecodeJsonText(bytes);
@@ -1185,6 +1204,7 @@ export class VoiceSession {
 
 
   private beginTurn(): number {
+    this.touchActivity();
     this.clearTtsAudioTurn();
     const token = ++this.turnToken;
     this.sttOpenToken = token;
@@ -1202,6 +1222,7 @@ export class VoiceSession {
   }
 
   private resetTurn(reason: string): void {
+    this.touchActivity();
     if (!['tts_done', 'tts_audio_pump_done', 'tts_audio_transport_closed'].includes(reason)) {
       this.clearTtsAudioTurn();
     }
