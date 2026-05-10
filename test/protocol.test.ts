@@ -7,12 +7,69 @@ import { describe, it, expect } from 'vitest';
 import {
   phoneToDaemon as phoneClient,
   daemonToPhone as daemonClient,
+  PROTOCOL_VERSION as CLIENT_PROTOCOL_VERSION,
+  PROTOCOL_FEATURES as CLIENT_PROTOCOL_FEATURES,
+  CLIENT_WANTED_PROTOCOL_FEATURES,
+  DAEMON_SUPPORTED_PROTOCOL_FEATURES as CLIENT_DAEMON_SUPPORTED_PROTOCOL_FEATURES,
 } from '../client/src/voice/protocol';
 import {
   phoneToDaemon as phoneDaemon,
   daemonToPhone as daemonDaemon,
   validateRendezvousDelivery,
+  PROTOCOL_VERSION as DAEMON_PROTOCOL_VERSION,
+  PROTOCOL_FEATURES as DAEMON_PROTOCOL_FEATURES,
+  CLIENT_WANTED_PROTOCOL_FEATURES as DAEMON_CLIENT_WANTED_PROTOCOL_FEATURES,
+  DAEMON_SUPPORTED_PROTOCOL_FEATURES,
 } from '../daemon/src/protocol';
+
+describe('additive v1 protocol capability handshake', () => {
+  it('exports matching protocol versions and canonical feature maps', () => {
+    expect(CLIENT_PROTOCOL_VERSION).toBe(1);
+    expect(CLIENT_PROTOCOL_VERSION).toBe(DAEMON_PROTOCOL_VERSION);
+    expect(CLIENT_PROTOCOL_FEATURES).toEqual({
+      ttsCatalog: 'tts.catalog',
+      sttCatalog: 'stt.catalog',
+      sessionsList: 'sessions.list',
+      sessionsCatalog: 'sessions.catalog',
+    });
+    expect(CLIENT_PROTOCOL_FEATURES).toEqual(DAEMON_PROTOCOL_FEATURES);
+    expect(CLIENT_WANTED_PROTOCOL_FEATURES).toEqual(Object.values(CLIENT_PROTOCOL_FEATURES));
+    expect(DAEMON_SUPPORTED_PROTOCOL_FEATURES).toEqual(Object.values(DAEMON_PROTOCOL_FEATURES));
+    expect(CLIENT_WANTED_PROTOCOL_FEATURES).toEqual(DAEMON_CLIENT_WANTED_PROTOCOL_FEATURES);
+    expect(CLIENT_DAEMON_SUPPORTED_PROTOCOL_FEATURES).toEqual(DAEMON_SUPPORTED_PROTOCOL_FEATURES);
+  });
+
+  it('serializes client hello identically in client and daemon copies', () => {
+    expect(phoneClient.clientHello()).toEqual({
+      t: 'client.hello',
+      protocol: 1,
+      wants: ['tts.catalog', 'stt.catalog', 'sessions.list', 'sessions.catalog'],
+    });
+    expect(JSON.stringify(phoneClient.clientHello())).toBe(JSON.stringify(phoneDaemon.clientHello()));
+  });
+
+  it('serializes daemon hello identically in client and daemon copies', () => {
+    expect(daemonClient.daemonHello()).toEqual({
+      t: 'daemon.hello',
+      protocol: 1,
+      features: ['tts.catalog', 'stt.catalog', 'sessions.list', 'sessions.catalog'],
+    });
+    expect(JSON.stringify(daemonClient.daemonHello())).toBe(JSON.stringify(daemonDaemon.daemonHello()));
+  });
+
+  it('serializes daemon unsupported with daemon mismatch language', () => {
+    expect(daemonClient.daemonUnsupported()).toEqual({
+      t: 'daemon.unsupported',
+      minProtocol: 1,
+      maxProtocol: 1,
+      message: 'unsupported_daemon_protocol',
+    });
+    expect(JSON.stringify(daemonClient.daemonUnsupported())).toBe(
+      JSON.stringify(daemonDaemon.daemonUnsupported()),
+    );
+  });
+});
+
 
 describe('phone → daemon factories', () => {
   it('emits stable `t` tags', () => {

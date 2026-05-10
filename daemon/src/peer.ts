@@ -16,6 +16,7 @@
 import wrtc from '@roamhq/wrtc';
 import SimplePeer from 'simple-peer';
 import {
+  daemonHandshakeResponse,
   daemonToPhone,
   validateRendezvousDelivery,
   type PhoneToDaemon,
@@ -69,6 +70,7 @@ interface RendezvousPeer {
   acceptedOffer: boolean;
   acceptedAnswer: boolean;
   recentSessionsInterval: NodeJS.Timeout | null;
+  protocolUnsupported: boolean;
 }
 
 export class DaemonPeer {
@@ -222,6 +224,7 @@ export class DaemonPeer {
       acceptedOffer: false,
       acceptedAnswer: false,
       recentSessionsInterval: null,
+      protocolUnsupported: false,
     };
     this.rendezvousPeers.set(remoteId, rp);
 
@@ -280,6 +283,13 @@ export class DaemonPeer {
     try {
       msg = JSON.parse(text) as PhoneToDaemon;
     } catch {
+      return;
+    }
+    if (rp.protocolUnsupported) return;
+    if (msg.t === 'client.hello') {
+      const response = daemonHandshakeResponse(msg);
+      this.sendRendezvous(rp, response);
+      if (response.t === 'daemon.unsupported') rp.protocolUnsupported = true;
       return;
     }
     if (msg.t === 'sessions.list.request') {

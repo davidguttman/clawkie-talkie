@@ -3,11 +3,13 @@ import type { Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ControlMessage, RtcClientOptions, RtcStatus } from '../client/src/rtc/client';
 import type { RtcContextValue, RtcRendezvous } from '../client/src/rtc/RtcContext';
+import { PROTOCOL_FEATURES } from '../client/src/voice/protocol';
 import type { RecentSession, SttCatalog, TtsCatalog, VoiceSettings } from '../client/src/voice/protocol';
 
 interface FakeRtcClientInstance {
   hostPeerId: string;
   sent: ControlMessage[];
+  sentBinary: Uint8Array[];
   connected: boolean;
   closed: boolean;
   sendControl(msg: ControlMessage): void;
@@ -28,6 +30,7 @@ vi.mock('../client/src/rtc/client', () => {
   class FakeRtcClient implements FakeRtcClientInstance {
     hostPeerId: string;
     sent: ControlMessage[] = [];
+    sentBinary: Uint8Array[] = [];
     connected = false;
     closed = false;
 
@@ -48,8 +51,8 @@ vi.mock('../client/src/rtc/client', () => {
       this.sent.push(msg);
     }
 
-    sendBinary(_bytes: ArrayBuffer | Uint8Array): void {
-      // not needed for these tests
+    sendBinary(bytes: ArrayBuffer | Uint8Array): void {
+      this.sentBinary.push(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
     }
 
     emitStatus(status: RtcStatus, detail?: string): void {
@@ -117,6 +120,9 @@ const initialSettings: VoiceSettings = {
 const rendezvous: RtcRendezvous = {
   sessionId: 'session-1',
 };
+
+const CLIENT_HELLO_FALLBACK_MS = 250;
+const ALL_PROTOCOL_FEATURES = Object.values(PROTOCOL_FEATURES);
 
 const catalog: TtsCatalog = {
   activeProvider: 'openai',
@@ -226,6 +232,28 @@ function sentOf(client: FakeRtcClientInstance, type: string): ControlMessage[] {
   return client.sent.filter((msg) => msg.t === type);
 }
 
+async function openWithDaemonHello(
+  client: FakeRtcClientInstance,
+  features: readonly string[] = ALL_PROTOCOL_FEATURES,
+): Promise<void> {
+  await act(async () => {
+    client.emitStatus('open');
+  });
+  await act(async () => {
+    client.emitControl({ t: 'daemon.hello', protocol: 1, features: [...features] });
+  });
+}
+
+async function openWithLegacyFallback(client: FakeRtcClientInstance): Promise<void> {
+  vi.useFakeTimers();
+  await act(async () => {
+    client.emitStatus('open');
+  });
+  await act(async () => {
+    vi.advanceTimersByTime(CLIENT_HELLO_FALLBACK_MS);
+  });
+}
+
 afterEach(async () => {
   if (activeRender) await activeRender.unmount();
   activeRender = null;
@@ -235,13 +263,319 @@ afterEach(async () => {
 });
 
 describe('RtcProvider TTS catalog and settings sync', () => {
-  it('omits provider, model, and voice hints from initial rendezvous.join for Default settings', async () => {
+  it('waits for daemon.hello before the initial rendezvous.join on the host lane', async () => {
     await renderRtcProvider({ voiceSettings: { voice: '', tts: {}, stt: {} } });
     const rendezvousClient = rtcMock.instances[0];
 
     await act(async () => {
       rendezvousClient.emitStatus('open');
     });
+
+    expect(rendezvousClient.sent).toEqual([
+      { t: 'client.hello', protocol: 1, wants: ALL_PROTOCOL_FEATURES },
+    ]);
+
+    await act(async () => {
+      rendezvousClient.emitControl({ t: 'daemon.hello', protocol: 1, features: ALL_PROTOCOL_FEATURES });
+    });
+
+    expect(sentOf(rendezvousClient, 'rendezvous.join')).toEqual([
+      { t: 'rendezvous.join', sessionId: 'session-1' },
+    ]);
+  });
+
+  it('does not send rendezvous.join after daemon.unsupported on the host lane', async () => {
+    const rendered = await renderRtcProvider({ voiceSettings: { voice: '', tts: {}, stt: {} } });
+    const rendezvousClient = rtcMock.instances[0];
+
+    await act(async () => {
+      rendezvousClient.emitStatus('open');
+    });
+    await act(async () => {
+      rendezvousClient.emitControl({
+        t: 'daemon.unsupported',
+        minProtocol: 1,
+        maxProtocol: 1,
+        message: 'unsupported_daemon_protocol',
+      });
+    });
+
+    expect(rendered.context().status).toBe('error');
+    expect(sentOf(rendezvousClient, 'rendezvous.join')).toEqual([]);
+  });
+
+  it('falls back and joins an old host daemon that rejects client.hello as unexpected_message', async () => {
+    const rendered = await renderRtcProvider({ voiceSettings: { voice: '', tts: {}, stt: {} } });
+    const rendezvousClient = rtcMock.instances[0];
+
+    await act(async () => {
+      rendezvousClient.emitStatus('open');
+    });
+    expect(rendezvousClient.sent).toEqual([
+      { t: 'client.hello', protocol: 1, wants: ALL_PROTOCOL_FEATURES },
+    ]);
+
+    await act(async () => {
+      rendezvousClient.emitControl({ t: 'rendezvous.error', message: 'unexpected_message' });
+    });
+
+    expect(rendered.context().status).toBe('open');
+    expect(rendered.context().detail).toBeUndefined();
+    expect(sentOf(rendezvousClient, 'rendezvous.join')).toEqual([
+      { t: 'rendezvous.join', sessionId: 'session-1' },
+    ]);
+  });
+
+  it('keeps a delayed unexpected_message benign after legacy host fallback', async () => {
+    const rendered = await renderRtcProvider({ voiceSettings: { voice: '', tts: {}, stt: {} } });
+    const rendezvousClient = rtcMock.instances[0];
+
+    await openWithLegacyFallback(rendezvousClient);
+
+    expect(sentOf(rendezvousClient, 'rendezvous.join')).toEqual([
+      { t: 'rendezvous.join', sessionId: 'session-1' },
+    ]);
+
+    await act(async () => {
+      rendezvousClient.emitControl({ t: 'rendezvous.error', message: 'unexpected_message' });
+    });
+
+    expect(rendered.context().status).toBe('open');
+    expect(rendered.context().detail).toBeUndefined();
+    expect(sentOf(rendezvousClient, 'rendezvous.join')).toEqual([
+      { t: 'rendezvous.join', sessionId: 'session-1' },
+    ]);
+
+    await act(async () => {
+      rendezvousClient.emitControl({ t: 'rendezvous.accept', roomId: 'voice-room-1' });
+    });
+
+    const voiceClient = rtcMock.instances.at(-1)!;
+    expect(voiceClient.hostPeerId).toBe('voice-room-1');
+  });
+
+  it('keeps a delayed unexpected_message benign around an accepted legacy host join', async () => {
+    const rendered = await renderRtcProvider({ voiceSettings: { voice: '', tts: {}, stt: {} } });
+    const rendezvousClient = rtcMock.instances[0];
+
+    await openWithLegacyFallback(rendezvousClient);
+    expect(sentOf(rendezvousClient, 'rendezvous.join')).toEqual([
+      { t: 'rendezvous.join', sessionId: 'session-1' },
+    ]);
+
+    await act(async () => {
+      rendezvousClient.emitControl({ t: 'rendezvous.accept', roomId: 'voice-room-1' });
+      rendezvousClient.emitControl({ t: 'rendezvous.error', message: 'unexpected_message' });
+    });
+
+    const voiceClient = rtcMock.instances.at(-1)!;
+    expect(voiceClient.hostPeerId).toBe('voice-room-1');
+    expect(rendered.context().status).not.toBe('error');
+    expect(rendered.context().detail).toBeUndefined();
+
+    await openWithLegacyFallback(voiceClient);
+    expect(sentOf(voiceClient, 'tts.catalog.request')).toEqual([{ t: 'tts.catalog.request' }]);
+  });
+
+  it('still surfaces real rendezvous errors after legacy host fallback', async () => {
+    const rendered = await renderRtcProvider({ voiceSettings: { voice: '', tts: {}, stt: {} } });
+    const rendezvousClient = rtcMock.instances[0];
+
+    await openWithLegacyFallback(rendezvousClient);
+
+    await act(async () => {
+      rendezvousClient.emitControl({ t: 'rendezvous.error', message: 'missing_session' });
+    });
+
+    expect(rendered.context().status).toBe('error');
+    expect(rendered.context().detail).toBe('missing_session');
+  });
+
+  it('sends client.hello before feature requests on the voice lane and gates them by daemon features', async () => {
+    const rendered = await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+
+    await openWithDaemonHello(voiceClient, [PROTOCOL_FEATURES.sttCatalog]);
+
+    expect(voiceClient.sent[0]).toEqual({ t: 'client.hello', protocol: 1, wants: ALL_PROTOCOL_FEATURES });
+    expect(sentOf(voiceClient, 'tts.catalog.request')).toEqual([]);
+    expect(sentOf(voiceClient, 'stt.catalog.request')).toEqual([{ t: 'stt.catalog.request' }]);
+    expect(sentOf(voiceClient, 'sessions.list.subscribe')).toEqual([]);
+    expect(sentOf(voiceClient, 'sessions.catalog.request')).toEqual([]);
+    expect(rendered.context().recentSessionsSupportStatus).toBe('unsupported');
+  });
+
+  it('keeps rendezvous and voice room capabilities separate', async () => {
+    await renderRtcProvider();
+    const rendezvousClient = rtcMock.instances[0];
+
+    await openWithDaemonHello(rendezvousClient, []);
+    await act(async () => {
+      rendezvousClient.emitControl({ t: 'rendezvous.accept', roomId: 'voice-room-1' });
+    });
+    const voiceClient = rtcMock.instances[1];
+
+    await openWithDaemonHello(voiceClient);
+
+    expect(sentOf(rendezvousClient, 'tts.catalog.request')).toEqual([]);
+    expect(sentOf(voiceClient, 'tts.catalog.request')).toEqual([{ t: 'tts.catalog.request' }]);
+    expect(sentOf(voiceClient, 'stt.catalog.request')).toEqual([{ t: 'stt.catalog.request' }]);
+    expect(sentOf(voiceClient, 'sessions.list.subscribe')).toEqual([{ t: 'sessions.list.subscribe' }]);
+    expect(sentOf(voiceClient, 'sessions.catalog.request')).toEqual([{ t: 'sessions.catalog.request' }]);
+  });
+
+  it('keeps no-hello daemon compatibility by sending existing feature requests after fallback', async () => {
+    const rendered = await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+
+    vi.useFakeTimers();
+    await act(async () => {
+      voiceClient.emitStatus('open');
+    });
+
+    expect(voiceClient.sent[0]).toEqual({ t: 'client.hello', protocol: 1, wants: ALL_PROTOCOL_FEATURES });
+    expect(sentOf(voiceClient, 'tts.catalog.request')).toEqual([]);
+    expect(sentOf(voiceClient, 'stt.catalog.request')).toEqual([]);
+    expect(sentOf(voiceClient, 'sessions.list.subscribe')).toEqual([]);
+
+    await act(async () => {
+      vi.advanceTimersByTime(CLIENT_HELLO_FALLBACK_MS);
+    });
+
+    expect(sentOf(voiceClient, 'tts.catalog.request')).toEqual([{ t: 'tts.catalog.request' }]);
+    expect(sentOf(voiceClient, 'stt.catalog.request')).toEqual([{ t: 'stt.catalog.request' }]);
+    expect(sentOf(voiceClient, 'sessions.list.subscribe')).toEqual([{ t: 'sessions.list.subscribe' }]);
+    expect(sentOf(voiceClient, 'sessions.catalog.request')).toEqual([{ t: 'sessions.catalog.request' }]);
+    expect(rendered.context().recentSessionsSupportStatus).toBe('probing');
+  });
+
+  it('applies a late daemon.hello after no-hello fallback', async () => {
+    const rendered = await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+
+    await openWithLegacyFallback(voiceClient);
+
+    expect(sentOf(voiceClient, 'tts.catalog.request')).toHaveLength(1);
+    expect(sentOf(voiceClient, 'stt.catalog.request')).toHaveLength(1);
+
+    await act(async () => {
+      voiceClient.emitControl({
+        t: 'daemon.hello',
+        protocol: 1,
+        features: [PROTOCOL_FEATURES.sttCatalog],
+      });
+    });
+
+    await act(async () => {
+      rendered.context().requestTtsCatalog?.();
+      rendered.context().sendControl({ t: 'tts.catalog.request' });
+      rendered.context().requestSttCatalog?.();
+    });
+
+    expect(sentOf(voiceClient, 'tts.catalog.request')).toHaveLength(1);
+    expect(sentOf(voiceClient, 'stt.catalog.request')).toHaveLength(2);
+  });
+
+  it('sets a daemon-focused protocol mismatch detail on daemon.unsupported', async () => {
+    const rendered = await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+
+    await act(async () => {
+      voiceClient.emitStatus('open');
+      voiceClient.emitControl({
+        t: 'daemon.unsupported',
+        minProtocol: 1,
+        maxProtocol: 1,
+        message: 'unsupported_daemon_protocol',
+      });
+    });
+
+    expect(rendered.context().status).toBe('error');
+    expect(rendered.context().detail).toBe('unsupported_daemon_protocol');
+    expect(sentOf(voiceClient, 'tts.catalog.request')).toEqual([]);
+    expect(sentOf(voiceClient, 'sessions.catalog.request')).toEqual([]);
+  });
+
+  it('keeps daemon.unsupported terminal even if a later daemon.hello arrives', async () => {
+    const rendered = await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+
+    await act(async () => {
+      voiceClient.emitStatus('open');
+      voiceClient.emitControl({
+        t: 'daemon.unsupported',
+        minProtocol: 1,
+        maxProtocol: 1,
+        message: 'unsupported_daemon_protocol',
+      });
+      voiceClient.emitControl({
+        t: 'daemon.hello',
+        protocol: 1,
+        features: ALL_PROTOCOL_FEATURES,
+      });
+    });
+
+    await act(async () => {
+      rendered.context().requestTtsCatalog?.();
+      rendered.context().sendControl({ t: 'stt.start' });
+    });
+
+    expect(rendered.context().status).toBe('error');
+    expect(rendered.context().detail).toBe('unsupported_daemon_protocol');
+    expect(sentOf(voiceClient, 'tts.catalog.request')).toEqual([]);
+    expect(sentOf(voiceClient, 'stt.start')).toEqual([]);
+  });
+
+  it('blocks outgoing binary after daemon.unsupported on the voice lane', async () => {
+    const rendered = await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+
+    await act(async () => {
+      voiceClient.emitStatus('open');
+      voiceClient.emitControl({
+        t: 'daemon.unsupported',
+        minProtocol: 1,
+        maxProtocol: 1,
+        message: 'unsupported_daemon_protocol',
+      });
+    });
+
+    await act(async () => {
+      rendered.context().sendBinary(new Uint8Array([1, 2, 3]));
+    });
+
+    expect(voiceClient.sentBinary).toEqual([]);
+  });
+
+  it('rejects malformed daemon.hello protocol instead of negotiating v1 features', async () => {
+    const rendered = await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+
+    await act(async () => {
+      voiceClient.emitStatus('open');
+      voiceClient.emitControl({
+        t: 'daemon.hello',
+        protocol: 2,
+        features: ALL_PROTOCOL_FEATURES,
+      });
+    });
+
+    await act(async () => {
+      rendered.context().requestTtsCatalog?.();
+      rendered.context().sendControl({ t: 'stt.start' });
+    });
+
+    expect(rendered.context().status).toBe('error');
+    expect(rendered.context().detail).toBe('unsupported_daemon_protocol');
+    expect(sentOf(voiceClient, 'tts.catalog.request')).toEqual([]);
+    expect(sentOf(voiceClient, 'stt.start')).toEqual([]);
+  });
+
+  it('omits provider, model, and voice hints from initial rendezvous.join for Default settings', async () => {
+    await renderRtcProvider({ voiceSettings: { voice: '', tts: {}, stt: {} } });
+    const rendezvousClient = rtcMock.instances[0];
+
+    await openWithDaemonHello(rendezvousClient);
 
     expect(sentOf(rendezvousClient, 'rendezvous.join')).toEqual([
       {
@@ -264,9 +598,7 @@ describe('RtcProvider TTS catalog and settings sync', () => {
     });
     const rendezvousClient = rtcMock.instances[0];
 
-    await act(async () => {
-      rendezvousClient.emitStatus('open');
-    });
+    await openWithDaemonHello(rendezvousClient);
 
     expect(sentOf(rendezvousClient, 'rendezvous.join')).toEqual([
       {
@@ -284,9 +616,7 @@ describe('RtcProvider TTS catalog and settings sync', () => {
     await renderRtcProvider();
     const rendezvousClient = rtcMock.instances[0];
 
-    await act(async () => {
-      rendezvousClient.emitStatus('open');
-    });
+    await openWithDaemonHello(rendezvousClient);
     expect(sentOf(rendezvousClient, 'tts.catalog.request')).toHaveLength(0);
 
     await act(async () => {
@@ -295,9 +625,7 @@ describe('RtcProvider TTS catalog and settings sync', () => {
     const voiceClient = rtcMock.instances[1];
     expect(sentOf(voiceClient, 'tts.catalog.request')).toHaveLength(0);
 
-    await act(async () => {
-      voiceClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(voiceClient);
     expect(sentOf(voiceClient, 'tts.catalog.request')).toEqual([{ t: 'tts.catalog.request' }]);
 
     await activeRender!.rerender({ voiceSettings: { ...initialSettings } });
@@ -345,12 +673,54 @@ describe('RtcProvider TTS catalog and settings sync', () => {
     expect(sentOf(voiceClient, 'tts.catalog.request')).toHaveLength(0);
   });
 
-  it('lets context consumers request the TTS catalog explicitly', async () => {
-    const rendered = await renderRtcProvider();
+  it('waits for daemon.hello before sending voice-room settings.update', async () => {
+    await renderRtcProvider();
     const voiceClient = await openRendezvousAndAccept();
+
     await act(async () => {
       voiceClient.emitStatus('open');
     });
+
+    expect(sentOf(voiceClient, 'settings.update')).toEqual([]);
+
+    await act(async () => {
+      voiceClient.emitControl({ t: 'daemon.hello', protocol: 1, features: ALL_PROTOCOL_FEATURES });
+    });
+
+    expect(sentOf(voiceClient, 'settings.update')).toEqual([
+      { t: 'settings.update', settings: initialSettings },
+    ]);
+  });
+
+  it('waits for legacy fallback before sending voice-room settings.update', async () => {
+    await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+
+    vi.useFakeTimers();
+    await act(async () => {
+      voiceClient.emitStatus('open');
+    });
+
+    expect(sentOf(voiceClient, 'settings.update')).toEqual([]);
+
+    await act(async () => {
+      vi.advanceTimersByTime(CLIENT_HELLO_FALLBACK_MS - 1);
+    });
+    expect(sentOf(voiceClient, 'settings.update')).toEqual([]);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+
+    expect(sentOf(voiceClient, 'settings.update')).toEqual([
+      { t: 'settings.update', settings: initialSettings },
+    ]);
+  });
+
+  it('lets context consumers request the TTS catalog explicitly', async () => {
+    const rendered = await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+    await openWithLegacyFallback(voiceClient);
 
     await act(async () => {
       rendered.context().requestTtsCatalog?.();
@@ -366,9 +736,7 @@ describe('RtcProvider TTS catalog and settings sync', () => {
     };
     await renderRtcProvider({ voiceSettings: previousSettings });
     const voiceClient = await openRendezvousAndAccept();
-    await act(async () => {
-      voiceClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(voiceClient);
     expect(sentOf(voiceClient, 'settings.update')).toEqual([
       {
         t: 'settings.update',
@@ -410,9 +778,7 @@ describe('RtcProvider TTS catalog and settings sync', () => {
     };
     await renderRtcProvider({ voiceSettings: previousSettings });
     const voiceClient = await openRendezvousAndAccept();
-    await act(async () => {
-      voiceClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(voiceClient);
     expect(sentOf(voiceClient, 'settings.update')).toEqual([
       { t: 'settings.update', settings: previousSettings },
     ]);
@@ -438,9 +804,7 @@ describe('RtcProvider TTS catalog and settings sync', () => {
   it('sends settings.update when the canonical TTS voice changes in an open voice room', async () => {
     await renderRtcProvider();
     const voiceClient = await openRendezvousAndAccept();
-    await act(async () => {
-      voiceClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(voiceClient);
     expect(sentOf(voiceClient, 'settings.update')).toEqual([
       { t: 'settings.update', settings: initialSettings },
     ]);
@@ -460,9 +824,7 @@ describe('RtcProvider TTS catalog and settings sync', () => {
   it('sends full canonical TTS settings and dedupes by provider, model, and voice', async () => {
     await renderRtcProvider();
     const voiceClient = await openRendezvousAndAccept();
-    await act(async () => {
-      voiceClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(voiceClient);
     expect(sentOf(voiceClient, 'settings.update')).toEqual([
       { t: 'settings.update', settings: initialSettings },
     ]);
@@ -484,9 +846,7 @@ describe('RtcProvider TTS catalog and settings sync', () => {
   it('sends an explicit clearing settings.update when explicit settings change to Default', async () => {
     await renderRtcProvider();
     const voiceClient = await openRendezvousAndAccept();
-    await act(async () => {
-      voiceClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(voiceClient);
     expect(sentOf(voiceClient, 'settings.update')).toEqual([
       { t: 'settings.update', settings: initialSettings },
     ]);
@@ -503,9 +863,7 @@ describe('RtcProvider TTS catalog and settings sync', () => {
     await renderRtcProvider();
     const rendezvousClient = rtcMock.instances[0];
 
-    await act(async () => {
-      rendezvousClient.emitStatus('open');
-    });
+    await openWithDaemonHello(rendezvousClient);
     expect(sentOf(rendezvousClient, 'rendezvous.join')).toEqual([
       {
         t: 'rendezvous.join',
@@ -519,9 +877,7 @@ describe('RtcProvider TTS catalog and settings sync', () => {
       rendezvousClient.emitControl({ t: 'rendezvous.accept', roomId: 'voice-room-1' });
     });
     const voiceClient = rtcMock.instances[1];
-    await act(async () => {
-      voiceClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(voiceClient);
 
     expect(sentOf(voiceClient, 'settings.update')).toEqual([
       { t: 'settings.update', settings: {} },
@@ -531,9 +887,7 @@ describe('RtcProvider TTS catalog and settings sync', () => {
   it('resets settings dedupe after returning to a rendezvous room', async () => {
     await renderRtcProvider();
     const firstVoiceClient = await openRendezvousAndAccept('voice-room-1');
-    await act(async () => {
-      firstVoiceClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(firstVoiceClient);
     expect(sentOf(firstVoiceClient, 'settings.update')).toHaveLength(1);
 
     await activeRender!.rerender({
@@ -547,9 +901,7 @@ describe('RtcProvider TTS catalog and settings sync', () => {
       secondRendezvousClient.emitControl({ t: 'rendezvous.accept', roomId: 'voice-room-2' });
     });
     const secondVoiceClient = rtcMock.instances.at(-1)!;
-    await act(async () => {
-      secondVoiceClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(secondVoiceClient);
 
     expect(sentOf(secondVoiceClient, 'settings.update')).toEqual([
       { t: 'settings.update', settings: initialSettings },
@@ -606,9 +958,7 @@ describe('RtcProvider recent session picker sync', () => {
     const dashboardClient = rtcMock.instances[0];
 
     expect(dashboardClient.hostPeerId).toBe('host-1');
-    await act(async () => {
-      dashboardClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(dashboardClient);
 
     expect(sentOf(dashboardClient, 'rendezvous.join')).toEqual([]);
     expect(sentOf(dashboardClient, 'sessions.list.subscribe')).toEqual([{ t: 'sessions.list.subscribe' }]);
@@ -628,9 +978,7 @@ describe('RtcProvider recent session picker sync', () => {
   it('subscribes to recent sessions once after the voice room opens', async () => {
     await renderRtcProvider();
     const voiceClient = await openRendezvousAndAccept();
-    await act(async () => {
-      voiceClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(voiceClient);
 
     expect(sentOf(voiceClient, 'sessions.list.subscribe')).toEqual([{ t: 'sessions.list.subscribe' }]);
     expect(sentOf(voiceClient, 'sessions.catalog.request')).toEqual([{ t: 'sessions.catalog.request' }]);
@@ -644,9 +992,7 @@ describe('RtcProvider recent session picker sync', () => {
   it('exposes received recent sessions, marks support, and allows manual refresh in an open voice room', async () => {
     const rendered = await renderRtcProvider();
     const voiceClient = await openRendezvousAndAccept();
-    await act(async () => {
-      voiceClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(voiceClient);
     expect(rendered.context().recentSessionsSupportStatus).toBe('probing');
 
     await act(async () => {
@@ -674,9 +1020,7 @@ describe('RtcProvider recent session picker sync', () => {
   it('increments a recent-session response sequence for repeated list responses with the same generatedAt', async () => {
     const rendered = await renderRtcProvider();
     const voiceClient = await openRendezvousAndAccept();
-    await act(async () => {
-      voiceClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(voiceClient);
 
     expect(rendered.context().recentSessionsResponseSeq).toBe(0);
 
@@ -751,9 +1095,7 @@ describe('RtcProvider recent session picker sync', () => {
     vi.useFakeTimers();
     const rendered = await renderRtcProvider();
     const voiceClient = await openRendezvousAndAccept();
-    await act(async () => {
-      voiceClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(voiceClient);
 
     expect(rendered.context().recentSessionsSupportStatus).toBe('probing');
 
@@ -773,9 +1115,7 @@ describe('RtcProvider recent session picker sync', () => {
     vi.useFakeTimers();
     const rendered = await renderRtcProvider();
     const voiceClient = await openRendezvousAndAccept();
-    await act(async () => {
-      voiceClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(voiceClient);
     await act(async () => {
       vi.advanceTimersByTime(12_000);
     });
@@ -799,9 +1139,7 @@ describe('RtcProvider recent session picker sync', () => {
     vi.useFakeTimers();
     const rendered = await renderRtcProvider();
     const voiceClient = await openRendezvousAndAccept();
-    await act(async () => {
-      voiceClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(voiceClient);
     await act(async () => {
       vi.advanceTimersByTime(12_000);
     });
@@ -836,9 +1174,7 @@ describe('RtcProvider recent session picker sync', () => {
     const seen: ControlMessage[] = [];
     const detach = rendered.context().addControlListener((msg) => seen.push(msg));
 
-    await act(async () => {
-      voiceClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(voiceClient);
 
     expect(sentOf(voiceClient, 'sessions.list.subscribe')).toEqual([{ t: 'sessions.list.subscribe' }]);
     expect(sentOf(voiceClient, 'sessions.catalog.request')).toEqual([{ t: 'sessions.catalog.request' }]);
@@ -887,18 +1223,14 @@ describe('RtcProvider recent session picker sync', () => {
   it('returns to the rendezvous room when the selected session changes on the same host', async () => {
     await renderRtcProvider();
     const firstVoiceClient = await openRendezvousAndAccept('voice-room-1');
-    await act(async () => {
-      firstVoiceClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(firstVoiceClient);
 
     await activeRender!.rerender({ rendezvous: { sessionId: 'session-2' } });
     const secondRendezvousClient = rtcMock.instances.at(-1)!;
     expect(secondRendezvousClient.hostPeerId).toBe('host-1');
     expect(secondRendezvousClient).not.toBe(firstVoiceClient);
 
-    await act(async () => {
-      secondRendezvousClient.emitStatus('open');
-    });
+    await openWithDaemonHello(secondRendezvousClient);
     expect(sentOf(secondRendezvousClient, 'rendezvous.join')).toEqual([
       {
         t: 'rendezvous.join',
@@ -914,9 +1246,7 @@ describe('RtcProvider connection retry', () => {
     const rendered = await renderRtcProvider({ rendezvous: null, voiceSettings: null });
     const failedClient = rtcMock.instances[0];
 
-    await act(async () => {
-      failedClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(failedClient);
     expect(sentOf(failedClient, 'sessions.list.subscribe')).toEqual([{ t: 'sessions.list.subscribe' }]);
     expect(sentOf(failedClient, 'sessions.catalog.request')).toEqual([{ t: 'sessions.catalog.request' }]);
 
@@ -938,9 +1268,7 @@ describe('RtcProvider connection retry', () => {
     expect(retryClient.connected).toBe(true);
     expect(rendered.context().detail).toBeUndefined();
 
-    await act(async () => {
-      retryClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(retryClient);
     expect(sentOf(retryClient, 'sessions.list.subscribe')).toEqual([{ t: 'sessions.list.subscribe' }]);
     expect(sentOf(retryClient, 'sessions.catalog.request')).toEqual([{ t: 'sessions.catalog.request' }]);
   });
@@ -971,9 +1299,7 @@ describe('RtcProvider connection retry', () => {
     const rendered = await renderRtcProvider();
     const voiceClient = await openRendezvousAndAccept('voice-room-1');
 
-    await act(async () => {
-      voiceClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(voiceClient);
     expect(sentOf(voiceClient, 'tts.catalog.request')).toEqual([{ t: 'tts.catalog.request' }]);
     expect(sentOf(voiceClient, 'stt.catalog.request')).toEqual([{ t: 'stt.catalog.request' }]);
     expect(sentOf(voiceClient, 'sessions.list.subscribe')).toEqual([{ t: 'sessions.list.subscribe' }]);
@@ -994,9 +1320,7 @@ describe('RtcProvider connection retry', () => {
     const retryVoiceClient = rtcMock.instances[2];
     expect(retryVoiceClient.hostPeerId).toBe('voice-room-1');
 
-    await act(async () => {
-      retryVoiceClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(retryVoiceClient);
 
     expect(sentOf(retryVoiceClient, 'tts.catalog.request')).toEqual([{ t: 'tts.catalog.request' }]);
     expect(sentOf(retryVoiceClient, 'stt.catalog.request')).toEqual([{ t: 'stt.catalog.request' }]);
@@ -1011,9 +1335,7 @@ describe('RtcProvider connection retry', () => {
     const rendered = await renderRtcProvider({ rendezvous: null, voiceSettings: null });
     const openClient = rtcMock.instances[0];
 
-    await act(async () => {
-      openClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(openClient);
     expect(rendered.context().canRetryConnection).toBe(false);
 
     await act(async () => {
@@ -1073,6 +1395,39 @@ describe('RtcProvider connection retry', () => {
 
     expect(rtcMock.instances).toHaveLength(2);
   });
+
+  it('does not re-enable retries when a protocol-mismatched daemon closes after daemon.unsupported', async () => {
+    vi.useFakeTimers();
+    const rendered = await renderRtcProvider();
+    const voiceClient = await openRendezvousAndAccept();
+
+    await act(async () => {
+      voiceClient.emitControl({
+        t: 'daemon.unsupported',
+        minProtocol: 1,
+        maxProtocol: 1,
+        message: 'unsupported_daemon_protocol',
+      });
+    });
+
+    expect(rendered.context().status).toBe('error');
+    expect(rendered.context().detail).toBe('unsupported_daemon_protocol');
+    expect(rendered.context().canRetryConnection).toBe(false);
+
+    await act(async () => {
+      voiceClient.emitStatus('closed');
+    });
+
+    expect(rendered.context().status).toBe('closed');
+    expect(rendered.context().detail).toBe('unsupported_daemon_protocol');
+    expect(rendered.context().canRetryConnection).toBe(false);
+
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
+
+    expect(rtcMock.instances).toHaveLength(2);
+  });
 });
 
 describe('RtcProvider STT catalog and settings sync', () => {
@@ -1094,9 +1449,7 @@ describe('RtcProvider STT catalog and settings sync', () => {
   it('requests both TTS and STT catalogs once after the voice room opens', async () => {
     await renderRtcProvider();
     const voiceClient = await openRendezvousAndAccept();
-    await act(async () => {
-      voiceClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(voiceClient);
     expect(sentOf(voiceClient, 'tts.catalog.request')).toEqual([{ t: 'tts.catalog.request' }]);
     expect(sentOf(voiceClient, 'stt.catalog.request')).toEqual([{ t: 'stt.catalog.request' }]);
 
@@ -1113,9 +1466,7 @@ describe('RtcProvider STT catalog and settings sync', () => {
     });
     expect(sentOf(rendezvousClient, 'stt.catalog.request')).toHaveLength(0);
 
-    await act(async () => {
-      rendezvousClient.emitStatus('open');
-    });
+    await openWithDaemonHello(rendezvousClient);
     await act(async () => {
       rendered.context().requestSttCatalog?.();
     });
@@ -1136,9 +1487,7 @@ describe('RtcProvider STT catalog and settings sync', () => {
   it('lets context consumers request the STT catalog explicitly', async () => {
     const rendered = await renderRtcProvider();
     const voiceClient = await openRendezvousAndAccept();
-    await act(async () => {
-      voiceClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(voiceClient);
 
     await act(async () => {
       rendered.context().requestSttCatalog?.();
@@ -1167,9 +1516,7 @@ describe('RtcProvider STT catalog and settings sync', () => {
     await renderRtcProvider({ voiceSettings: settings });
     const rendezvousClient = rtcMock.instances[0];
 
-    await act(async () => {
-      rendezvousClient.emitStatus('open');
-    });
+    await openWithDaemonHello(rendezvousClient);
 
     const joins = sentOf(rendezvousClient, 'rendezvous.join');
     expect(joins).toHaveLength(1);
@@ -1185,9 +1532,7 @@ describe('RtcProvider STT catalog and settings sync', () => {
     };
     await renderRtcProvider({ voiceSettings: startingSettings });
     const voiceClient = await openRendezvousAndAccept();
-    await act(async () => {
-      voiceClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(voiceClient);
     expect(sentOf(voiceClient, 'settings.update')).toHaveLength(1);
 
     const sttChange: VoiceSettings = {
@@ -1211,9 +1556,7 @@ describe('RtcProvider STT catalog and settings sync', () => {
     };
     await renderRtcProvider({ voiceSettings: startingSettings });
     const voiceClient = await openRendezvousAndAccept();
-    await act(async () => {
-      voiceClient.emitStatus('open');
-    });
+    await openWithLegacyFallback(voiceClient);
     expect(sentOf(voiceClient, 'settings.update')).toHaveLength(1);
 
     await activeRender!.rerender({

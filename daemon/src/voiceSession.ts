@@ -15,7 +15,7 @@ import wrtc from '@roamhq/wrtc';
 import SimplePeer from 'simple-peer';
 import { runChat, ChatError, type DeliveryTarget as ChatDeliveryTarget } from './chatSession.js';
 import { OpenClawInferTtsSession, TTS_SAMPLE_RATE, type TtsSessionCallbacks, type TtsSessionOptions } from './ttsSession.js';
-import { daemonToPhone, type ControlEventRecord, type DaemonToPhone, type DaemonToPhoneEvent, type PhoneToDaemon, type RecentSessionsSnapshot, type SttCatalog, type SttSelection, type TtsCatalog, type TtsSelection, type VoiceSettings, type VoiceTurnSnapshot } from './protocol.js';
+import { daemonHandshakeResponse, daemonToPhone, type ControlEventRecord, type DaemonToPhone, type DaemonToPhoneEvent, type PhoneToDaemon, type RecentSessionsSnapshot, type SttCatalog, type SttSelection, type TtsCatalog, type TtsSelection, type VoiceSettings, type VoiceTurnSnapshot } from './protocol.js';
 import { OpenClawInferSttSession, type OpenClawInferSttSessionOptions } from './inferSttSession.js';
 import type { SttSessionCallbacks } from './sttTypes.js';
 import { createWasmVad, type SpeechDetector, type WasmVadOptions } from './vad.js';
@@ -248,6 +248,7 @@ export class VoiceSession {
   private lastPeerDetachAtMs: number | null = null;
   private lastUsedAtMsValue = Date.now();
   private readonly controlHistory: ControlEventRecord[] = [];
+  private protocolUnsupported = false;
   private ttsAudioTurn: TtsAudioTurn | null = null;
   private turnSnapshot: VoiceTurnSnapshot = {
     inFlight: false,
@@ -428,6 +429,7 @@ export class VoiceSession {
       }
     }
 
+    this.protocolUnsupported = false;
     this.remoteId = remoteId;
     this.peerInitiator = initiator;
     this.acceptedOffer = false;
@@ -511,6 +513,7 @@ export class VoiceSession {
     this.peer = null;
     this.remoteId = null;
     this.connected = false;
+    this.protocolUnsupported = false;
     this.lastPeerDetachEventId = this.controlEventId;
     this.lastPeerDetachAtMs = Date.now();
 
@@ -565,6 +568,7 @@ export class VoiceSession {
     this.peer = null;
     this.remoteId = null;
     this.connected = false;
+    this.protocolUnsupported = false;
   }
 
   private openOutboundAudio(): { stream: unknown | null } {
@@ -729,10 +733,18 @@ export class VoiceSession {
       this.handleControl(msg);
       return;
     }
+    if (this.protocolUnsupported) return;
     if (this.stt) this.stt.sendAudio(bytes);
   }
 
   private handleControl(msg: PhoneToDaemon): void {
+    if (this.protocolUnsupported) return;
+    if (msg.t === 'client.hello') {
+      const response = daemonHandshakeResponse(msg);
+      this.sendConnectionScoped(response);
+      if (response.t === 'daemon.unsupported') this.enterProtocolUnsupported();
+      return;
+    }
     if (msg.t === 'tts.catalog.request') {
       void this.sendTtsCatalog();
       return;
@@ -1218,7 +1230,13 @@ export class VoiceSession {
   }
 
   private isTurnActive(token: number): boolean {
-    return token === this.turnToken && this.state.turnInFlight && !this.closing;
+    return token === this.turnToken && this.state.turnInFlight && !this.closing && !this.protocolUnsupported;
+  }
+
+  private enterProtocolUnsupported(): void {
+    this.protocolUnsupported = true;
+    this.stopRecentSessionsSubscription();
+    this.resetTurn('protocol_unsupported');
   }
 
   private resetTurn(reason: string): void {
@@ -1251,11 +1269,19 @@ export class VoiceSession {
   }
 
   private send(msg: DaemonToPhone): void {
+    if (this.protocolUnsupported) return;
     if (msg.t === 'session.snapshot') return;
     const event = this.recordControlEvent(msg);
     const peer = this.peer;
     if (!peer || !this.connected) return;
     this.sendToPeer(peer, event.msg);
+  }
+
+  private sendConnectionScoped(msg: DaemonToPhone): void {
+    if (msg.t === 'session.snapshot') return;
+    const peer = this.peer;
+    if (!peer || !this.connected) return;
+    this.sendToPeer(peer, msg);
   }
 
   private recordControlEvent(msg: DaemonToPhoneEvent): ControlEventRecord {
@@ -1330,6 +1356,7 @@ export class VoiceSession {
   }
 
   private sendBinary(pcm: Uint8Array): boolean {
+    if (this.protocolUnsupported) return false;
     const peer = this.peer;
     if (!peer || !this.connected) return false;
     return this.sendBinaryToPeer(peer, pcm, 'binary send failed');

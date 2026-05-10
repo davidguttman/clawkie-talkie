@@ -24,11 +24,31 @@ import {
   type RecentSessionFavoriteState,
 } from '../storage';
 import { attachDaemonRemoteStream, detachDaemonRemoteStream } from '../voice/tts';
-import { phoneToDaemon, type DeliveryTarget, type RecentSession, type RecentSessionsSnapshot, type SttCatalog, type TtsCatalog, type VoiceSettings } from '../voice/protocol';
+import {
+  PROTOCOL_FEATURES,
+  isDaemonSupportedProtocol,
+  phoneToDaemon,
+  type DeliveryTarget,
+  type ProtocolFeature,
+  type RecentSession,
+  type RecentSessionsSnapshot,
+  type SttCatalog,
+  type TtsCatalog,
+  type VoiceSettings,
+} from '../voice/protocol';
 
 export type RecentSessionsSupportStatus = 'unknown' | 'probing' | 'supported' | 'unsupported';
 
+type DaemonNegotiationMode = 'idle' | 'pending' | 'negotiated' | 'legacy' | 'unsupported';
+
+interface DaemonNegotiationState {
+  roomId?: string;
+  mode: DaemonNegotiationMode;
+  features: string[];
+}
+
 const RECENT_SESSIONS_SUPPORT_TIMEOUT_MS = 12_000;
+const CLIENT_HELLO_FALLBACK_MS = 250;
 const RTC_RETRY_BACKOFF_MS = [1_000, 2_500, 5_000, 10_000, 15_000] as const;
 
 export interface RtcContextValue {
@@ -116,12 +136,78 @@ function trimmedString(value: unknown): string | undefined {
 }
 
 function isRetryableConnectionState(status: RtcStatus, detail: string | undefined, activeRoomId: string | undefined): boolean {
-  return !!activeRoomId && detail !== 'session_replaced' && (status === 'error' || status === 'closed');
+  return (
+    !!activeRoomId &&
+    detail !== 'session_replaced' &&
+    detail !== 'unsupported_daemon_protocol' &&
+    (status === 'error' || status === 'closed')
+  );
 }
 
 function retryBackoffMs(attempt: number): number {
   const index = Math.max(0, Math.min(attempt, RTC_RETRY_BACKOFF_MS.length - 1));
   return RTC_RETRY_BACKOFF_MS[index];
+}
+
+function emptyNegotiation(roomId?: string): DaemonNegotiationState {
+  return { roomId, mode: 'idle', features: [] };
+}
+
+function isNegotiationCurrent(negotiation: DaemonNegotiationState, roomId?: string): boolean {
+  return !!roomId && negotiation.roomId === roomId;
+}
+
+function isNegotiationResolved(negotiation: DaemonNegotiationState, roomId?: string): boolean {
+  return (
+    isNegotiationCurrent(negotiation, roomId) &&
+    (negotiation.mode === 'negotiated' || negotiation.mode === 'legacy')
+  );
+}
+
+function negotiatedFeatures(msg: ControlMessage): string[] {
+  if (!Array.isArray(msg.features)) return [];
+  return msg.features.filter((feature): feature is string => typeof feature === 'string');
+}
+
+function allowsProtocolFeature(
+  negotiation: DaemonNegotiationState,
+  roomId: string | undefined,
+  feature: ProtocolFeature,
+): boolean {
+  if (!isNegotiationCurrent(negotiation, roomId)) return false;
+  if (negotiation.mode === 'legacy') return true;
+  return negotiation.mode === 'negotiated' && negotiation.features.includes(feature);
+}
+
+function requiredFeatureForControlMessage(msg: ControlMessage): ProtocolFeature | null {
+  switch (msg.t) {
+    case 'tts.catalog.request':
+      return PROTOCOL_FEATURES.ttsCatalog;
+    case 'stt.catalog.request':
+      return PROTOCOL_FEATURES.sttCatalog;
+    case 'sessions.list.request':
+    case 'sessions.list.subscribe':
+    case 'sessions.list.unsubscribe':
+      return PROTOCOL_FEATURES.sessionsList;
+    case 'sessions.catalog.request':
+      return PROTOCOL_FEATURES.sessionsCatalog;
+    default:
+      return null;
+  }
+}
+
+function allowsControlMessage(
+  negotiation: DaemonNegotiationState,
+  roomId: string | undefined,
+  msg: ControlMessage,
+): boolean {
+  if (isNegotiationCurrent(negotiation, roomId) && negotiation.mode === 'unsupported') return false;
+  const feature = requiredFeatureForControlMessage(msg);
+  return !feature || allowsProtocolFeature(negotiation, roomId, feature);
+}
+
+function allowsBinaryMessage(negotiation: DaemonNegotiationState, roomId: string | undefined): boolean {
+  return !(isNegotiationCurrent(negotiation, roomId) && negotiation.mode === 'unsupported');
 }
 
 function voiceSelectionKey(voiceSettings?: VoiceSettings | null): string | null {
@@ -171,6 +257,9 @@ export function RtcProvider({
   const [recentSessionsResponseSeq, setRecentSessionsResponseSeq] = useState(0);
   const [recentSessionsSupportStatus, setRecentSessionsSupportStatus] =
     useState<RecentSessionsSupportStatus>('unknown');
+  const [daemonNegotiation, setDaemonNegotiation] = useState<DaemonNegotiationState>(() =>
+    emptyNegotiation(hostPeerId),
+  );
   const [retrySeq, setRetrySeq] = useState(0);
   const [autoRetryAttempt, setAutoRetryAttempt] = useState(0);
   // The active room flips from the rendezvous host to the
@@ -190,6 +279,7 @@ export function RtcProvider({
     setRecentSessionsSupportStatus('unknown');
     setRecentSessionsSnapshot({ generatedAt: '', sessions: [] });
     setFavoriteRecentSessions(loadFavoriteRecentSessions(hostPeerId));
+    setDaemonNegotiation(emptyNegotiation(hostPeerId));
     setAutoRetryAttempt(0);
   }, [hostPeerId]);
 
@@ -222,6 +312,27 @@ export function RtcProvider({
     let client: RtcClient;
     const deliverControlMessage = (msg: ControlMessage) => {
       if (!active) return;
+      if (msg.t === 'daemon.hello') {
+        if (!isDaemonSupportedProtocol(msg.protocol)) {
+          setDaemonNegotiation((current) => {
+            if (current.roomId !== activeRoomId || current.mode === 'unsupported') return current;
+            return { roomId: activeRoomId, mode: 'unsupported', features: [] };
+          });
+          setDetail('unsupported_daemon_protocol');
+          setStatus('error');
+          return;
+        }
+        const features = negotiatedFeatures(msg);
+        setDaemonNegotiation((current) => {
+          if (current.roomId !== activeRoomId || current.mode === 'unsupported') return current;
+          return { roomId: activeRoomId, mode: 'negotiated', features };
+        });
+      }
+      if (msg.t === 'daemon.unsupported') {
+        setDaemonNegotiation({ roomId: activeRoomId, mode: 'unsupported', features: [] });
+        setDetail(typeof msg.message === 'string' ? msg.message : 'unsupported_daemon_protocol');
+        setStatus('error');
+      }
       if (msg.t === 'session.replaced') {
         setDetail('session_replaced');
         setStatus('closed');
@@ -264,7 +375,9 @@ export function RtcProvider({
       onStatusChange: (s, d) => {
         if (!active) return;
         setStatus(s);
-        setDetail((prev) => d ?? (prev === 'session_replaced' ? prev : undefined));
+        setDetail((prev) =>
+          d ?? (prev === 'session_replaced' || prev === 'unsupported_daemon_protocol' ? prev : undefined),
+        );
       },
       onControlMessage: (msg) => {
         if (msg.t === 'session.snapshot' && Array.isArray(msg.events)) {
@@ -318,12 +431,17 @@ export function RtcProvider({
       catalogRequestedRoomRef.current = null;
       sessionsSubscribedRoomRef.current = null;
       setRecentSessionsSupportStatus('unknown');
+      setDaemonNegotiation(emptyNegotiation(hostPeerId));
       setDetail(undefined);
       setAutoRetryAttempt(0);
       if (activeRoomId !== hostPeerId) setStatus('idle');
       setActiveRoomId(hostPeerId);
     }
   }, [rendezvousKey, hostPeerId, activeRoomId]);
+
+  useEffect(() => {
+    setDaemonNegotiation(emptyNegotiation(activeRoomId));
+  }, [activeRoomId, retrySeq]);
 
   const canRetryConnection = isRetryableConnectionState(status, detail, activeRoomId);
 
@@ -353,6 +471,22 @@ export function RtcProvider({
     return () => clearTimeout(timeout);
   }, [autoRetryAttempt, canRetryConnection, resetRetryConnectionRefs]);
 
+  useEffect(() => {
+    if (!activeRoomId) return;
+    if (status !== 'open') return;
+    setDaemonNegotiation({ roomId: activeRoomId, mode: 'pending', features: [] });
+    clientRef.current?.sendControl(phoneToDaemon.clientHello());
+
+    const timeout = setTimeout(() => {
+      setDaemonNegotiation((current) => {
+        if (current.roomId !== activeRoomId || current.mode !== 'pending') return current;
+        return { roomId: activeRoomId, mode: 'legacy', features: [] };
+      });
+    }, CLIENT_HELLO_FALLBACK_MS);
+
+    return () => clearTimeout(timeout);
+  }, [activeRoomId, status, retrySeq]);
+
   // Rendezvous orchestration: when we are still on the rendezvous
   // (host) room and the data channel comes up, send rendezvous.join
   // once and wait for the daemon to point us at the deterministic
@@ -361,6 +495,7 @@ export function RtcProvider({
     if (!rendezvous || !hostPeerId) return;
     if (activeRoomId !== hostPeerId) return;
     if (status !== 'open') return;
+    if (!isNegotiationResolved(daemonNegotiation, activeRoomId)) return;
     const settingsKey = voiceSelectionKey(normalizedVoiceSettings);
     if (settingsKey && rendezvousKey) {
       appliedVoiceSettingsRef.current = { rendezvousKey, key: settingsKey };
@@ -376,7 +511,7 @@ export function RtcProvider({
         ...(normalizedVoiceSettings ? { settings: normalizedVoiceSettings } : {}),
       }),
     );
-  }, [rendezvous, rendezvousKey, hostPeerId, activeRoomId, status, normalizedVoiceSettings]);
+  }, [rendezvous, rendezvousKey, hostPeerId, activeRoomId, status, daemonNegotiation, normalizedVoiceSettings]);
 
   // Once the voice room is open, push subsequent voice-setting changes
   // so the next TTS turn picks them up without reconnecting.
@@ -384,6 +519,7 @@ export function RtcProvider({
     if (!rendezvous || !hostPeerId || !rendezvousKey) return;
     if (activeRoomId === hostPeerId) return;
     if (status !== 'open') return;
+    if (!isNegotiationResolved(daemonNegotiation, activeRoomId)) return;
     const settingsToSend = normalizedVoiceSettings;
     const key = voiceSelectionKey(settingsToSend);
     const applied = appliedVoiceSettingsRef.current;
@@ -401,36 +537,46 @@ export function RtcProvider({
     appliedVoiceSettingsRef.current = { rendezvousKey, key };
     lastSentVoiceRef.current = key;
     clientRef.current?.sendControl(phoneToDaemon.settingsUpdate(settingsToSend));
-  }, [normalizedVoiceSettings, rendezvous, rendezvousKey, hostPeerId, activeRoomId, status]);
+  }, [normalizedVoiceSettings, rendezvous, rendezvousKey, hostPeerId, activeRoomId, status, daemonNegotiation]);
 
   const requestTtsCatalog = useCallback(() => {
     if (!activeRoomId || activeRoomId === hostPeerId) return;
     if (status !== 'open') return;
+    if (!allowsProtocolFeature(daemonNegotiation, activeRoomId, PROTOCOL_FEATURES.ttsCatalog)) return;
     clientRef.current?.sendControl(phoneToDaemon.ttsCatalogRequest());
-  }, [activeRoomId, hostPeerId, status]);
+  }, [activeRoomId, daemonNegotiation, hostPeerId, status]);
 
   const requestSttCatalog = useCallback(() => {
     if (!activeRoomId || activeRoomId === hostPeerId) return;
     if (status !== 'open') return;
+    if (!allowsProtocolFeature(daemonNegotiation, activeRoomId, PROTOCOL_FEATURES.sttCatalog)) return;
     clientRef.current?.sendControl(phoneToDaemon.sttCatalogRequest());
-  }, [activeRoomId, hostPeerId, status]);
+  }, [activeRoomId, daemonNegotiation, hostPeerId, status]);
 
   const requestRecentSessions = useCallback(() => {
     if (!activeRoomId) return;
     if (rendezvous && activeRoomId === hostPeerId) return;
     if (status !== 'open') return;
+    if (!isNegotiationResolved(daemonNegotiation, activeRoomId)) return;
+    const allowList = allowsProtocolFeature(daemonNegotiation, activeRoomId, PROTOCOL_FEATURES.sessionsList);
+    const allowCatalog = allowsProtocolFeature(daemonNegotiation, activeRoomId, PROTOCOL_FEATURES.sessionsCatalog);
+    if (!allowList && !allowCatalog) {
+      setRecentSessionsSupportStatus('unsupported');
+      return;
+    }
     setRecentSessionsSupportStatus((current) =>
       current === 'supported' ? current : 'probing',
     );
-    clientRef.current?.sendControl(phoneToDaemon.sessionsListRequest());
-    clientRef.current?.sendControl(phoneToDaemon.sessionsCatalogRequest());
-  }, [activeRoomId, hostPeerId, rendezvous, status]);
+    if (allowList) clientRef.current?.sendControl(phoneToDaemon.sessionsListRequest());
+    if (allowCatalog) clientRef.current?.sendControl(phoneToDaemon.sessionsCatalogRequest());
+  }, [activeRoomId, daemonNegotiation, hostPeerId, rendezvous, status]);
 
   useEffect(() => {
     if (!hostPeerId || !activeRoomId) return;
     if (status !== 'open') return;
     const onRendezvousLane = activeRoomId === hostPeerId;
     if (rendezvous && onRendezvousLane) return;
+    if (!isNegotiationResolved(daemonNegotiation, activeRoomId)) return;
 
     if (rendezvous && !onRendezvousLane && catalogRequestedRoomRef.current !== activeRoomId) {
       catalogRequestedRoomRef.current = activeRoomId;
@@ -439,13 +585,27 @@ export function RtcProvider({
     }
     if (sessionsSubscribedRoomRef.current !== activeRoomId) {
       sessionsSubscribedRoomRef.current = activeRoomId;
+      const allowList = allowsProtocolFeature(daemonNegotiation, activeRoomId, PROTOCOL_FEATURES.sessionsList);
+      const allowCatalog = allowsProtocolFeature(daemonNegotiation, activeRoomId, PROTOCOL_FEATURES.sessionsCatalog);
+      if (!allowList && !allowCatalog) {
+        setRecentSessionsSupportStatus('unsupported');
+        return;
+      }
       setRecentSessionsSupportStatus((current) =>
         current === 'supported' ? current : 'probing',
       );
-      clientRef.current?.sendControl(phoneToDaemon.sessionsListSubscribe());
-      clientRef.current?.sendControl(phoneToDaemon.sessionsCatalogRequest());
+      if (allowList) clientRef.current?.sendControl(phoneToDaemon.sessionsListSubscribe());
+      if (allowCatalog) clientRef.current?.sendControl(phoneToDaemon.sessionsCatalogRequest());
     }
-  }, [rendezvous, hostPeerId, activeRoomId, status, requestTtsCatalog, requestSttCatalog]);
+  }, [
+    rendezvous,
+    hostPeerId,
+    activeRoomId,
+    status,
+    daemonNegotiation,
+    requestTtsCatalog,
+    requestSttCatalog,
+  ]);
 
   useEffect(() => {
     if (activeRoomId === hostPeerId) {
@@ -488,7 +648,21 @@ export function RtcProvider({
         return;
       }
       if (msg.t === 'rendezvous.error') {
-        setDetail(typeof msg.message === 'string' ? msg.message : 'rendezvous_error');
+        const message = typeof msg.message === 'string' ? msg.message : 'rendezvous_error';
+        if (
+          message === 'unexpected_message' &&
+          activeRoomId === hostPeerId &&
+          status === 'open' &&
+          daemonNegotiation.roomId === activeRoomId &&
+          (daemonNegotiation.mode === 'pending' || daemonNegotiation.mode === 'legacy')
+        ) {
+          if (daemonNegotiation.mode === 'pending') {
+            setDaemonNegotiation({ roomId: activeRoomId, mode: 'legacy', features: [] });
+          }
+          setDetail(undefined);
+          return;
+        }
+        setDetail(message);
         setStatus('error');
       }
     };
@@ -496,15 +670,17 @@ export function RtcProvider({
     return () => {
       controlListenersRef.current.delete(off);
     };
-  }, [rendezvous]);
+  }, [activeRoomId, daemonNegotiation, hostPeerId, rendezvous, status]);
 
   const sendControl = useCallback((msg: ControlMessage) => {
+    if (!allowsControlMessage(daemonNegotiation, activeRoomId, msg)) return;
     clientRef.current?.sendControl(msg);
-  }, []);
+  }, [activeRoomId, daemonNegotiation]);
 
   const sendBinary = useCallback((bytes: ArrayBuffer | Uint8Array) => {
+    if (!allowsBinaryMessage(daemonNegotiation, activeRoomId)) return;
     clientRef.current?.sendBinary(bytes);
-  }, []);
+  }, [activeRoomId, daemonNegotiation]);
 
   const addControlListener = useCallback((fn: (msg: ControlMessage) => void) => {
     controlListenersRef.current.add(fn);

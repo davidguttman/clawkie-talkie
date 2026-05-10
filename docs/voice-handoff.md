@@ -57,6 +57,15 @@ The only daemon state that survives between turns is `roomId -> VoiceSession`
 for actively connected voice rooms — necessary because WebRTC/STT/TTS need
 live objects.
 
+## Protocol and capability negotiation
+
+The browser client is current by definition because users load the hosted
+Clawkie Talkie UI at handoff time. Only the installed daemon can lag behind the
+public browser build. When the browser and daemon cannot agree on the WebRTC
+DataChannel protocol or required capabilities, surface it as a daemon
+protocol/capability mismatch and tell the installer to update the installed
+daemon while preserving `DAEMON_PEER_ID`.
+
 ## TTS and STT catalogs and settings
 
 The daemon is the source of truth for both TTS (speech output) and STT

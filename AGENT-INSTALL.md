@@ -15,6 +15,7 @@ Before reporting success, verify all of this:
 5. OpenClaw infer STT and TTS work for the same OS user that runs the daemon.
 6. `ffmpeg` is installed and available on `PATH` for the daemon service user, because the daemon currently decodes OpenClaw TTS output into PCM before sending it over WebRTC.
 7. The daemon, skill, infer config, persistence, and OpenClaw agent-turn path are verified. See [`docs/agent-install-verification.md`](docs/agent-install-verification.md).
+8. The browser client is current by definition; if verification shows a daemon protocol/capability mismatch, update the installed daemon from the current source instead of changing the browser link.
 
 ## Nontechnical user contract
 

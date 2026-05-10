@@ -12,6 +12,8 @@ Infer failures usually surface like this:
 
 For infer failures, return to [`agent-install-infer.md`](agent-install-infer.md). If OpenClaw TTS succeeds but daemon voice replies fail at the TTS audio step, verify `ffmpeg` first. If status/infer checks pass but voice replies fail before or during the OpenClaw chat turn, move directly to the agent-turn check/preflight; status and infer are not the relevant gate for reply-scope approval failures.
 
+If the browser reports `Daemon protocol/capability mismatch. Update the installed daemon.`, the browser client is current by definition and the local service is the side that needs attention. Update the installed daemon from the current source, preserve `DAEMON_PEER_ID`, restart only the Clawkie Talkie service, and rerun verification.
+
 After the user first tries `switch to voice`, they may see:
 
 ```text
