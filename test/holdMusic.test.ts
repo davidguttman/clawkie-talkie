@@ -222,56 +222,72 @@ describe('radio static generation', () => {
 });
 
 describe('HoldMusicController', () => {
-  it('preloads exactly one shuffled next track when the module loads', async () => {
+  it('preloads one shuffled next track as processed and original audio pair when the module loads', async () => {
     vi.stubGlobal('Audio', FakeAudioElement);
 
     await import('../client/src/voice/holdMusic');
 
-    expect(FakeAudioElement.instances).toHaveLength(1);
-    const audio = FakeAudioElement.instances[0];
-    expect(audio.src).toMatch(/^\/music\/.+\.mp3$/);
-    expect(audio.preload).toBe('auto');
-    expect(audio.load).toHaveBeenCalledTimes(1);
+    expect(FakeAudioElement.instances).toHaveLength(2);
+    const [processedAudio, originalAudio] = FakeAudioElement.instances;
+    expect(processedAudio.src).toMatch(/^\/music\/.+\.mp3$/);
+    expect(originalAudio.src).toBe(processedAudio.src.replace('/music/', '/music-original/'));
+    for (const audio of [processedAudio, originalAudio]) {
+      expect(audio.preload).toBe('auto');
+      expect(audio.load).toHaveBeenCalledTimes(1);
+    }
   });
 
-  it('plays the processed music and static layers as plain media elements', async () => {
+  it('plays both main versions and static layers as plain media elements', async () => {
     vi.stubGlobal('Audio', FakeAudioElement);
     const { HoldMusicController } = await import('../client/src/voice/holdMusic');
-    const preloaded = FakeAudioElement.instances[0];
+    const [processedMusic, originalMusic] = FakeAudioElement.instances;
 
     const controller = new HoldMusicController();
     controller.start();
 
-    expect(FakeAudioElement.instances).toHaveLength(3);
+    expect(FakeAudioElement.instances).toHaveLength(4);
     expect(FakeAudioContext.instances).toHaveLength(0);
-    expect(preloaded.loop).toBe(true);
-    expect(preloaded.preload).toBe('auto');
-    expect(preloaded.volume).toBeCloseTo(0.15);
-    expect(FakeAudioElement.instances[1].src).toBe('/music-layers/hiss.mp3');
-    expect(FakeAudioElement.instances[1].loop).toBe(true);
-    expect(FakeAudioElement.instances[1].volume).toBeCloseTo(0.00225);
-    expect(FakeAudioElement.instances[2].src).toBe('/music-layers/crackle.mp3');
+    expect(originalMusic.src).toBe(processedMusic.src.replace('/music/', '/music-original/'));
+    expect(processedMusic.loop).toBe(true);
+    expect(originalMusic.loop).toBe(true);
+    expect(processedMusic.preload).toBe('auto');
+    expect(originalMusic.preload).toBe('auto');
+    expect(processedMusic.volume).toBeCloseTo(0.15);
+    expect(processedMusic.muted).toBe(false);
+    expect(originalMusic.volume).toBe(0);
+    expect(originalMusic.muted).toBe(true);
+    expect(FakeAudioElement.instances[2].src).toBe('/music-layers/hiss.mp3');
     expect(FakeAudioElement.instances[2].loop).toBe(true);
-    expect(FakeAudioElement.instances[2].volume).toBeCloseTo(0.00325);
-    expect(preloaded.play).not.toHaveBeenCalled();
+    expect(FakeAudioElement.instances[2].volume).toBeCloseTo(0.00225);
+    expect(FakeAudioElement.instances[3].src).toBe('/music-layers/crackle.mp3');
+    expect(FakeAudioElement.instances[3].loop).toBe(true);
+    expect(FakeAudioElement.instances[3].volume).toBeCloseTo(0.00325);
+    expect(processedMusic.play).not.toHaveBeenCalled();
+    expect(originalMusic.play).not.toHaveBeenCalled();
 
-    preloaded.duration = 100;
-    preloaded.dispatch('loadedmetadata');
+    processedMusic.duration = 100;
+    originalMusic.duration = 100;
+    processedMusic.dispatch('loadedmetadata');
 
-    expect(preloaded.currentTime).toBeGreaterThanOrEqual(15);
-    expect(preloaded.currentTime).toBeLessThanOrEqual(50);
-    expect(preloaded.play).toHaveBeenCalledTimes(1);
-    expect(FakeAudioElement.instances[1].play).toHaveBeenCalledTimes(1);
+    expect(processedMusic.currentTime).toBeGreaterThanOrEqual(15);
+    expect(processedMusic.currentTime).toBeLessThanOrEqual(50);
+    expect(originalMusic.currentTime).toBe(processedMusic.currentTime);
+    expect(processedMusic.play).toHaveBeenCalledTimes(1);
+    expect(originalMusic.play).toHaveBeenCalledTimes(1);
     expect(FakeAudioElement.instances[2].play).toHaveBeenCalledTimes(1);
+    expect(FakeAudioElement.instances[3].play).toHaveBeenCalledTimes(1);
 
     controller.stop();
 
-    expect(preloaded.pause).toHaveBeenCalled();
-    expect(FakeAudioElement.instances[1].pause).toHaveBeenCalled();
+    expect(processedMusic.pause).toHaveBeenCalled();
+    expect(originalMusic.pause).toHaveBeenCalled();
     expect(FakeAudioElement.instances[2].pause).toHaveBeenCalled();
-    expect(FakeAudioElement.instances).toHaveLength(4);
-    expect(FakeAudioElement.instances[3]).not.toBe(preloaded);
-    expect(FakeAudioElement.instances[3].preload).toBe('auto');
+    expect(FakeAudioElement.instances[3].pause).toHaveBeenCalled();
+    expect(FakeAudioElement.instances).toHaveLength(6);
+    expect(FakeAudioElement.instances[4]).not.toBe(processedMusic);
+    expect(FakeAudioElement.instances[5]).not.toBe(originalMusic);
+    expect(FakeAudioElement.instances[4].preload).toBe('auto');
+    expect(FakeAudioElement.instances[5].preload).toBe('auto');
   });
 
   it('ignores stale play rejections after a newer session has started', async () => {
@@ -279,17 +295,21 @@ describe('HoldMusicController', () => {
     const firstPlay = createDeferred<void>();
     const { HoldMusicController } = await import('../client/src/voice/holdMusic');
     const firstAudio = FakeAudioElement.instances[0];
+    const firstOriginalAudio = FakeAudioElement.instances[1];
     firstAudio.play = vi.fn(() => firstPlay.promise);
 
     const controller = new HoldMusicController();
     controller.start();
     firstAudio.duration = 100;
+    firstOriginalAudio.duration = 100;
     firstAudio.dispatch('loadedmetadata');
     expect(firstAudio.play).toHaveBeenCalledTimes(1);
 
     controller.start();
-    const secondAudio = FakeAudioElement.instances[3];
+    const secondAudio = FakeAudioElement.instances[4];
+    const secondOriginalAudio = FakeAudioElement.instances[5];
     secondAudio.duration = 100;
+    secondOriginalAudio.duration = 100;
     secondAudio.dispatch('loadedmetadata');
     expect(secondAudio.play).toHaveBeenCalledTimes(1);
 
@@ -351,7 +371,7 @@ describe('HoldMusicController', () => {
     expect(FakeAudioElement.instances).toHaveLength(0);
   });
 
-  it('does not create static layers when audio effects are disabled', async () => {
+  it('starts with original music audible and processed music plus static layers muted when audio effects are disabled', async () => {
     const storage = new Map<string, string>([[
       'clawkie.settings.v1',
       JSON.stringify({ music: { muted: false, effects: false, disabledTracks: [] } }),
@@ -363,21 +383,34 @@ describe('HoldMusicController', () => {
     });
     vi.stubGlobal('Audio', FakeAudioElement);
     const { HoldMusicController } = await import('../client/src/voice/holdMusic');
-    const preloaded = FakeAudioElement.instances[0];
+    const [processedMusic, originalMusic] = FakeAudioElement.instances;
 
     const controller = new HoldMusicController();
     controller.start();
 
-    expect(FakeAudioElement.instances).toHaveLength(1);
-    expect(preloaded.src).toMatch(/^\/music-original\/.+\.mp3$/);
-    expect(preloaded.volume).toBeCloseTo(0.15);
-    preloaded.duration = 100;
-    preloaded.dispatch('loadedmetadata');
-    expect(preloaded.play).toHaveBeenCalledTimes(1);
+    expect(FakeAudioElement.instances).toHaveLength(4);
+    expect(processedMusic.src).toMatch(/^\/music\/.+\.mp3$/);
+    expect(originalMusic.src).toBe(processedMusic.src.replace('/music/', '/music-original/'));
+    expect(processedMusic.volume).toBe(0);
+    expect(processedMusic.muted).toBe(true);
+    expect(originalMusic.volume).toBeCloseTo(0.15);
+    expect(originalMusic.muted).toBe(false);
+    expect(FakeAudioElement.instances[2].src).toBe('/music-layers/hiss.mp3');
+    expect(FakeAudioElement.instances[2].volume).toBe(0);
+    expect(FakeAudioElement.instances[2].muted).toBe(true);
+    expect(FakeAudioElement.instances[3].src).toBe('/music-layers/crackle.mp3');
+    expect(FakeAudioElement.instances[3].volume).toBe(0);
+    expect(FakeAudioElement.instances[3].muted).toBe(true);
+
+    processedMusic.duration = 100;
+    originalMusic.duration = 100;
+    originalMusic.dispatch('loadedmetadata');
+    expect(processedMusic.play).toHaveBeenCalledTimes(1);
+    expect(originalMusic.play).toHaveBeenCalledTimes(1);
   });
 
 
-  it('restarts an active session when effects are disabled so processed audio and static layers stop', async () => {
+  it('toggles effects off during active playback without replacing or pausing current media', async () => {
     const storage = new Map<string, string>();
     vi.stubGlobal('localStorage', {
       getItem: vi.fn((key: string) => storage.get(key) ?? null),
@@ -390,18 +423,31 @@ describe('HoldMusicController', () => {
     const controller = new HoldMusicController();
     controller.start();
 
-    const [processedMusic, hiss, crackle] = FakeAudioElement.instances;
+    const [processedMusic, originalMusic, hiss, crackle] = FakeAudioElement.instances;
     expect(processedMusic.src).toMatch(/^\/music\/.+\.mp3$/);
+    expect(originalMusic.src).toBe(processedMusic.src.replace('/music/', '/music-original/'));
     expect(hiss.src).toBe('/music-layers/hiss.mp3');
     expect(crackle.src).toBe('/music-layers/crackle.mp3');
+    processedMusic.duration = 100;
+    originalMusic.duration = 100;
+    processedMusic.dispatch('loadedmetadata');
 
     setHoldMusicSettings({ muted: false, effects: false, disabledTracks: [] });
 
-    expect(processedMusic.pause).toHaveBeenCalled();
-    expect(hiss.pause).toHaveBeenCalled();
-    expect(crackle.pause).toHaveBeenCalled();
     expect(FakeAudioElement.instances).toHaveLength(4);
-    expect(FakeAudioElement.instances[3].src).toMatch(/^\/music-original\/.+\.mp3$/);
+    for (const audio of [processedMusic, originalMusic, hiss, crackle]) {
+      expect(audio.pause).not.toHaveBeenCalled();
+    }
+    expect(processedMusic.volume).toBe(0);
+    expect(processedMusic.muted).toBe(true);
+    expect(originalMusic.volume).toBeCloseTo(0.15);
+    expect(originalMusic.muted).toBe(false);
+    expect(hiss.volume).toBe(0);
+    expect(hiss.muted).toBe(true);
+    expect(crackle.volume).toBe(0);
+    expect(crackle.muted).toBe(true);
+    expect(processedMusic.play).toHaveBeenCalledTimes(1);
+    expect(originalMusic.play).toHaveBeenCalledTimes(1);
   });
 
   it('stops an active session when every song is disabled and resumes when songs return', async () => {
@@ -418,21 +464,23 @@ describe('HoldMusicController', () => {
 
     const controller = new HoldMusicController();
     controller.start();
-    const [music, hiss, crackle] = FakeAudioElement.instances;
+    const [processedMusic, originalMusic, hiss, crackle] = FakeAudioElement.instances;
 
     setHoldMusicSettings({ muted: false, effects: true, disabledTracks: tracks });
 
-    expect(music.pause).toHaveBeenCalled();
+    expect(processedMusic.pause).toHaveBeenCalled();
+    expect(originalMusic.pause).toHaveBeenCalled();
     expect(hiss.pause).toHaveBeenCalled();
     expect(crackle.pause).toHaveBeenCalled();
-    expect(FakeAudioElement.instances).toHaveLength(3);
+    expect(FakeAudioElement.instances).toHaveLength(4);
 
     setHoldMusicSettings({ muted: false, effects: true, disabledTracks: [] });
 
-    expect(FakeAudioElement.instances).toHaveLength(6);
-    expect(FakeAudioElement.instances[3].src).toMatch(/^\/music\/.+\.mp3$/);
-    expect(FakeAudioElement.instances[4].src).toBe('/music-layers/hiss.mp3');
-    expect(FakeAudioElement.instances[5].src).toBe('/music-layers/crackle.mp3');
+    expect(FakeAudioElement.instances).toHaveLength(8);
+    expect(FakeAudioElement.instances[4].src).toMatch(/^\/music\/.+\.mp3$/);
+    expect(FakeAudioElement.instances[5].src).toBe(FakeAudioElement.instances[4].src.replace('/music/', '/music-original/'));
+    expect(FakeAudioElement.instances[6].src).toBe('/music-layers/hiss.mp3');
+    expect(FakeAudioElement.instances[7].src).toBe('/music-layers/crackle.mp3');
   });
 
   it('persists mute preference and applies it to the active music and static media layers', async () => {
@@ -451,9 +499,9 @@ describe('HoldMusicController', () => {
     const controller = new HoldMusicController();
     controller.start();
 
-    const [music, hiss, crackle] = FakeAudioElement.instances;
+    const [processedMusic, originalMusic, hiss, crackle] = FakeAudioElement.instances;
     expect(getHoldMusicMuted()).toBe(true);
-    for (const audio of [music, hiss, crackle]) {
+    for (const audio of [processedMusic, originalMusic, hiss, crackle]) {
       expect(audio.muted).toBe(true);
       expect(audio.volume).toBe(0);
     }
@@ -461,8 +509,10 @@ describe('HoldMusicController', () => {
     setHoldMusicMuted(false);
 
     expect(storage.has('clawkie.holdMusic.muted.v1')).toBe(false);
-    expect(music.muted).toBe(false);
-    expect(music.volume).toBeCloseTo(0.15);
+    expect(processedMusic.muted).toBe(false);
+    expect(processedMusic.volume).toBeCloseTo(0.15);
+    expect(originalMusic.muted).toBe(true);
+    expect(originalMusic.volume).toBe(0);
     expect(hiss.muted).toBe(false);
     expect(hiss.volume).toBeCloseTo(0.00225);
     expect(crackle.muted).toBe(false);
@@ -501,7 +551,9 @@ describe('HoldMusicController', () => {
     controller.start();
 
     const music = FakeAudioElement.instances[0];
+    const originalMusic = FakeAudioElement.instances[1];
     music.duration = 100;
+    originalMusic.duration = 100;
     music.dispatch('loadedmetadata');
 
     const ctx = FakeAudioContext.instances[0];
@@ -541,10 +593,12 @@ describe('HoldMusicController', () => {
     controller.start();
 
     const music = FakeAudioElement.instances[0];
+    const originalMusic = FakeAudioElement.instances[1];
     music.duration = 100;
+    originalMusic.duration = 100;
     music.dispatch('loadedmetadata');
 
-    expect(FakeAudioElement.instances).toHaveLength(3);
+    expect(FakeAudioElement.instances).toHaveLength(4);
     expect(FakeAudioContext.instances).toHaveLength(0);
     expect(getActiveHoldMusicAnalyser()).toBeNull();
   });
@@ -560,7 +614,9 @@ describe('HoldMusicController', () => {
     controller.start();
 
     const music = FakeAudioElement.instances[0];
+    const originalMusic = FakeAudioElement.instances[1];
     music.duration = 100;
+    originalMusic.duration = 100;
     music.dispatch('loadedmetadata');
 
     const ctx = FakeAudioContext.instances[0];
@@ -575,6 +631,7 @@ describe('HoldMusicController', () => {
     expect(music.volume).toBe(0);
     expect(FakeAudioElement.instances[1].muted).toBe(true);
     expect(FakeAudioElement.instances[2].muted).toBe(true);
+    expect(FakeAudioElement.instances[3].muted).toBe(true);
     expect(analyserAudio.pause).toHaveBeenCalled();
     expect(analyserAudio.removeAttribute).toHaveBeenCalledWith('src');
     expect(source.disconnect).toHaveBeenCalled();

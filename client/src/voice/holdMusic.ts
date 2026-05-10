@@ -1,5 +1,10 @@
 import { loadMusicSettings, saveMusicSettings, type MusicSettings } from '../storage';
-import { getHoldMusicTracks, holdMusicTrackUrl } from './holdMusicCatalog';
+import {
+  getHoldMusicTracks,
+  holdMusicTrackUrl,
+  originalHoldMusicTrackUrl,
+  processedHoldMusicTrackUrl,
+} from './holdMusicCatalog';
 
 const MUSIC_VOLUME = 0.15;
 const HISS_VOLUME = 0.00225;
@@ -22,9 +27,9 @@ let sharedAudioCtx: AudioContext | null = null;
 let activeHoldMusicAnalyser: AnalyserNode | null = null;
 
 interface PreloadedHoldMusicTrack {
-  audio: HTMLAudioElement;
+  processedAudio: HTMLAudioElement;
+  originalAudio: HTMLAudioElement;
   track: string;
-  effects: boolean;
 }
 
 interface HoldMusicLayerSpec {
@@ -34,6 +39,7 @@ interface HoldMusicLayerSpec {
 
 interface HoldMusicAudioEntry {
   audio: HTMLAudioElement;
+  baseVolume: number;
   volume: number;
 }
 
@@ -97,10 +103,12 @@ export function setHoldMusicSettings(settings: MusicSettings): void {
   const after = loadMusicSettings();
   publishHoldMusicMuted(after.muted);
 
-  if (!holdMusicPlaybackSettingsEqual(before, after)) {
+  const effectsChanged = before.effects !== after.effects;
+  const disabledTracksChanged = !stringSetsEqual(before.disabledTracks, after.disabledTracks);
+  if (effectsChanged || disabledTracksChanged) {
     resetPreloadedHoldMusicTrackIfNeeded(after);
     for (const controller of Array.from(desiredHoldMusicControllers)) {
-      controller.restartForSettingsChange();
+      controller.applySettingsChange(after, { effectsChanged, disabledTracksChanged });
     }
   }
 }
@@ -113,7 +121,7 @@ export function subscribeHoldMusicMuted(listener: (muted: boolean) => void): () 
 function applyHoldMusicMute(target: HoldMusicMuteTarget, muted: boolean): void {
   for (const entry of target.entries) {
     try {
-      entry.audio.muted = muted;
+      entry.audio.muted = muted || entry.volume <= 0;
       entry.audio.volume = muted ? 0 : entry.volume;
     } catch {
       // Element volume/mute can fail in unusual browser states; keep the rest of the bed alive.
@@ -128,7 +136,10 @@ interface HoldMusicAnalyserSession {
 }
 
 interface HoldMusicSession {
-  audio: HTMLAudioElement;
+  track: string;
+  processedMain: HoldMusicAudioEntry;
+  originalMain: HoldMusicAudioEntry;
+  mainEntries: HoldMusicAudioEntry[];
   layers: HoldMusicAudioEntry[];
   muteTarget: HoldMusicMuteTarget;
   analyserSession: HoldMusicAnalyserSession | null;
@@ -156,18 +167,35 @@ export class HoldMusicController {
     if (typeof Audio === 'undefined') return;
 
     try {
-      const audio = consumePreloadedHoldMusicAudio();
-      if (!audio) return;
-      audio.loop = true;
-      audio.preload = 'auto';
+      const preloaded = consumePreloadedHoldMusicAudio();
+      if (!preloaded) return;
+
+      for (const audio of [preloaded.processedAudio, preloaded.originalAudio]) {
+        audio.loop = true;
+        audio.preload = 'auto';
+      }
 
       const musicSettings = loadMusicSettings();
-      const layers = createHoldMusicLayerEntries(musicSettings);
-      const entries = [{ audio, volume: MUSIC_VOLUME }, ...layers];
+      const processedMain: HoldMusicAudioEntry = {
+        audio: preloaded.processedAudio,
+        baseVolume: MUSIC_VOLUME,
+        volume: 0,
+      };
+      const originalMain: HoldMusicAudioEntry = {
+        audio: preloaded.originalAudio,
+        baseVolume: MUSIC_VOLUME,
+        volume: 0,
+      };
+      const layers = createHoldMusicLayerEntries();
+      const mainEntries = [processedMain, originalMain];
+      const entries = [...mainEntries, ...layers];
       const muteTarget: HoldMusicMuteTarget = { entries };
 
       const session: HoldMusicSession = {
-        audio,
+        track: preloaded.track,
+        processedMain,
+        originalMain,
+        mainEntries,
         layers,
         muteTarget,
         analyserSession: null,
@@ -180,16 +208,18 @@ export class HoldMusicController {
       muteTarget.onMuteChanged = (muted) => {
         this.handleSessionMuteChange(session, muted);
       };
-      applyHoldMusicMute(muteTarget, getHoldMusicMuted());
+      applyHoldMusicSessionVolumes(session, musicSettings);
       this.session = session;
       activeMuteTargets.add(muteTarget);
 
-      if (hasKnownDuration(audio)) {
+      if (hasKnownSessionDuration(session)) {
         this.beginSession(session);
       } else {
-        audio.addEventListener('loadedmetadata', session.onMetadata);
-        audio.addEventListener('durationchange', session.onMetadata);
-        audio.load();
+        for (const audio of session.mainEntries.map((entry) => entry.audio)) {
+          audio.addEventListener('loadedmetadata', session.onMetadata);
+          audio.addEventListener('durationchange', session.onMetadata);
+          audio.load();
+        }
       }
     } catch {
       this.stop();
@@ -208,6 +238,33 @@ export class HoldMusicController {
     this.start();
   }
 
+  applySettingsChange(
+    settings: MusicSettings,
+    change: { effectsChanged: boolean; disabledTracksChanged: boolean },
+  ): void {
+    if (!this.wantsPlayback) return;
+
+    if (change.disabledTracksChanged) {
+      if (!this.session || !isTrackEnabled(this.session.track, settings)) {
+        this.restartForSettingsChange();
+        return;
+      }
+    }
+
+    if (change.effectsChanged && this.session) {
+      this.applyLiveSettings(settings);
+    }
+  }
+
+  private applyLiveSettings(settings: MusicSettings): void {
+    const session = this.session;
+    if (!session || session.stopped) return;
+    applyHoldMusicSessionVolumes(session, settings);
+    if (session.started && !getHoldMusicMuted()) {
+      this.restartSessionAnalyser(session);
+    }
+  }
+
   private stopActiveSession(): void {
     const session = this.session;
     this.session = null;
@@ -221,13 +278,14 @@ export class HoldMusicController {
     session.analyserSession = null;
 
     try {
-      session.audio.removeEventListener('loadedmetadata', session.onMetadata);
-      session.audio.removeEventListener('durationchange', session.onMetadata);
+      for (const audio of session.mainEntries.map((entry) => entry.audio)) {
+        audio.removeEventListener('loadedmetadata', session.onMetadata);
+        audio.removeEventListener('durationchange', session.onMetadata);
+      }
     } catch {
       // best-effort cleanup
     }
-    cleanupAudioElement(session.audio);
-
+    for (const entry of session.mainEntries) cleanupAudioElement(entry.audio);
     for (const layer of session.layers) cleanupAudioElement(layer.audio);
 
     preloadNextHoldMusicTrack();
@@ -235,28 +293,31 @@ export class HoldMusicController {
 
   private beginSession(session: HoldMusicSession): void {
     if (this.session !== session || session.stopped || session.started) return;
-    if (!hasKnownDuration(session.audio)) return;
+    const duration = holdMusicSessionDuration(session);
+    if (!duration) return;
 
     session.started = true;
-    const startTime = pickRandomStartTime(session.audio.duration);
-    try {
-      session.audio.currentTime = startTime;
-    } catch {
-      // Some browsers reject seeks until more data is buffered; starting at zero is acceptable.
+    const startTime = pickRandomStartTime(duration);
+    for (const entry of session.mainEntries) {
+      try {
+        entry.audio.currentTime = startTime;
+      } catch {
+        // Some browsers reject seeks until more data is buffered; starting at zero is acceptable.
+      }
     }
 
     if (!getHoldMusicMuted()) {
-      const analyserSession = createBestEffortAnalyserSession(session.audio.src, startTime);
-      session.analyserSession = analyserSession;
-      if (analyserSession) activeHoldMusicAnalyser = analyserSession.analyser;
+      this.restartSessionAnalyser(session, startTime);
     }
 
-    const playMain = session.audio.play();
-    void playMain.catch(() => {
-      if (this.session === session && !session.stopped) {
-        this.stop();
-      }
-    });
+    for (const entry of session.mainEntries) {
+      const playMain = entry.audio.play();
+      void playMain.catch(() => {
+        if (this.session === session && !session.stopped) {
+          this.stop();
+        }
+      });
+    }
 
     for (const layer of session.layers) {
       try {
@@ -268,11 +329,19 @@ export class HoldMusicController {
         // Static layers are decorative; main hold music should keep playing without them.
       });
     }
+  }
 
-    if (session.analyserSession) {
-      const analyserSession = session.analyserSession;
+  private restartSessionAnalyser(session: HoldMusicSession, startTime?: number): void {
+    cleanupAnalyserSession(session.analyserSession);
+    session.analyserSession = null;
+    const audibleMain = getAudibleMainEntry(session, loadMusicSettings()).audio;
+    const analyserStartTime = startTime ?? audibleMain.currentTime;
+    const analyserSession = createBestEffortAnalyserSession(audibleMain.src, analyserStartTime);
+    session.analyserSession = analyserSession;
+    if (analyserSession) {
+      activeHoldMusicAnalyser = analyserSession.analyser;
       try {
-        analyserSession.audio.currentTime = startTime;
+        analyserSession.audio.currentTime = analyserStartTime;
       } catch {
         // analyser is non-essential
       }
@@ -305,13 +374,13 @@ export function pickHoldMusicUrl(
   return holdMusicTrackUrl(tracks[index], settings.effects);
 }
 
-function consumePreloadedHoldMusicAudio(): HTMLAudioElement | null {
+function consumePreloadedHoldMusicAudio(): PreloadedHoldMusicTrack | null {
   const settings = loadMusicSettings();
   resetPreloadedHoldMusicTrackIfNeeded(settings);
   preloadNextHoldMusicTrack(settings);
   const preloaded = preloadedHoldMusicTrack;
   preloadedHoldMusicTrack = null;
-  return preloaded?.audio ?? null;
+  return preloaded;
 }
 
 function preloadNextHoldMusicTrack(settings: MusicSettings = loadMusicSettings()): void {
@@ -320,10 +389,13 @@ function preloadNextHoldMusicTrack(settings: MusicSettings = loadMusicSettings()
   if (!track) return;
 
   try {
-    const audio = new Audio(holdMusicTrackUrl(track, settings.effects));
-    audio.preload = 'auto';
-    audio.load();
-    preloadedHoldMusicTrack = { audio, track, effects: settings.effects };
+    const processedAudio = new Audio(processedHoldMusicTrackUrl(track));
+    const originalAudio = new Audio(originalHoldMusicTrackUrl(track));
+    for (const audio of [processedAudio, originalAudio]) {
+      audio.preload = 'auto';
+      audio.load();
+    }
+    preloadedHoldMusicTrack = { processedAudio, originalAudio, track };
   } catch {
     // Preloading is opportunistic; playback can fail silently like the rest of the hold bed.
   }
@@ -364,11 +436,9 @@ function enabledHoldMusicTracks(settings: MusicSettings): string[] {
 
 function resetPreloadedHoldMusicTrackIfNeeded(settings: MusicSettings): void {
   if (!preloadedHoldMusicTrack) return;
-  if (
-    preloadedHoldMusicTrack.effects === settings.effects
-    && isTrackEnabled(preloadedHoldMusicTrack.track, settings)
-  ) return;
-  cleanupAudioElement(preloadedHoldMusicTrack.audio);
+  if (isTrackEnabled(preloadedHoldMusicTrack.track, settings)) return;
+  cleanupAudioElement(preloadedHoldMusicTrack.processedAudio);
+  cleanupAudioElement(preloadedHoldMusicTrack.originalAudio);
   preloadedHoldMusicTrack = null;
 }
 
@@ -376,8 +446,29 @@ function isTrackEnabled(track: string, settings: MusicSettings): boolean {
   return !settings.disabledTracks.includes(track);
 }
 
-function holdMusicPlaybackSettingsEqual(a: MusicSettings, b: MusicSettings): boolean {
-  return a.effects === b.effects && stringSetsEqual(a.disabledTracks, b.disabledTracks);
+function applyHoldMusicSessionVolumes(session: HoldMusicSession, settings: MusicSettings): void {
+  session.processedMain.volume = settings.effects ? session.processedMain.baseVolume : 0;
+  session.originalMain.volume = settings.effects ? 0 : session.originalMain.baseVolume;
+  for (const layer of session.layers) {
+    layer.volume = settings.effects ? layer.baseVolume : 0;
+  }
+  applyHoldMusicMute(session.muteTarget, getHoldMusicMuted());
+}
+
+function getAudibleMainEntry(session: HoldMusicSession, settings: MusicSettings): HoldMusicAudioEntry {
+  return settings.effects ? session.processedMain : session.originalMain;
+}
+
+function hasKnownSessionDuration(session: HoldMusicSession): boolean {
+  return holdMusicSessionDuration(session) !== null;
+}
+
+function holdMusicSessionDuration(session: HoldMusicSession): number | null {
+  const durations = session.mainEntries
+    .map((entry) => entry.audio.duration)
+    .filter((duration) => Number.isFinite(duration) && duration > 0);
+  if (durations.length !== session.mainEntries.length) return null;
+  return Math.min(...durations);
 }
 
 function stringSetsEqual(a: readonly string[], b: readonly string[]): boolean {
@@ -386,8 +477,8 @@ function stringSetsEqual(a: readonly string[], b: readonly string[]): boolean {
   return b.every((value) => set.has(value));
 }
 
-function createHoldMusicLayerEntries(settings: MusicSettings): HoldMusicAudioEntry[] {
-  if (!settings.effects || typeof Audio === 'undefined') return [];
+function createHoldMusicLayerEntries(): HoldMusicAudioEntry[] {
+  if (typeof Audio === 'undefined') return [];
   const entries: HoldMusicAudioEntry[] = [];
   for (const layer of HOLD_MUSIC_LAYER_TRACKS) {
     try {
@@ -395,7 +486,7 @@ function createHoldMusicLayerEntries(settings: MusicSettings): HoldMusicAudioEnt
       audio.loop = true;
       audio.preload = 'auto';
       audio.load();
-      entries.push({ audio, volume: layer.volume });
+      entries.push({ audio, baseVolume: layer.volume, volume: layer.volume });
     } catch {
       // Static layers are nice-to-have; do not block the music track.
     }
@@ -409,10 +500,6 @@ export function pickRandomStartTime(duration: number, random: () => number = Mat
   if (!Number.isFinite(duration) || duration <= 0) return 0.001;
   const fraction = 0.15 + random() * 0.35;
   return Math.max(0.001, Math.min(duration - 0.001, duration * fraction));
-}
-
-function hasKnownDuration(audio: HTMLAudioElement): boolean {
-  return Number.isFinite(audio.duration) && audio.duration > 0;
 }
 
 function cleanupAudioElement(audio: HTMLAudioElement): void {
