@@ -1,5 +1,27 @@
-import { describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
+
+import { act, createElement, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import { describe, expect, it, vi } from 'vitest';
+
+const holdMusicMock = vi.hoisted(() => {
+  const mock = {
+    muteListener: null as ((muted: boolean) => void) | null,
+    setHoldMusicSettings: vi.fn(),
+    subscribeHoldMusicMuted: vi.fn((listener: (muted: boolean) => void) => {
+      mock.muteListener = listener;
+      return () => {
+        if (mock.muteListener === listener) mock.muteListener = null;
+      };
+    }),
+  };
+  return mock;
+});
+
+vi.mock('../client/src/voice/holdMusic', () => holdMusicMock);
+
 import {
+  SettingsScreen,
   configuredSttProviders,
   configuredTtsProviders,
   DEFAULT_PROVIDER_OPTION_ID,
@@ -18,6 +40,9 @@ import {
   withLegacyVoiceSelection,
   withSttSelection,
   withTtsSelection,
+  withMusicEffects,
+  withMusicMuted,
+  withMusicTrackEnabled,
 } from '../client/src/screens/Settings';
 import type { Settings } from '../client/src/storage';
 import type { SttCatalog, TtsCatalog } from '../client/src/voice/protocol';
@@ -61,6 +86,123 @@ function catalog(overrides: Partial<TtsCatalog> = {}): TtsCatalog {
     ...overrides,
   };
 }
+
+
+describe('SettingsScreen toggle accessibility', () => {
+  it('renders export and music toggles as named switches with touch-friendly hit targets', async () => {
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const settings: Settings = {
+      voice: '',
+      tts: {},
+      stt: {},
+      format: 'md',
+      timestamps: true,
+      music: { muted: false, effects: true, disabledTracks: [] },
+    };
+
+    try {
+      await act(async () => {
+        root.render(createElement(SettingsScreen, {
+          onBack: () => undefined,
+          settings,
+          setSettings: vi.fn(),
+          ttsCatalog: null,
+          sttCatalog: null,
+          compact: true,
+        }));
+      });
+
+      const switches = Array.from(
+        container.querySelectorAll<HTMLButtonElement>('button[role="switch"]'),
+      );
+      const switchByLabel = (label: string) => switches.find(
+        (button) => button.getAttribute('aria-label') === label,
+      );
+      const includeTimestamps = switchByLabel('Include timestamps');
+      const muteHoldMusic = switchByLabel('Mute hold music');
+      const audioEffects = switchByLabel('Audio effects');
+
+      expect(includeTimestamps?.getAttribute('aria-checked')).toBe('true');
+      expect(muteHoldMusic?.getAttribute('aria-checked')).toBe('false');
+      expect(audioEffects?.getAttribute('aria-checked')).toBe('true');
+
+      for (const toggle of [includeTimestamps, muteHoldMusic, audioEffects]) {
+        expect(toggle).toBeDefined();
+        expect(toggle?.style.width).toBe('44px');
+        expect(toggle?.style.height).toBe('44px');
+        expect(toggle?.style.minWidth).toBe('44px');
+        expect(toggle?.style.minHeight).toBe('44px');
+
+        const visualSwitch = toggle?.querySelector<HTMLElement>('[aria-hidden="true"]');
+        expect(visualSwitch?.style.width).toBe('40px');
+        expect(visualSwitch?.style.height).toBe('24px');
+      }
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('reflects external hold music mute changes while settings is open', async () => {
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    holdMusicMock.muteListener = null;
+    holdMusicMock.subscribeHoldMusicMuted.mockClear();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const initialSettings: Settings = {
+      voice: '',
+      tts: {},
+      stt: {},
+      format: 'md',
+      timestamps: false,
+      music: { muted: false, effects: true, disabledTracks: [] },
+    };
+
+    function Harness() {
+      const [settings, setSettings] = useState(initialSettings);
+      return createElement(SettingsScreen, {
+        onBack: () => undefined,
+        settings,
+        setSettings,
+        ttsCatalog: null,
+        sttCatalog: null,
+        compact: true,
+      });
+    }
+
+    try {
+      await act(async () => {
+        root.render(createElement(Harness));
+      });
+      const muteSwitch = () => container.querySelector<HTMLButtonElement>(
+        'button[role="switch"][aria-label="Mute hold music"]',
+      );
+
+      expect(muteSwitch()?.getAttribute('aria-checked')).toBe('false');
+      expect(holdMusicMock.subscribeHoldMusicMuted).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        holdMusicMock.muteListener?.(true);
+      });
+
+      expect(muteSwitch()?.getAttribute('aria-checked')).toBe('true');
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
+});
 
 describe('SettingsScreen legacy voice selection', () => {
   it('updates canonical TTS voice while preserving provider and model fields', () => {
@@ -300,6 +442,46 @@ function sttCatalog(overrides: Partial<SttCatalog> = {}): SttCatalog {
     ...overrides,
   };
 }
+
+
+describe('SettingsScreen music helpers', () => {
+  it('toggles hold music mute and audio effects without touching voice/export settings', () => {
+    const settings: Settings = {
+      voice: 'nova',
+      tts: { providerId: 'openai', voice: 'nova' },
+      stt: { providerId: 'xai', model: 'grok-stt' },
+      format: 'json',
+      timestamps: true,
+      music: { muted: false, effects: true, disabledTracks: [] },
+    };
+
+    expect(withMusicMuted(settings, true)).toEqual({
+      ...settings,
+      music: { muted: true, effects: true, disabledTracks: [] },
+    });
+    expect(withMusicEffects(settings, false)).toEqual({
+      ...settings,
+      music: { muted: false, effects: false, disabledTracks: [] },
+    });
+  });
+
+  it('toggles individual songs off and back on with a stable disabled-track list', () => {
+    const settings: Settings = {
+      voice: '',
+      tts: {},
+      stt: {},
+      format: 'md',
+      timestamps: false,
+      music: { muted: false, effects: true, disabledTracks: ['Soft Hold Tone.mp3'] },
+    };
+
+    expect(withMusicTrackEnabled(settings, 'Dockside Hold.mp3', false).music.disabledTracks).toEqual([
+      'Soft Hold Tone.mp3',
+      'Dockside Hold.mp3',
+    ]);
+    expect(withMusicTrackEnabled(settings, 'Soft Hold Tone.mp3', true).music.disabledTracks).toEqual([]);
+  });
+});
 
 describe('SettingsScreen STT catalog helpers', () => {
   it('sorts configured/available STT providers first', () => {

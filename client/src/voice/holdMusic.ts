@@ -1,4 +1,5 @@
-import { HOLD_MUSIC_TRACKS } from 'virtual:hold-music-tracks';
+import { loadMusicSettings, saveMusicSettings, type MusicSettings } from '../storage';
+import { getHoldMusicTracks, holdMusicTrackUrl } from './holdMusicCatalog';
 
 const MUSIC_VOLUME = 0.15;
 const HISS_VOLUME = 0.0045;
@@ -22,6 +23,8 @@ let activeHoldMusicAnalyser: AnalyserNode | null = null;
 
 interface PreloadedHoldMusicTrack {
   audio: HTMLAudioElement;
+  track: string;
+  effects: boolean;
 }
 
 interface HoldMusicLayerSpec {
@@ -37,12 +40,11 @@ interface HoldMusicAudioEntry {
 let shuffledHoldMusicDeck: string[] = [];
 let lastHoldMusicTrack: string | null = null;
 let preloadedHoldMusicTrack: PreloadedHoldMusicTrack | null = null;
+const desiredHoldMusicControllers = new Set<HoldMusicController>();
 
 export function getActiveHoldMusicAnalyser(): AnalyserNode | null {
   return activeHoldMusicAnalyser;
 }
-
-const HOLD_MUSIC_MUTE_STORAGE_KEY = 'clawkie.holdMusic.muted.v1';
 
 let holdMusicMuted: boolean | null = null;
 const muteListeners = new Set<(muted: boolean) => void>();
@@ -54,21 +56,24 @@ interface HoldMusicMuteTarget {
 }
 
 function readMuteFromStorage(): boolean {
-  if (typeof localStorage === 'undefined') return false;
-  try {
-    return localStorage.getItem(HOLD_MUSIC_MUTE_STORAGE_KEY) === '1';
-  } catch {
-    return false;
-  }
+  return loadMusicSettings().muted;
 }
 
 function writeMuteToStorage(muted: boolean): void {
-  if (typeof localStorage === 'undefined') return;
-  try {
-    if (muted) localStorage.setItem(HOLD_MUSIC_MUTE_STORAGE_KEY, '1');
-    else localStorage.removeItem(HOLD_MUSIC_MUTE_STORAGE_KEY);
-  } catch {
-    // storage disabled — preference reverts to default on reload
+  saveMusicSettings({ ...loadMusicSettings(), muted });
+}
+
+function publishHoldMusicMuted(muted: boolean): void {
+  const next = !!muted;
+  if (holdMusicMuted === null) holdMusicMuted = readMuteFromStorage();
+  if (holdMusicMuted === next) return;
+  holdMusicMuted = next;
+  for (const target of activeMuteTargets) {
+    applyHoldMusicMute(target, next);
+    try { target.onMuteChanged?.(next); } catch { /* target errors must not break audio */ }
+  }
+  for (const listener of muteListeners) {
+    try { listener(next); } catch { /* listener errors must not break audio */ }
   }
 }
 
@@ -81,14 +86,22 @@ export function setHoldMusicMuted(muted: boolean): void {
   const next = !!muted;
   if (holdMusicMuted === null) holdMusicMuted = readMuteFromStorage();
   if (holdMusicMuted === next) return;
-  holdMusicMuted = next;
   writeMuteToStorage(next);
-  for (const target of activeMuteTargets) {
-    applyHoldMusicMute(target, next);
-    try { target.onMuteChanged?.(next); } catch { /* target errors must not break audio */ }
-  }
-  for (const listener of muteListeners) {
-    try { listener(next); } catch { /* listener errors must not break audio */ }
+  publishHoldMusicMuted(next);
+}
+
+export function setHoldMusicSettings(settings: MusicSettings): void {
+  const before = loadMusicSettings();
+  if (holdMusicMuted === null) holdMusicMuted = before.muted;
+  saveMusicSettings(settings);
+  const after = loadMusicSettings();
+  publishHoldMusicMuted(after.muted);
+
+  if (!holdMusicPlaybackSettingsEqual(before, after)) {
+    resetPreloadedHoldMusicTrackIfNeeded(after);
+    for (const controller of Array.from(desiredHoldMusicControllers)) {
+      controller.restartForSettingsChange();
+    }
   }
 }
 
@@ -126,6 +139,7 @@ interface HoldMusicSession {
 
 export class HoldMusicController {
   private session: HoldMusicSession | null = null;
+  private wantsPlayback = false;
 
   unlock(): Promise<void> {
     const audioCtx = getSharedHoldAudioContext();
@@ -135,7 +149,9 @@ export class HoldMusicController {
   }
 
   start(): void {
-    this.stop();
+    this.wantsPlayback = true;
+    desiredHoldMusicControllers.add(this);
+    this.stopActiveSession();
 
     if (typeof Audio === 'undefined') return;
 
@@ -145,7 +161,8 @@ export class HoldMusicController {
       audio.loop = true;
       audio.preload = 'auto';
 
-      const layers = createHoldMusicLayerEntries();
+      const musicSettings = loadMusicSettings();
+      const layers = createHoldMusicLayerEntries(musicSettings);
       const entries = [{ audio, volume: MUSIC_VOLUME }, ...layers];
       const muteTarget: HoldMusicMuteTarget = { entries };
 
@@ -180,6 +197,18 @@ export class HoldMusicController {
   }
 
   stop(): void {
+    this.wantsPlayback = false;
+    desiredHoldMusicControllers.delete(this);
+    this.stopActiveSession();
+  }
+
+  restartForSettingsChange(): void {
+    if (!this.wantsPlayback) return;
+    this.stopActiveSession();
+    this.start();
+  }
+
+  private stopActiveSession(): void {
     const session = this.session;
     this.session = null;
     if (!session) {
@@ -263,49 +292,56 @@ export class HoldMusicController {
   }
 }
 
-export function pickHoldMusicUrl(random: () => number = Math.random): string {
-  if (HOLD_MUSIC_TRACKS.length === 0) return '';
+export function pickHoldMusicUrl(
+  random: () => number = Math.random,
+  settings: MusicSettings = loadMusicSettings(),
+): string {
+  const tracks = enabledHoldMusicTracks(settings);
+  if (tracks.length === 0) return '';
   const index = Math.min(
-    HOLD_MUSIC_TRACKS.length - 1,
-    Math.floor(random() * HOLD_MUSIC_TRACKS.length),
+    tracks.length - 1,
+    Math.floor(random() * tracks.length),
   );
-  return holdMusicTrackUrl(HOLD_MUSIC_TRACKS[index]);
+  return holdMusicTrackUrl(tracks[index], settings.effects);
 }
 
 function consumePreloadedHoldMusicAudio(): HTMLAudioElement | null {
-  preloadNextHoldMusicTrack();
+  const settings = loadMusicSettings();
+  resetPreloadedHoldMusicTrackIfNeeded(settings);
+  preloadNextHoldMusicTrack(settings);
   const preloaded = preloadedHoldMusicTrack;
   preloadedHoldMusicTrack = null;
   return preloaded?.audio ?? null;
 }
 
-function preloadNextHoldMusicTrack(): void {
+function preloadNextHoldMusicTrack(settings: MusicSettings = loadMusicSettings()): void {
   if (preloadedHoldMusicTrack || typeof Audio === 'undefined') return;
-  const track = takeNextHoldMusicTrack();
+  const track = takeNextHoldMusicTrack(settings);
   if (!track) return;
 
   try {
-    const audio = new Audio(holdMusicTrackUrl(track));
+    const audio = new Audio(holdMusicTrackUrl(track, settings.effects));
     audio.preload = 'auto';
     audio.load();
-    preloadedHoldMusicTrack = { audio };
+    preloadedHoldMusicTrack = { audio, track, effects: settings.effects };
   } catch {
     // Preloading is opportunistic; playback can fail silently like the rest of the hold bed.
   }
 }
 
-function takeNextHoldMusicTrack(): string | null {
-  if (HOLD_MUSIC_TRACKS.length === 0) return null;
-  if (shuffledHoldMusicDeck.length === 0) {
-    shuffledHoldMusicDeck = createShuffledHoldMusicDeck();
+function takeNextHoldMusicTrack(settings: MusicSettings = loadMusicSettings()): string | null {
+  const tracks = enabledHoldMusicTracks(settings);
+  if (tracks.length === 0) return null;
+  if (shuffledHoldMusicDeck.length === 0 || shuffledHoldMusicDeck.some((track) => !tracks.includes(track))) {
+    shuffledHoldMusicDeck = createShuffledHoldMusicDeck(tracks);
   }
   const track = shuffledHoldMusicDeck.shift() ?? null;
   if (track) lastHoldMusicTrack = track;
   return track;
 }
 
-function createShuffledHoldMusicDeck(): string[] {
-  const deck = [...HOLD_MUSIC_TRACKS];
+function createShuffledHoldMusicDeck(tracks: readonly string[]): string[] {
+  const deck = [...tracks];
   for (let i = deck.length - 1; i > 0; i -= 1) {
     const j = Math.floor(Math.random() * (i + 1));
     [deck[i], deck[j]] = [deck[j], deck[i]];
@@ -321,12 +357,37 @@ function createShuffledHoldMusicDeck(): string[] {
   return deck;
 }
 
-function holdMusicTrackUrl(track: string): string {
-  return `/music/${encodeURIComponent(track)}`;
+function enabledHoldMusicTracks(settings: MusicSettings): string[] {
+  const disabled = new Set(settings.disabledTracks);
+  return getHoldMusicTracks().filter((track) => !disabled.has(track));
 }
 
-function createHoldMusicLayerEntries(): HoldMusicAudioEntry[] {
-  if (typeof Audio === 'undefined') return [];
+function resetPreloadedHoldMusicTrackIfNeeded(settings: MusicSettings): void {
+  if (!preloadedHoldMusicTrack) return;
+  if (
+    preloadedHoldMusicTrack.effects === settings.effects
+    && isTrackEnabled(preloadedHoldMusicTrack.track, settings)
+  ) return;
+  cleanupAudioElement(preloadedHoldMusicTrack.audio);
+  preloadedHoldMusicTrack = null;
+}
+
+function isTrackEnabled(track: string, settings: MusicSettings): boolean {
+  return !settings.disabledTracks.includes(track);
+}
+
+function holdMusicPlaybackSettingsEqual(a: MusicSettings, b: MusicSettings): boolean {
+  return a.effects === b.effects && stringSetsEqual(a.disabledTracks, b.disabledTracks);
+}
+
+function stringSetsEqual(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const set = new Set(a);
+  return b.every((value) => set.has(value));
+}
+
+function createHoldMusicLayerEntries(settings: MusicSettings): HoldMusicAudioEntry[] {
+  if (!settings.effects || typeof Audio === 'undefined') return [];
   const entries: HoldMusicAudioEntry[] = [];
   for (const layer of HOLD_MUSIC_LAYER_TRACKS) {
     try {

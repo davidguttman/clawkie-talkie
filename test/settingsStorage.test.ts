@@ -12,6 +12,9 @@ class MemoryStorage {
   setItem(key: string, value: string): void {
     this.data.set(key, value);
   }
+  removeItem(key: string): void {
+    this.data.delete(key);
+  }
   clear(): void {
     this.data.clear();
   }
@@ -41,6 +44,7 @@ describe('settings storage', () => {
     expect(settings.tts.model).toBeUndefined();
     expect(settings.tts.voice).toBeUndefined();
     expect(settings.stt).toEqual({});
+    expect(settings.music).toEqual({ muted: false, effects: true, disabledTracks: [] });
   });
 
   it('ignores legacy global TTS, STT, and voice settings for a host-scoped load', async () => {
@@ -60,6 +64,7 @@ describe('settings storage', () => {
       voice: '',
       tts: {},
       stt: {},
+      music: { muted: false, effects: true, disabledTracks: [] },
       format: 'txt',
       timestamps: true,
     });
@@ -81,6 +86,7 @@ describe('settings storage', () => {
       voice: '',
       tts: {},
       stt: {},
+      music: { muted: false, effects: true, disabledTracks: [] },
       format: 'json',
       timestamps: false,
     });
@@ -112,6 +118,7 @@ describe('settings storage', () => {
       voice: 'nova',
       tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' },
       stt: { providerId: 'xai', model: 'grok-stt' },
+      music: { muted: false, effects: true, disabledTracks: [] },
       format: 'txt',
       timestamps: true,
     });
@@ -119,6 +126,7 @@ describe('settings storage', () => {
       voice: '',
       tts: {},
       stt: {},
+      music: { muted: false, effects: true, disabledTracks: [] },
       format: 'txt',
       timestamps: true,
     });
@@ -299,6 +307,56 @@ describe('settings storage', () => {
     expect(loadExportSettings()).toEqual({ format: 'json', timestamps: true });
     expect(loadSettings('host-1').voice).toBe('');
     expect(DEFAULT_EXPORT_SETTINGS).toEqual({ format: 'md', timestamps: false });
+  });
+
+
+  it('loads music settings globally while preserving the legacy hold-music mute key', async () => {
+    localStorage.setItem('clawkie.holdMusic.muted.v1', '1');
+    const { loadSettings, loadMusicSettings } = await import('../client/src/storage');
+
+    expect(loadMusicSettings()).toEqual({ muted: true, effects: true, disabledTracks: [] });
+    expect(loadSettings('host-1').music).toEqual({ muted: true, effects: true, disabledTracks: [] });
+  });
+
+  it('saves normalized music settings globally and mirrors mute to the legacy key', async () => {
+    const { saveSettings, loadSettings, DEFAULT_SETTINGS } = await import('../client/src/storage');
+
+    saveSettings({
+      ...DEFAULT_SETTINGS,
+      music: {
+        muted: true,
+        effects: false,
+        disabledTracks: [' Soft Hold Tone.mp3 ', '', 'Soft Hold Tone.mp3', 'Dockside Hold.mp3'],
+      },
+    }, 'host-1');
+
+    const parsed = JSON.parse(localStorage.getItem('clawkie.settings.v1') as string);
+    expect(parsed.music).toEqual({
+      muted: true,
+      effects: false,
+      disabledTracks: ['Soft Hold Tone.mp3', 'Dockside Hold.mp3'],
+    });
+    expect(localStorage.getItem('clawkie.holdMusic.muted.v1')).toBe('1');
+    expect(loadSettings('host-2').music).toEqual({
+      muted: true,
+      effects: false,
+      disabledTracks: ['Soft Hold Tone.mp3', 'Dockside Hold.mp3'],
+    });
+  });
+
+  it('removes persisted default music settings and clears the legacy mute key', async () => {
+    localStorage.setItem('clawkie.holdMusic.muted.v1', '1');
+    localStorage.setItem(
+      'clawkie.settings.v1',
+      JSON.stringify({ music: { muted: true, effects: false, disabledTracks: ['Soft Hold Tone.mp3'] } }),
+    );
+    const { saveMusicSettings, loadMusicSettings } = await import('../client/src/storage');
+
+    saveMusicSettings({ muted: false, effects: true, disabledTracks: [] });
+
+    expect(loadMusicSettings()).toEqual({ muted: false, effects: true, disabledTracks: [] });
+    expect(localStorage.getItem('clawkie.holdMusic.muted.v1')).toBeNull();
+    expect(JSON.parse(localStorage.getItem('clawkie.settings.v1') as string).music).toBeUndefined();
   });
 
   it('falls back to defaults when persisted record is corrupt', async () => {

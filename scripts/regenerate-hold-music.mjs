@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -8,6 +8,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
 const rawDir = path.join(repoRoot, 'assets/hold-music-raw');
 const musicDir = path.join(repoRoot, 'client/public/music');
+const originalMusicDir = path.join(repoRoot, 'client/public/music-original');
 const layerDir = path.join(repoRoot, 'client/public/music-layers');
 const tempDir = path.join(repoRoot, '.vite/hold-music-regen');
 
@@ -89,6 +90,7 @@ function createAmifySaturationExpression(drive, channel) {
 
 async function main() {
   await mkdir(musicDir, { recursive: true });
+  await mkdir(originalMusicDir, { recursive: true });
   await mkdir(layerDir, { recursive: true });
   await rm(tempDir, { recursive: true, force: true });
   await mkdir(tempDir, { recursive: true });
@@ -103,9 +105,13 @@ async function main() {
   }
 
   await removeStaleGeneratedTracks(musicDir, rawTracks);
+  await removeStaleGeneratedTracks(originalMusicDir, rawTracks);
 
   for (const track of rawTracks) {
     const input = path.join(rawDir, track);
+    const originalOutput = path.join(originalMusicDir, track);
+    await copyFile(input, originalOutput);
+
     const output = path.join(musicDir, track);
     console.log(`processing ${path.relative(repoRoot, output)}`);
     await ffmpeg([

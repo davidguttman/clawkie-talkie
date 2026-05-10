@@ -35,15 +35,23 @@ export interface ExportSettings {
   timestamps: boolean;
 }
 
+export interface MusicSettings {
+  muted: boolean;
+  effects: boolean;
+  disabledTracks: string[];
+}
+
 export interface Settings extends ExportSettings {
   // Temporary legacy mirror for callers that still read/write `settings.voice`.
   // New code should use `settings.tts.voice`.
   voice: string;
   tts: TtsSelection;
   stt: SttSelection;
+  music: MusicSettings;
 }
 
 const KEY = 'clawkie.settings.v1';
+const HOLD_MUSIC_MUTE_STORAGE_KEY = 'clawkie.holdMusic.muted.v1';
 const LAST_DASHBOARD_HOST_KEY = 'clawkie.dashboard.lastHost.v1';
 const TRANSCRIPTS_KEY = 'clawkie.transcripts.v1';
 const FAVORITE_SESSIONS_KEY = 'clawkie.favoriteSessions.v1';
@@ -60,10 +68,17 @@ export const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
   timestamps: false,
 };
 
+export const DEFAULT_MUSIC_SETTINGS: MusicSettings = {
+  muted: false,
+  effects: true,
+  disabledTracks: [],
+};
+
 export const DEFAULT_SETTINGS: Settings = {
   voice: '',
   tts: {},
   stt: {},
+  music: DEFAULT_MUSIC_SETTINGS,
   ...DEFAULT_EXPORT_SETTINGS,
 };
 
@@ -91,9 +106,29 @@ export function loadSettings(hostPeerId?: string | null): Settings {
 
 export function saveSettings(settings: Settings, hostPeerId?: string | null): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify(normalizeSettingsForSave(settings, hostPeerId)));
+    const normalized = normalizeSettingsForSave(settings, hostPeerId);
+    localStorage.setItem(KEY, JSON.stringify(normalized));
+    writeLegacyHoldMusicMute(normalizeMusicSettings(settings.music).muted);
   } catch {
     // storage full or disabled — settings won't persist, but the app still works.
+  }
+}
+
+export function loadMusicSettings(): MusicSettings {
+  return normalizeMusicSettings(readRawSettings());
+}
+
+export function saveMusicSettings(settings: MusicSettings): void {
+  try {
+    const existing = objectRecord(readRawSettings());
+    const next: Record<string, unknown> = { ...existing };
+    const music = normalizeMusicSettings(settings);
+    if (isDefaultMusicSettings(music)) delete next.music;
+    else next.music = music;
+    localStorage.setItem(KEY, JSON.stringify(next));
+    writeLegacyHoldMusicMute(music.muted);
+  } catch {
+    // storage disabled — music preferences revert to default on reload.
   }
 }
 
@@ -227,11 +262,12 @@ function readRawSettings(): unknown {
 
 function normalizeSettings(value: unknown, hostPeerId?: string | null): Settings {
   const exportSettings = normalizeExportSettings(value);
+  const music = normalizeMusicSettings(value);
   const source = readHostSettings(value, hostPeerId);
   const tts = normalizeTtsSelection(source.tts, source.voice);
   const stt = normalizeSttSelection(source.stt);
   const voice = tts.voice ?? DEFAULT_SETTINGS.voice;
-  return { voice, tts, stt, ...exportSettings };
+  return { voice, tts, stt, music, ...exportSettings };
 }
 
 function normalizeSettingsForSave(
@@ -240,6 +276,8 @@ function normalizeSettingsForSave(
 ): Record<string, unknown> {
   const existing = objectRecord(readRawSettings());
   const next: Record<string, unknown> = { ...normalizeExportSettings(settings) };
+  const music = normalizeMusicSettings(settings.music);
+  if (!isDefaultMusicSettings(music)) next.music = music;
   const hosts = cloneHosts(existing.hosts);
   const hostKey = normalizeHostPeerId(hostPeerId);
   if (hostKey) hosts[hostKey] = normalizeHostSettingsForSave(settings);
@@ -269,6 +307,61 @@ function normalizeExportSettings(value: unknown): ExportSettings {
     ? source.timestamps
     : DEFAULT_EXPORT_SETTINGS.timestamps;
   return { format, timestamps };
+}
+
+
+function normalizeMusicSettings(value: unknown): MusicSettings {
+  const source = objectRecord(objectRecord(value).music ?? value);
+  const muted = typeof source.muted === 'boolean'
+    ? source.muted
+    : readLegacyHoldMusicMuted();
+  const effects = typeof source.effects === 'boolean'
+    ? source.effects
+    : DEFAULT_MUSIC_SETTINGS.effects;
+  const disabledTracks = Array.isArray(source.disabledTracks)
+    ? uniqueStrings(source.disabledTracks)
+    : DEFAULT_MUSIC_SETTINGS.disabledTracks;
+  return { muted, effects, disabledTracks };
+}
+
+function isDefaultMusicSettings(settings: MusicSettings): boolean {
+  return settings.muted === DEFAULT_MUSIC_SETTINGS.muted
+    && settings.effects === DEFAULT_MUSIC_SETTINGS.effects
+    && settings.disabledTracks.length === 0;
+}
+
+function uniqueStrings(values: unknown[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const normalized = normalizeOptionalString(value);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function readLegacyHoldMusicMuted(): boolean {
+  try {
+    return localStorage.getItem(HOLD_MUSIC_MUTE_STORAGE_KEY) === '1';
+  } catch {
+    return DEFAULT_MUSIC_SETTINGS.muted;
+  }
+}
+
+function writeLegacyHoldMusicMute(muted: boolean): void {
+  try {
+    if (muted) {
+      localStorage.setItem(HOLD_MUSIC_MUTE_STORAGE_KEY, '1');
+    } else if (typeof localStorage.removeItem === 'function') {
+      localStorage.removeItem(HOLD_MUSIC_MUTE_STORAGE_KEY);
+    } else {
+      localStorage.setItem(HOLD_MUSIC_MUTE_STORAGE_KEY, '0');
+    }
+  } catch {
+    // Legacy mirror is best-effort only.
+  }
 }
 
 function readHostSettings(value: unknown, hostPeerId?: string | null): Record<string, unknown> {
