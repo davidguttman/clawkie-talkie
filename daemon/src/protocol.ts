@@ -117,7 +117,56 @@ export interface VoiceTurnSnapshot {
   ttsSampleRate?: number;
 }
 
+export const PROTOCOL_VERSION = 1 as const;
+
+export const PROTOCOL_FEATURES = {
+  ttsCatalog: 'tts.catalog',
+  sttCatalog: 'stt.catalog',
+  sessionsList: 'sessions.list',
+  sessionsCatalog: 'sessions.catalog',
+} as const;
+
+export type ProtocolFeature = (typeof PROTOCOL_FEATURES)[keyof typeof PROTOCOL_FEATURES];
+
+export const CLIENT_WANTED_PROTOCOL_FEATURES = [
+  PROTOCOL_FEATURES.ttsCatalog,
+  PROTOCOL_FEATURES.sttCatalog,
+  PROTOCOL_FEATURES.sessionsList,
+  PROTOCOL_FEATURES.sessionsCatalog,
+] as const satisfies readonly ProtocolFeature[];
+
+export const DAEMON_SUPPORTED_PROTOCOL_FEATURES = [
+  PROTOCOL_FEATURES.ttsCatalog,
+  PROTOCOL_FEATURES.sttCatalog,
+  PROTOCOL_FEATURES.sessionsList,
+  PROTOCOL_FEATURES.sessionsCatalog,
+] as const satisfies readonly ProtocolFeature[];
+
+export function isDaemonSupportedProtocol(protocol: unknown): protocol is typeof PROTOCOL_VERSION {
+  return protocol === PROTOCOL_VERSION;
+}
+
+export interface ClientHello extends Record<string, unknown> {
+  t: 'client.hello';
+  protocol: typeof PROTOCOL_VERSION;
+  wants: string[];
+}
+
+export interface DaemonHello extends Record<string, unknown> {
+  t: 'daemon.hello';
+  protocol: typeof PROTOCOL_VERSION;
+  features: string[];
+}
+
+export interface DaemonUnsupported extends Record<string, unknown> {
+  t: 'daemon.unsupported';
+  minProtocol: typeof PROTOCOL_VERSION;
+  maxProtocol: typeof PROTOCOL_VERSION;
+  message: 'unsupported_daemon_protocol';
+}
+
 export type PhoneToDaemon =
+  | ClientHello
   | {
       t: 'rendezvous.join';
       sessionId: string;
@@ -141,6 +190,8 @@ export type PhoneToDaemon =
   | { t: 'reply.cancel' };
 
 export type DaemonToPhoneEvent =
+  | DaemonHello
+  | DaemonUnsupported
   | { t: 'rendezvous.accept'; roomId: string }
   | { t: 'rendezvous.error'; message: string }
   | { t: 'session.replaced'; reason: string }
@@ -177,6 +228,11 @@ export type DaemonToPhone =
     };
 
 export const phoneToDaemon = {
+  clientHello: (wants: readonly string[] = CLIENT_WANTED_PROTOCOL_FEATURES): PhoneToDaemon => ({
+    t: 'client.hello',
+    protocol: PROTOCOL_VERSION,
+    wants: [...wants],
+  }),
   rendezvousJoin: (input: RendezvousJoinInput & { settings?: VoiceSettings }): PhoneToDaemon => ({
     t: 'rendezvous.join',
     sessionId: input.sessionId,
@@ -224,6 +280,17 @@ export function validateRendezvousDelivery(
 
 
 export const daemonToPhone = {
+  daemonHello: (features: readonly string[] = DAEMON_SUPPORTED_PROTOCOL_FEATURES): DaemonToPhone => ({
+    t: 'daemon.hello',
+    protocol: PROTOCOL_VERSION,
+    features: [...features],
+  }),
+  daemonUnsupported: (): DaemonToPhone => ({
+    t: 'daemon.unsupported',
+    minProtocol: PROTOCOL_VERSION,
+    maxProtocol: PROTOCOL_VERSION,
+    message: 'unsupported_daemon_protocol',
+  }),
   rendezvousAccept: (roomId: string): DaemonToPhone => ({ t: 'rendezvous.accept', roomId }),
   rendezvousError: (message: string): DaemonToPhone => ({ t: 'rendezvous.error', message }),
   sessionReplaced: (reason = 'newer_phone_connected'): DaemonToPhone => ({
@@ -277,3 +344,9 @@ export const daemonToPhone = {
   ttsDone: (): DaemonToPhone => ({ t: 'tts.done' }),
   ttsError: (message: string): DaemonToPhone => ({ t: 'tts.error', message }),
 };
+
+export function daemonHandshakeResponse(clientHello: { protocol?: unknown }): DaemonToPhone {
+  return isDaemonSupportedProtocol(clientHello.protocol)
+    ? daemonToPhone.daemonHello()
+    : daemonToPhone.daemonUnsupported();
+}

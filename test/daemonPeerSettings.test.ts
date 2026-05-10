@@ -66,6 +66,144 @@ function makeManagedVoiceSession(options: {
   return session;
 }
 
+describe('DaemonPeer rendezvous capability handshake', () => {
+  it('answers client hello on the host rendezvous lane before join without opening a voice room', async () => {
+    const { DaemonPeer } = await import('../daemon/src/peer');
+    const peer = new DaemonPeer({
+      peerId: 'host-1',
+      signalServer: 'https://signal.example',
+      iceServers: [],
+      onReady: vi.fn(),
+    });
+    const rendezvousPeer = makeRendezvousPeer();
+    const roomId = makeVoiceRoomId({ hostPeerId: 'host-1', sessionId: 'session-1' });
+
+    (peer as unknown as {
+      handleRendezvousData(rp: unknown, data: unknown): void;
+    }).handleRendezvousData(
+      rendezvousPeer,
+      JSON.stringify({ t: 'client.hello', protocol: 1, wants: ['tts.catalog'] }),
+    );
+
+    expect(rendezvousPeer.peer.send).toHaveBeenNthCalledWith(
+      1,
+      JSON.stringify({
+        t: 'daemon.hello',
+        protocol: 1,
+        features: ['tts.catalog', 'stt.catalog', 'sessions.list', 'sessions.catalog'],
+      }),
+    );
+    expect((peer as unknown as { activeRoomIds: string[] }).activeRoomIds).toEqual([]);
+
+    (peer as unknown as {
+      handleRendezvousData(rp: unknown, data: unknown): void;
+    }).handleRendezvousData(
+      rendezvousPeer,
+      JSON.stringify({ t: 'rendezvous.join', sessionId: 'session-1' }),
+    );
+
+    expect(rendezvousPeer.peer.send).toHaveBeenNthCalledWith(
+      2,
+      JSON.stringify({ t: 'rendezvous.accept', roomId }),
+    );
+
+    clearTimeout(rendezvousPeer.timeout);
+    peer.close();
+  });
+
+  it('returns daemon unsupported for protocols outside daemon support bounds without joining', async () => {
+    const { DaemonPeer } = await import('../daemon/src/peer');
+    const peer = new DaemonPeer({
+      peerId: 'host-1',
+      signalServer: 'https://signal.example',
+      iceServers: [],
+      onReady: vi.fn(),
+    });
+    const rendezvousPeer = makeRendezvousPeer();
+
+    expect(() => {
+      (peer as unknown as {
+        handleRendezvousData(rp: unknown, data: unknown): void;
+      }).handleRendezvousData(
+        rendezvousPeer,
+        JSON.stringify({ t: 'client.hello', protocol: 2, wants: [] }),
+      );
+    }).not.toThrow();
+
+    expect(rendezvousPeer.peer.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        t: 'daemon.unsupported',
+        minProtocol: 1,
+        maxProtocol: 1,
+        message: 'unsupported_daemon_protocol',
+      }),
+    );
+    expect((peer as unknown as { activeRoomIds: string[] }).activeRoomIds).toEqual([]);
+
+    (peer as unknown as {
+      handleRendezvousData(rp: unknown, data: unknown): void;
+    }).handleRendezvousData(
+      rendezvousPeer,
+      JSON.stringify({ t: 'rendezvous.join', sessionId: 'session-1' }),
+    );
+
+    expect(rendezvousPeer.peer.send).not.toHaveBeenCalledWith(
+      JSON.stringify({
+        t: 'rendezvous.accept',
+        roomId: makeVoiceRoomId({ hostPeerId: 'host-1', sessionId: 'session-1' }),
+      }),
+    );
+    expect((peer as unknown as { activeRoomIds: string[] }).activeRoomIds).toEqual([]);
+
+    clearTimeout(rendezvousPeer.timeout);
+    peer.close();
+  });
+
+  it('does not answer repeated client hello after rendezvous protocol is unsupported', async () => {
+    const { DaemonPeer } = await import('../daemon/src/peer');
+    const peer = new DaemonPeer({
+      peerId: 'host-1',
+      signalServer: 'https://signal.example',
+      iceServers: [],
+      onReady: vi.fn(),
+    });
+    const rendezvousPeer = makeRendezvousPeer();
+
+    (peer as unknown as {
+      handleRendezvousData(rp: unknown, data: unknown): void;
+    }).handleRendezvousData(
+      rendezvousPeer,
+      JSON.stringify({ t: 'client.hello', protocol: 2, wants: [] }),
+    );
+    (peer as unknown as {
+      handleRendezvousData(rp: unknown, data: unknown): void;
+    }).handleRendezvousData(
+      rendezvousPeer,
+      JSON.stringify({ t: 'client.hello', protocol: 1, wants: ['tts.catalog'] }),
+    );
+    (peer as unknown as {
+      handleRendezvousData(rp: unknown, data: unknown): void;
+    }).handleRendezvousData(
+      rendezvousPeer,
+      JSON.stringify({ t: 'rendezvous.join', sessionId: 'session-1' }),
+    );
+
+    expect(rendezvousPeer.peer.send).toHaveBeenCalledTimes(1);
+    expect(rendezvousPeer.peer.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        t: 'daemon.unsupported',
+        minProtocol: 1,
+        maxProtocol: 1,
+        message: 'unsupported_daemon_protocol',
+      }),
+    );
+    expect((peer as unknown as { activeRoomIds: string[] }).activeRoomIds).toEqual([]);
+
+    clearTimeout(rendezvousPeer.timeout);
+    peer.close();
+  });
+});
+
 describe('DaemonPeer rendezvous voice settings', () => {
   it('clears existing same-session settings when a reconnecting Default client omits settings', async () => {
     const { DaemonPeer } = await import('../daemon/src/peer');

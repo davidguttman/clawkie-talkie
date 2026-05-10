@@ -313,6 +313,241 @@ describe('voice session state', () => {
   });
 });
 
+describe('voice session capability handshake runtime', () => {
+  it('answers client hello before independent catalog messages on the voice lane', async () => {
+    const catalog: TtsCatalog = {
+      activeProvider: 'openai',
+      generatedAt: '2026-04-28T00:00:00.000Z',
+      providers: [],
+    };
+    const ttsCatalogProvider = vi.fn(async () => catalog);
+    const { session, peer } = makeVoiceSession({ ttsCatalogProvider });
+
+    sendControl(session, { t: 'client.hello', protocol: 1, wants: ['tts.catalog'] });
+    sendControl(session, { t: 'tts.catalog.request' });
+
+    await vi.waitFor(() => {
+      expect(sentJson(peer)).toEqual([
+        {
+          t: 'daemon.hello',
+          protocol: 1,
+          features: ['tts.catalog', 'stt.catalog', 'sessions.list', 'sessions.catalog'],
+        },
+        { t: 'tts.catalog', catalog },
+      ]);
+    });
+    expect(ttsCatalogProvider).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns one terminal daemon unsupported for protocols outside daemon support bounds without crashing', () => {
+    const onClose = vi.fn();
+    const { session, peer } = makeVoiceSession({ onClose });
+
+    expect(() => {
+      sendControl(session, { t: 'client.hello', protocol: 0, wants: [] });
+      sendControl(session, { t: 'client.hello', protocol: 2, wants: [] });
+    }).not.toThrow();
+
+    expect(sentJson(peer)).toEqual([
+      {
+        t: 'daemon.unsupported',
+        minProtocol: 1,
+        maxProtocol: 1,
+        message: 'unsupported_daemon_protocol',
+      },
+    ]);
+    expect(onClose).not.toHaveBeenCalled();
+    expect((session as unknown as { state: { closed: boolean } }).state.closed).toBe(false);
+  });
+
+  it('treats unsupported protocol as terminal for later voice-lane controls', async () => {
+    const catalog: TtsCatalog = {
+      activeProvider: 'openai',
+      generatedAt: '2026-04-28T00:00:00.000Z',
+      providers: [],
+    };
+    const snapshot: RecentSessionsSnapshot = {
+      generatedAt: '2026-04-28T00:00:00.000Z',
+      sessions: [],
+    };
+    const ttsCatalogProvider = vi.fn(async () => catalog);
+    const recentSessionsProvider = vi.fn(async () => snapshot);
+    const { session, peer } = makeVoiceSession({ ttsCatalogProvider, recentSessionsProvider });
+
+    sendControl(session, { t: 'client.hello', protocol: 2, wants: [] });
+    sendControl(session, { t: 'tts.catalog.request' });
+    sendControl(session, { t: 'sessions.catalog.request' });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(sentJson(peer)).toEqual([
+      {
+        t: 'daemon.unsupported',
+        minProtocol: 1,
+        maxProtocol: 1,
+        message: 'unsupported_daemon_protocol',
+      },
+    ]);
+    expect(ttsCatalogProvider).not.toHaveBeenCalled();
+    expect(recentSessionsProvider).not.toHaveBeenCalled();
+  });
+
+  it('treats unsupported protocol as terminal for later voice-lane audio', async () => {
+    const { session, peer } = makeVoiceSession();
+
+    sendControl(session, { t: 'stt.start' });
+    await vi.waitFor(() => {
+      expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1);
+    });
+    const fakeStt = sttMocks.inferCtor.mock.results[0].value;
+
+    sendControl(session, { t: 'client.hello', protocol: 2, wants: [] });
+    sendPeerData(session, Buffer.from([1, 2, 3, 4]));
+    sendControl(session, { t: 'stt.audio.done' });
+
+    expect(sentJson(peer)).toContainEqual({
+      t: 'daemon.unsupported',
+      minProtocol: 1,
+      maxProtocol: 1,
+      message: 'unsupported_daemon_protocol',
+    });
+    expect(fakeStt.sentAudio).toEqual([]);
+    expect(fakeStt.audioDoneCalls).toBe(0);
+  });
+
+  it('drops already-started async voice turn callbacks after daemon unsupported', async () => {
+    chatMocks.runChat.mockResolvedValue({ text: 'spoken reply' });
+    const { session, peer } = makeVoiceSession();
+
+    sendControl(session, { t: 'stt.start' });
+    await vi.waitFor(() => {
+      expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1);
+    });
+    const fakeStt = sttMocks.inferCtor.mock.results[0].value;
+
+    sendControl(session, { t: 'client.hello', protocol: 2, wants: [] });
+    fakeStt.cb.onReady();
+    fakeStt.cb.onDone('hello after unsupported');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    if (ttsMocks.inferTtsCtor.mock.results[0]) {
+      const fakeTts = ttsMocks.inferTtsCtor.mock.results[0].value;
+      fakeTts.cb.onOpen();
+      fakeTts.cb.onAudio(new Uint8Array([1, 2, 3, 4]));
+      fakeTts.cb.onDone();
+    }
+
+    expect(sentJson(peer)).toEqual([
+      {
+        t: 'daemon.unsupported',
+        minProtocol: 1,
+        maxProtocol: 1,
+        message: 'unsupported_daemon_protocol',
+      },
+    ]);
+    expect(sentBinary(peer)).toEqual([]);
+    expect(chatMocks.runChat).not.toHaveBeenCalled();
+    expect(ttsMocks.inferTtsCtor).not.toHaveBeenCalled();
+
+    const reconnectPeer = { send: vi.fn() };
+    (session as unknown as { sendCatchUpSnapshot(peer: unknown): void }).sendCatchUpSnapshot(reconnectPeer);
+    const snapshot = sentJson(reconnectPeer)[0] as { t: string; events: Array<{ msg: { t: string } }> };
+    expect(snapshot.t).toBe('session.snapshot');
+    expect(snapshot.events).toEqual([]);
+  });
+
+  it('does not answer repeated client hello after voice protocol is unsupported', async () => {
+    const { session, peer } = makeVoiceSession();
+
+    sendControl(session, { t: 'client.hello', protocol: 2, wants: [] });
+    sendControl(session, { t: 'client.hello', protocol: 1, wants: ['tts.catalog'] });
+    sendControl(session, { t: 'tts.catalog.request' });
+
+    expect(sentJson(peer)).toEqual([
+      {
+        t: 'daemon.unsupported',
+        minProtocol: 1,
+        maxProtocol: 1,
+        message: 'unsupported_daemon_protocol',
+      },
+    ]);
+  });
+
+  it('clears unsupported protocol state when a replacement peer takes over the voice room', async () => {
+    const catalog: TtsCatalog = {
+      activeProvider: 'openai',
+      generatedAt: '2026-04-28T00:00:00.000Z',
+      providers: [],
+    };
+    const ttsCatalogProvider = vi.fn(async () => catalog);
+    const { session, peer } = makeVoiceSession({ ttsCatalogProvider });
+
+    sendControl(session, { t: 'client.hello', protocol: 2, wants: [] });
+    sendControl(session, { t: 'tts.catalog.request' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(sentJson(peer)).toEqual([
+      {
+        t: 'daemon.unsupported',
+        minProtocol: 1,
+        maxProtocol: 1,
+        message: 'unsupported_daemon_protocol',
+      },
+    ]);
+    expect(ttsCatalogProvider).not.toHaveBeenCalled();
+
+    const replacementPeer = {
+      destroyed: false,
+      send: vi.fn(),
+    };
+    (session as unknown as { tearDownPeer(reason: string): void }).tearDownPeer('peer_closed');
+    (session as unknown as { peer: typeof replacementPeer; connected: boolean }).peer = replacementPeer;
+    (session as unknown as { connected: boolean }).connected = true;
+
+    sendControl(session, { t: 'client.hello', protocol: 1, wants: ['tts.catalog'] });
+    sendControl(session, { t: 'tts.catalog.request' });
+
+    await vi.waitFor(() => {
+      expect(sentJson(replacementPeer)).toEqual([
+        {
+          t: 'daemon.hello',
+          protocol: 1,
+          features: ['tts.catalog', 'stt.catalog', 'sessions.list', 'sessions.catalog'],
+        },
+        { t: 'tts.catalog', catalog },
+      ]);
+    });
+    expect(ttsCatalogProvider).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not replay voice-lane handshake responses in later catch-up snapshots', async () => {
+    const catalog: TtsCatalog = {
+      activeProvider: 'openai',
+      generatedAt: '2026-04-28T00:00:00.000Z',
+      providers: [],
+    };
+
+    const { session, peer } = makeVoiceSession({ ttsCatalogProvider: vi.fn(async () => catalog) });
+
+    sendControl(session, { t: 'client.hello', protocol: 1, wants: ['tts.catalog'] });
+    sendControl(session, { t: 'tts.catalog.request' });
+
+    await vi.waitFor(() => {
+      expect(sentJson(peer)).toContainEqual({ t: 'tts.catalog', catalog });
+    });
+
+    const reconnectPeer = { send: vi.fn() };
+    (session as unknown as { sendCatchUpSnapshot(peer: unknown): void }).sendCatchUpSnapshot(reconnectPeer);
+    const snapshot = sentJson(reconnectPeer)[0] as {
+      t: string;
+      events: Array<{ msg: { t: string } }>;
+    };
+
+    expect(snapshot.t).toBe('session.snapshot');
+    expect(snapshot.events.map((event) => event.msg.t)).toEqual(['tts.catalog']);
+  });
+});
+
 describe('voice session TTS catalog runtime', () => {
   beforeEach(() => {
     chatMocks.runChat.mockReset();

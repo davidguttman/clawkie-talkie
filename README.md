@@ -221,6 +221,10 @@ That host-only URL opens the host-scoped session dashboard. A real OpenClaw voic
 
 Check that the daemon is running and that the `host` value in the link matches the daemon's `DAEMON_PEER_ID`.
 
+### The page says to update the daemon
+
+The hosted browser client is current by definition. If the UI reports a daemon protocol/capability mismatch, update the installed daemon from the latest repo source, keep the same `DAEMON_PEER_ID`, restart the service, and verify the handoff again.
+
 ### The page says the session is bad
 
 The handoff link is missing routing fields or was built for the wrong context. All handoff links need `host` and `session`; prefer the actual OpenClaw sessionId UUID, include `sessionKey`, `channel`, and `target` when those exact runtime values are visible, and use an exact session key in `session` only as fallback. Delivered assistant replies require an explicit reply route, either from `channel`/`target` or a resolvable Discord session key.

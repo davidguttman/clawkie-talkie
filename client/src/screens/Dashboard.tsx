@@ -71,7 +71,8 @@ export function DashboardScreen({
   const hasRecentSessionResponse = rtc.recentSessions.length > 0 || !!rtc.recentSessionsGeneratedAt;
   const showUnsupported = supportStatus === 'unsupported' && !hasRecentSessionResponse;
   const showTimedOut = refresh.timedOut && !hasRecentSessionResponse;
-  const showError = rtc.detail && rtc.detail !== 'session_replaced' && rtc.status !== 'open';
+  const daemonRendezvousDetail = formatDaemonRendezvousDetail(rtc.detail);
+  const showError = daemonRendezvousDetail && rtc.status !== 'open';
 
   return (
     <div
@@ -206,7 +207,7 @@ export function DashboardScreen({
         >
           host {hostPeerId || 'missing'}{updatedLabel ? ` · ${updatedLabel}` : ''}
         </div>
-        {showError && <Notice tone="error">Daemon rendezvous error: {rtc.detail}</Notice>}
+        {showError && <Notice tone="error">{daemonRendezvousDetail}</Notice>}
         {showTimedOut && <Notice tone="warn">No recent-session response yet. The daemon may still be starting.</Notice>}
         {showUnsupported && <Notice tone="warn">This daemon does not support host dashboard session discovery.</Notice>}
       </section>
@@ -421,6 +422,14 @@ function formatConnectionLabel(status: string, detail?: string): string {
   if (status === 'error') return 'ERROR';
   if (status === 'closed') return detail ? 'CLOSED' : 'DISCONNECTED';
   return 'WAITING';
+}
+
+function formatDaemonRendezvousDetail(detail?: string): string | null {
+  if (!detail || detail === 'session_replaced') return null;
+  if (detail === 'unsupported_daemon_protocol') {
+    return 'Daemon protocol/capability mismatch. Update the installed daemon.';
+  }
+  return `Daemon rendezvous error: ${detail}`;
 }
 
 function formatUpdatedAt(generatedAt?: string): string | null {

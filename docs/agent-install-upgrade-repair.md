@@ -4,6 +4,8 @@ Use this flow when `CLAWKIE_SOURCE_DIR` already exists, the daemon has run befor
 
 Goal: refresh code/docs while preserving daemon identity, installed skill configuration, and persistence behavior.
 
+Use this flow for a daemon protocol/capability mismatch. The browser client is current by definition, so do not ask the user to change the hosted link or browser app; update the installed daemon while preserving local identity.
+
 ## Preserve before changing files
 
 Do **not** delete or replace the source directory until you have preserved and verified:
