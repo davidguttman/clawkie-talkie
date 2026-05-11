@@ -34,4 +34,7 @@ export default defineConfig({
       },
     },
   },
+  // Read env from repo root so VITE_DEFAULT_HOST_ID lives in the same .env
+  // that configures the daemon (DAEMON_PEER_ID, CT_CLIENT_ORIGIN, etc.)
+  envDir: resolve(__dirname, '..'),
 });
