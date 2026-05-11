@@ -209,7 +209,7 @@ export function SettingsScreen({
               disabled={!currentProvider.selectable}
             />
           )}
-          {currentProvider && (
+          {currentProvider ? (
             <SelectRow
               label="Voice"
               value={selectedVoice}
@@ -223,6 +223,20 @@ export function SettingsScreen({
                 ? voiceOptions
                 : [{ id: '', label: 'No voices available', disabled: true }]}
               disabled={!currentProvider?.selectable || voiceOptions.every((voice) => voice.disabled)}
+            />
+          ) : (
+            <SelectRow
+              label="Voice"
+              value=""
+              setValue={() => undefined}
+              options={[{
+                id: '',
+                label: isDefaultTtsSelection(settings.tts)
+                  ? 'Select a provider to choose a voice'
+                  : 'Saved provider unavailable',
+                disabled: true,
+              }]}
+              disabled
             />
           )}
           <StatusRow text={statusText} onRefresh={onRefreshTtsCatalog} />
@@ -500,8 +514,14 @@ export function ttsCatalogStatusText(
   provider: TtsProviderOption | undefined,
   isDefaultSelection = false,
 ): string {
-  if (isDefaultSelection) return 'OpenClaw will choose voice defaults';
-  if (!catalog) return 'Connect to daemon to load voices';
+  if (!catalog) {
+    return isDefaultSelection ? 'Loading voice providers from daemon' : 'Connect to daemon to load voices';
+  }
+  if (isDefaultSelection) {
+    return catalog.providers.length === 0
+      ? 'No voice providers loaded'
+      : 'OpenClaw will choose voice defaults';
+  }
   if (!provider?.selectable) return 'Provider unavailable';
   return 'Loaded from daemon';
 }
@@ -511,8 +531,16 @@ export function sttCatalogStatusText(
   provider: SttProviderOption | undefined,
   isDefaultSelection = false,
 ): string {
-  if (isDefaultSelection) return 'OpenClaw will choose transcription defaults';
-  if (!catalog) return 'Connect to daemon to load transcription providers';
+  if (!catalog) {
+    return isDefaultSelection
+      ? 'Loading transcription providers from daemon'
+      : 'Connect to daemon to load transcription providers';
+  }
+  if (isDefaultSelection) {
+    return catalog.providers.length === 0
+      ? 'No transcription providers loaded'
+      : 'OpenClaw will choose transcription defaults';
+  }
   if (provider && provider.models.length === 0) return 'Transcription provider has no selectable models';
   if (!provider?.selectable) return 'Transcription provider unavailable';
   return 'Loaded from daemon';
