@@ -10,8 +10,11 @@ import {
 import { useRtc } from '../rtc/RtcContext';
 import type { RecentSession } from '../voice/protocol';
 import { readSttChunkConfigFromLocation } from '../voice/sttDaemon';
+import { holdMusicTrackLabel } from '../voice/holdMusicCatalog';
 import {
   getHoldMusicMuted,
+  getCurrentHoldMusicTrack,
+  subscribeHoldMusicCurrentTrack,
   setHoldMusicMuted,
   subscribeHoldMusicMuted,
 } from '../voice/holdMusic';
@@ -50,6 +53,7 @@ export function DrivingScreen({
   const accentCfg = HIFI.accents[accent] || HIFI.accents.amber;
   const debugMode = useDebugMode();
   const [holdMusicMuted, setHoldMusicMutedState] = useState(() => getHoldMusicMuted());
+  const [holdMusicTrack, setHoldMusicTrack] = useState<string | null>(null);
   const rtc = useRtc();
   const loop = useDrivingLoop({
     sessionId,
@@ -78,6 +82,11 @@ export function DrivingScreen({
 
   useEffect(() => {
     return subscribeHoldMusicMuted(setHoldMusicMutedState);
+  }, []);
+
+  useEffect(() => {
+    setHoldMusicTrack(getCurrentHoldMusicTrack());
+    return subscribeHoldMusicCurrentTrack((track) => setHoldMusicTrack(track));
   }, []);
 
   const isRec = state === 'recording';
@@ -132,6 +141,9 @@ export function DrivingScreen({
     lastTurn,
     accentRec: accentCfg.rec,
   });
+
+  const showHoldMusicTrack = state === 'thinking' && holdMusicTrack;
+  const trackLabel = showHoldMusicTrack ? holdMusicTrackLabel(holdMusicTrack) : null;
 
   const rowGap = compact ? 8 : 10;
   const replayEnabled = !!onReplay && canReplay;
@@ -322,15 +334,14 @@ export function DrivingScreen({
           compact={compact}
         />
       </div>
-      {/* waveform sits at its natural height directly above the PTT
-          button so the two read as one voice-control unit. */}
       <div
         style={{
           display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
+          flexDirection: 'column',
+          alignItems: 'stretch',
+          justifyContent: 'flex-start',
           minWidth: 0,
-          minHeight: 0,
+          height: compact ? 50 : 54,
           overflow: 'hidden',
         }}
       >
@@ -340,6 +351,23 @@ export function DrivingScreen({
           width="100%"
           height={compact ? 30 : 34}
         />
+        {showHoldMusicTrack && trackLabel && (
+          <div
+            style={{
+              display: 'grid',
+              placeItems: 'center',
+              height: 20,
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: 1.8,
+              color: stateColor,
+              opacity: 0.8,
+              paddingTop: 4,
+            }}
+          >
+            ♪ {trackLabel} ♪
+          </div>
+        )}
       </div>
 
       {/* BIG BUTTON — centered inside a flexible row so the breathing
@@ -980,6 +1008,7 @@ function PTTButton({
   const isAI = state === 'ai';
   const isThink = state === 'thinking';
 
+
   const pressScale = pressed ? 0.94 : isRec ? 1.02 : 1;
 
   return (
@@ -1068,6 +1097,7 @@ function PTTButton({
         >
           {isThink ? (holdMusicMuted ? 'TAP FOR MUSIC' : 'TAP TO MUTE') : label}
         </div>
+
       </div>
     </button>
   );

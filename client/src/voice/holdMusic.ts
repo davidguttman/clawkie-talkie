@@ -25,6 +25,8 @@ const HOLD_MUSIC_MAX_DECIBELS = -10;
 
 let sharedAudioCtx: AudioContext | null = null;
 let activeHoldMusicAnalyser: AnalyserNode | null = null;
+let currentHoldMusicTrack: string | null = null;
+const currentTrackListeners = new Set<(track: string | null) => void>();
 
 interface PreloadedHoldMusicTrack {
   processedAudio: HTMLAudioElement;
@@ -50,6 +52,22 @@ const desiredHoldMusicControllers = new Set<HoldMusicController>();
 
 export function getActiveHoldMusicAnalyser(): AnalyserNode | null {
   return activeHoldMusicAnalyser;
+}
+
+export function getCurrentHoldMusicTrack(): string | null {
+  return currentHoldMusicTrack;
+}
+
+export function subscribeHoldMusicCurrentTrack(listener: (track: string | null) => void): () => void {
+  currentTrackListeners.add(listener);
+  return () => { currentTrackListeners.delete(listener); };
+}
+
+function publishCurrentHoldMusicTrack(track: string | null): void {
+  currentHoldMusicTrack = track;
+  for (const listener of currentTrackListeners) {
+    try { listener(track); } catch { /* listener errors must not break audio */ }
+  }
 }
 
 let holdMusicMuted: boolean | null = null;
@@ -205,6 +223,7 @@ export class HoldMusicController {
           this.beginSession(session);
         },
       };
+      publishCurrentHoldMusicTrack(preloaded.track);
       muteTarget.onMuteChanged = (muted) => {
         this.handleSessionMuteChange(session, muted);
       };
@@ -276,6 +295,7 @@ export class HoldMusicController {
     activeMuteTargets.delete(session.muteTarget);
     cleanupAnalyserSession(session.analyserSession);
     session.analyserSession = null;
+    publishCurrentHoldMusicTrack(null);
 
     try {
       for (const audio of session.mainEntries.map((entry) => entry.audio)) {
