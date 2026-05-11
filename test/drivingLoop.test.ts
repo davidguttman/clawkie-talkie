@@ -51,6 +51,7 @@ vi.mock('../client/src/voice/holdMusic', () => ({
     }
   },
   getActiveHoldMusicAnalyser: () => activeHoldMusicAnalyser,
+  getHoldMusicMuted: () => false,
 }));
 
 class FakeAnalyser {
