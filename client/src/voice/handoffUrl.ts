@@ -2,6 +2,9 @@
 // preferred so identifiers (host, session, routing metadata) are not transmitted to web
 // servers; query params are accepted for compatibility. If a key is
 // present in both, the hash wins.
+//
+// VITE_DEFAULT_HOST_ID sets a fallback hostPeerId when the URL has no host param.
+// Useful for dev/worktree setups where the URL hash is not set per-instance.
 
 export interface HandoffRoute {
   hostPeerId: string;
@@ -28,8 +31,17 @@ function parseAppUrl(raw: string): { pathname: string; query: URLSearchParams; h
   return { pathname: url.pathname, query: url.searchParams, hash: new URLSearchParams(hashText) };
 }
 
+const DEFAULT_HOST_ID =
+  typeof import.meta.env.VITE_DEFAULT_HOST_ID === 'string' && import.meta.env.VITE_DEFAULT_HOST_ID.length > 0
+    ? import.meta.env.VITE_DEFAULT_HOST_ID
+    : '';
+
 function readParam(parsed: { query: URLSearchParams; hash: URLSearchParams }, key: string): string {
   return parsed.hash.get(key) || parsed.query.get(key) || '';
+}
+
+function defaultHostId(raw: string): string {
+  return raw.trim() || DEFAULT_HOST_ID;
 }
 
 export function parseHandoffUrl(raw: string): HandoffRoute | null {
@@ -39,7 +51,7 @@ export function parseHandoffUrl(raw: string): HandoffRoute | null {
   const pathname = parsed.pathname.replace(/\/$/, '') || '/';
   if (pathname !== '/voice') return null;
 
-  const hostPeerId = readParam(parsed, 'host').trim();
+  const hostPeerId = defaultHostId(readParam(parsed, 'host'));
   const sessionId = readParam(parsed, 'session').trim();
   const sessionKey = readParam(parsed, 'sessionKey').trim();
   const channel = readParam(parsed, 'channel').trim();
@@ -64,7 +76,7 @@ export function parseHostDashboardUrl(raw: string): HostDashboardRoute | null {
   const pathname = parsed.pathname.replace(/\/$/, '') || '/';
   if (pathname !== '/dashboard' && pathname !== '/voice') return null;
 
-  const hostPeerId = readParam(parsed, 'host').trim();
+  const hostPeerId = defaultHostId(readParam(parsed, 'host'));
   const sessionId = readParam(parsed, 'session').trim();
   if (!hostPeerId || sessionId) return null;
 
