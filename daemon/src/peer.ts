@@ -21,11 +21,15 @@ import {
   validateRendezvousDelivery,
   type PhoneToDaemon,
   type RecentSessionsSnapshot,
+  type TtsCatalog,
+  type SttCatalog,
 } from './protocol.js';
 import { SignalClient, type SignalData } from './signal.js';
 import { classifySignal, decideForwardToLivePeer, decideIncomingSignal } from './signalKind.js';
 
 import { createEmptyRecentSessionsSnapshot, defaultRecentSessionsCache } from './recentSessions.js';
+import { createEmptyTtsCatalog, defaultTtsCatalogCache } from './ttsCatalog.js';
+import { createEmptySttCatalog, defaultSttCatalogCache } from './sttCatalog.js';
 import { DEFAULT_SIGNAL_SERVER } from './signalServer.js';
 import { makeVoiceRoomId } from './voiceRoom.js';
 import { VoiceSession } from './voiceSession.js';
@@ -55,6 +59,8 @@ export interface DaemonPeerOptions {
   iceServers?: RTCIceServer[];
   maxVoiceSessions?: number;
   recentSessionsProvider?: () => Promise<RecentSessionsSnapshot>;
+  ttsCatalogProvider?: () => Promise<TtsCatalog>;
+  sttCatalogProvider?: () => Promise<SttCatalog>;
   onReady: (peerId: string) => void;
   onFatalError?: (err: Error) => void;
 }
@@ -312,6 +318,16 @@ export class DaemonPeer {
       this.stopRendezvousRecentSessionsSubscription(rp);
       return;
     }
+    if (msg.t === 'tts.catalog.request') {
+      this.keepRendezvousOpenForDashboard(rp);
+      void this.sendRendezvousTtsCatalog(rp);
+      return;
+    }
+    if (msg.t === 'stt.catalog.request') {
+      this.keepRendezvousOpenForDashboard(rp);
+      void this.sendRendezvousSttCatalog(rp);
+      return;
+    }
     if (msg.t !== 'rendezvous.join') {
       // The rendezvous lane accepts host-scoped recent-session discovery
       // plus a single join. Any other control message is a sign the
@@ -358,6 +374,8 @@ export class DaemonPeer {
         delivery,
         ...(msg.settings ? { voiceSettings: msg.settings } : {}),
         ...(this.opts.recentSessionsProvider ? { recentSessionsProvider: this.opts.recentSessionsProvider } : {}),
+        ...(this.opts.ttsCatalogProvider ? { ttsCatalogProvider: this.opts.ttsCatalogProvider } : {}),
+        ...(this.opts.sttCatalogProvider ? { sttCatalogProvider: this.opts.sttCatalogProvider } : {}),
         onClose: (id) => {
           this.voiceSessions.delete(id);
         },
@@ -429,6 +447,24 @@ export class DaemonPeer {
       this.sendRendezvous(rp, toMessage(await loadSessions()));
     } catch {
       this.sendRendezvous(rp, toMessage(createEmptyRecentSessionsSnapshot()));
+    }
+  }
+
+  private async sendRendezvousTtsCatalog(rp: RendezvousPeer): Promise<void> {
+    try {
+      const loadCatalog = this.opts.ttsCatalogProvider ?? (() => defaultTtsCatalogCache.get());
+      this.sendRendezvous(rp, daemonToPhone.ttsCatalog(await loadCatalog()));
+    } catch {
+      this.sendRendezvous(rp, daemonToPhone.ttsCatalog(createEmptyTtsCatalog()));
+    }
+  }
+
+  private async sendRendezvousSttCatalog(rp: RendezvousPeer): Promise<void> {
+    try {
+      const loadCatalog = this.opts.sttCatalogProvider ?? (() => defaultSttCatalogCache.get());
+      this.sendRendezvous(rp, daemonToPhone.sttCatalog(await loadCatalog()));
+    } catch {
+      this.sendRendezvous(rp, daemonToPhone.sttCatalog(createEmptySttCatalog()));
     }
   }
 

@@ -540,18 +540,20 @@ export function RtcProvider({
   }, [normalizedVoiceSettings, rendezvous, rendezvousKey, hostPeerId, activeRoomId, status, daemonNegotiation]);
 
   const requestTtsCatalog = useCallback(() => {
-    if (!activeRoomId || activeRoomId === hostPeerId) return;
+    if (!activeRoomId) return;
+    if (rendezvous && activeRoomId === hostPeerId) return;
     if (status !== 'open') return;
     if (!allowsProtocolFeature(daemonNegotiation, activeRoomId, PROTOCOL_FEATURES.ttsCatalog)) return;
     clientRef.current?.sendControl(phoneToDaemon.ttsCatalogRequest());
-  }, [activeRoomId, daemonNegotiation, hostPeerId, status]);
+  }, [activeRoomId, daemonNegotiation, rendezvous, status]);
 
   const requestSttCatalog = useCallback(() => {
-    if (!activeRoomId || activeRoomId === hostPeerId) return;
+    if (!activeRoomId) return;
+    if (rendezvous && activeRoomId === hostPeerId) return;
     if (status !== 'open') return;
     if (!allowsProtocolFeature(daemonNegotiation, activeRoomId, PROTOCOL_FEATURES.sttCatalog)) return;
     clientRef.current?.sendControl(phoneToDaemon.sttCatalogRequest());
-  }, [activeRoomId, daemonNegotiation, hostPeerId, status]);
+  }, [activeRoomId, daemonNegotiation, rendezvous, status]);
 
   const requestRecentSessions = useCallback(() => {
     if (!activeRoomId) return;
@@ -578,7 +580,7 @@ export function RtcProvider({
     if (rendezvous && onRendezvousLane) return;
     if (!isNegotiationResolved(daemonNegotiation, activeRoomId)) return;
 
-    if (rendezvous && !onRendezvousLane && catalogRequestedRoomRef.current !== activeRoomId) {
+    if ((!rendezvous || !onRendezvousLane) && catalogRequestedRoomRef.current !== activeRoomId) {
       catalogRequestedRoomRef.current = activeRoomId;
       requestTtsCatalog();
       requestSttCatalog();

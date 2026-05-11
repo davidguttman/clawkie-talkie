@@ -41,6 +41,7 @@ function makeRendezvousPeer() {
     initiator: false,
     acceptedOffer: true,
     acceptedAnswer: false,
+    protocolUnsupported: false,
   };
 }
 
@@ -281,13 +282,17 @@ describe('DaemonPeer rendezvous voice settings', () => {
     peer.close();
   });
 
-  it('keeps unexpected rendezvous-lane messages failing safely', async () => {
+  it('serves TTS catalog on the host rendezvous lane before join', async () => {
     const { DaemonPeer } = await import('../daemon/src/peer');
     const peer = new DaemonPeer({
       peerId: 'host-1',
       signalServer: 'https://signal.example',
       iceServers: [],
       onReady: vi.fn(),
+      ttsCatalogProvider: vi.fn(async () => ({
+        providers: [{ id: "xai", name: "xAI", configured: true, selected: false, available: true, models: [], voices: [{ id: "eve", name: "Eve" }] }],
+        generatedAt: new Date().toISOString(),
+      })),
     });
     const rendezvousPeer = makeRendezvousPeer();
 
@@ -298,9 +303,13 @@ describe('DaemonPeer rendezvous voice settings', () => {
       JSON.stringify({ t: 'tts.catalog.request' }),
     );
 
-    expect(rendezvousPeer.peer.send).toHaveBeenCalledWith(
-      JSON.stringify({ t: 'rendezvous.error', message: 'unexpected_message' }),
+    expect(rendezvousPeer.peer.send).toHaveBeenCalled();
+    const sendArg = JSON.parse(
+      (rendezvousPeer.peer.send as ReturnType<typeof vi.fn>).mock.calls[0][0] as string,
     );
+    expect(sendArg.t).toBe('tts.catalog');
+    expect(sendArg.catalog).toBeDefined();
+    expect(sendArg.catalog.providers).toBeInstanceOf(Array);
 
     clearTimeout(rendezvousPeer.timeout);
     peer.close();
