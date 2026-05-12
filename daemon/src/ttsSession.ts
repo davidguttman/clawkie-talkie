@@ -105,8 +105,12 @@ export class OpenClawInferTtsSession {
       }
       if (this.closed) return;
       this.finish();
-    } catch {
-      if (!this.closed) this.fail('openclaw_infer_tts_failed');
+    } catch (err) {
+      if (!this.closed) {
+        const message = sanitizedTtsErrorMessage(err);
+        console.error(`[tts] ${message}`);
+        this.fail(message);
+      }
     } finally {
       if (tempDir) await this.cleanupTempDir(tempDir);
     }
@@ -162,6 +166,36 @@ export class OpenClawInferTtsSession {
     this.abortController.abort();
     this.cb.onError(message);
   }
+}
+
+function sanitizeTtsErrorText(text: string): string {
+  return text
+    .replace(/("--text"\s+)"(?:\\.|[^"\\])*"/g, '$1"[redacted]"')
+    .replace(/("-t"\s+)"(?:\\.|[^"\\])*"/g, '$1"[redacted]"')
+    .replace(/(--text\s+)(?:"(?:\\.|[^"\\])*"|'[^']*'|\S+)/g, '$1[redacted]')
+    .replace(/(-t\s+)(?:"(?:\\.|[^"\\])*"|'[^']*'|\S+)/g, '$1[redacted]')
+    .replace(/((?:authorization|proxy-authorization)\s*:\s*(?:bearer|basic)\s+)\S+/gi, '$1[redacted]')
+    .replace(/([A-Za-z0-9_.-]*(?:api[_-]?key|apikey|secret|token|credential|password)[A-Za-z0-9_.-]*\s*[=:]\s*)(?:"(?:\\.|[^"\\])*"|'[^']*'|\S+)/gi, '$1[redacted]')
+    .replace(/\b(token-[A-Za-z0-9_.-]+)\b/gi, '[redacted]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 1000);
+}
+
+function sanitizedTtsErrorMessage(err: unknown): string {
+  const parts: string[] = [];
+  if (err instanceof Error && err.message) parts.push(err.message);
+  if (err && typeof err === 'object') {
+    const maybe = err as { stderr?: unknown; stdout?: unknown };
+    if (typeof maybe.stderr === 'string' && maybe.stderr.trim()) parts.push(maybe.stderr);
+    if (Buffer.isBuffer(maybe.stderr) && maybe.stderr.length > 0) parts.push(maybe.stderr.toString('utf8'));
+    if (typeof maybe.stdout === 'string' && maybe.stdout.trim()) parts.push(maybe.stdout);
+    if (Buffer.isBuffer(maybe.stdout) && maybe.stdout.length > 0) parts.push(maybe.stdout.toString('utf8'));
+  }
+  const detail = sanitizeTtsErrorText(parts.join(' ') || 'unknown');
+  return detail.startsWith('openclaw_infer_tts_failed')
+    ? detail
+    : `openclaw_infer_tts_failed: ${detail}`;
 }
 
 export function convertMp3ToPcm(request: {

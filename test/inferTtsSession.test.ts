@@ -54,14 +54,17 @@ describe('OpenClawInferTtsSession', () => {
     expect(cleanupTempDir).toHaveBeenCalledWith('/tmp/clawkie-tts-test');
   });
 
-  it('emits stable OpenClaw infer TTS error and not audio callbacks when synth fails', async () => {
+  it('emits sanitized OpenClaw infer TTS diagnostics and not audio callbacks when synth fails', async () => {
     const { cb, events } = makeCallbacks();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     new OpenClawInferTtsSession(
       {
         text: 'spoken reply',
         synthesize: async () => {
-          throw new Error('provider failed');
+          throw Object.assign(new Error('provider failed --text "spoken reply" token-secret'), {
+            stderr: '401 missing api_key=super-secret',
+          });
         },
         convertMp3ToPcm: vi.fn(async () => Buffer.from([1, 2])),
         createTempDir: async () => '/tmp/clawkie-tts-test',
@@ -72,7 +75,13 @@ describe('OpenClawInferTtsSession', () => {
 
     await vi.waitFor(() => expect(cb.onError).toHaveBeenCalledTimes(1));
 
-    expect(events).toEqual(['error:openclaw_infer_tts_failed']);
+    expect(events).toEqual([
+      'error:openclaw_infer_tts_failed: provider failed --text [redacted] [redacted] 401 missing api_key=[redacted]',
+    ]);
+    expect(consoleError).toHaveBeenCalledWith(
+      '[tts] openclaw_infer_tts_failed: provider failed --text [redacted] [redacted] 401 missing api_key=[redacted]',
+    );
+    consoleError.mockRestore();
     expect(cb.onOpen).not.toHaveBeenCalled();
     expect(cb.onAudio).not.toHaveBeenCalled();
     expect(cb.onDone).not.toHaveBeenCalled();
