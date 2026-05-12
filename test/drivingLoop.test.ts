@@ -938,6 +938,570 @@ describe('driving loop hold music state gates', () => {
   });
 });
 
+
+describe('driving loop active STT snapshot reconnect handling', () => {
+  it('resolves a pending-start stop when startDaemonSTT rejects after the user tapped stop', async () => {
+    const sttModule = await import('../client/src/voice/sttDaemon');
+    const startDaemonSTT = vi.mocked(sttModule.startDaemonSTT);
+    let rejectStart!: (err: Error) => void;
+    const pendingStart = new Promise<never>((_resolve, reject) => {
+      rejectStart = reject;
+    });
+    startDaemonSTT.mockReturnValueOnce(pendingStart);
+
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      expect(rendered.loop().state).toBe('recording');
+
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      expect(rendered.loop().state).toBe('thinking');
+
+      await act(async () => {
+        rejectStart(new Error('mic exploded'));
+        await pendingStart.catch(() => undefined);
+        await Promise.resolve();
+      });
+
+      expect(rendered.loop().state).toBe('idle');
+      expect(rendered.loop().error).toBe('mic exploded');
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
+  it('ignores a canceled stale pending-start onError after a newer recording starts', async () => {
+    const sttModule = await import('../client/src/voice/sttDaemon');
+    const startDaemonSTT = vi.mocked(sttModule.startDaemonSTT);
+    const starts: Array<{ onError: (reason: string) => void }> = [];
+    const firstStart = new Promise<never>(() => undefined);
+    const stopSecond = vi.fn(async () => 'fresh words');
+    const cancelSecond = vi.fn();
+    startDaemonSTT
+      .mockImplementationOnce((options) => {
+        starts.push(options);
+        return firstStart;
+      })
+      .mockImplementationOnce(async (options) => {
+        starts.push(options);
+        return { stop: stopSecond, cancel: cancelSecond };
+      });
+
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      expect(rendered.loop().state).toBe('recording');
+      expect(startDaemonSTT).toHaveBeenCalledTimes(1);
+
+      await rendered.rerender({ sessionId: 'session-2' });
+      expect(rendered.loop().state).toBe('idle');
+
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(startDaemonSTT).toHaveBeenCalledTimes(2);
+      expect(rendered.loop().state).toBe('recording');
+
+      await act(async () => {
+        starts[0].onError('stale mic failed');
+        await Promise.resolve();
+      });
+
+      expect(rendered.loop().state).toBe('recording');
+      expect(rendered.loop().error).toBeNull();
+      expect(cancelSecond).not.toHaveBeenCalled();
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
+  it.each(['recording', 'listening', 'stt'] as const)('preserves the local mic handle for an active %s reconnect snapshot', async (phase) => {
+    const sttModule = await import('../client/src/voice/sttDaemon');
+    const startDaemonSTT = vi.mocked(sttModule.startDaemonSTT);
+    const stop = vi.fn(async () => 'captured words');
+    const cancel = vi.fn();
+    startDaemonSTT.mockResolvedValueOnce({ stop, cancel });
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(startDaemonSTT).toHaveBeenCalledTimes(1);
+      expect(rendered.loop().state).toBe('recording');
+
+      await act(async () => {
+        rendered.rtc.emitControl({
+          t: 'session.snapshot',
+          snapshot: {
+            turn: {
+              phase,
+              transcript: 'partial local words',
+            },
+          },
+          events: [],
+        });
+      });
+
+      expect(rendered.loop().state).toBe('recording');
+      expect(stop).not.toHaveBeenCalled();
+      expect(cancel).not.toHaveBeenCalled();
+
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      expect(rendered.loop().state).toBe('thinking');
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(cancel).not.toHaveBeenCalled();
+      expect(startDaemonSTT).toHaveBeenCalledTimes(1);
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
+  it('preserves a same-tab recording snapshot while the local STT start is still pending', async () => {
+    const sttModule = await import('../client/src/voice/sttDaemon');
+    const startDaemonSTT = vi.mocked(sttModule.startDaemonSTT);
+    const stop = vi.fn(async () => 'captured words');
+    const cancel = vi.fn();
+    let resolveStart!: (handle: { stop: typeof stop; cancel: typeof cancel }) => void;
+    const pendingStart = new Promise<{ stop: typeof stop; cancel: typeof cancel }>((resolve) => {
+      resolveStart = resolve;
+    });
+    startDaemonSTT.mockReturnValueOnce(pendingStart);
+
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      await act(async () => {
+        rendered.loop().tap();
+      });
+
+      expect(startDaemonSTT).toHaveBeenCalledTimes(1);
+      expect(rendered.loop().state).toBe('recording');
+
+      await act(async () => {
+        rendered.rtc.emitControl({
+          t: 'session.snapshot',
+          snapshot: {
+            turn: {
+              phase: 'recording',
+              transcript: 'partial local words',
+            },
+          },
+          events: [],
+        });
+      });
+
+      expect(rendered.loop().state).toBe('recording');
+      expect(stop).not.toHaveBeenCalled();
+      expect(cancel).not.toHaveBeenCalled();
+
+      await act(async () => {
+        resolveStart({ stop, cancel });
+        await pendingStart;
+        await Promise.resolve();
+      });
+
+      expect(rendered.loop().state).toBe('recording');
+      expect(stop).not.toHaveBeenCalled();
+      expect(cancel).not.toHaveBeenCalled();
+
+      await act(async () => {
+        rendered.loop().tap();
+      });
+
+      expect(rendered.loop().state).toBe('thinking');
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(cancel).not.toHaveBeenCalled();
+      expect(startDaemonSTT).toHaveBeenCalledTimes(1);
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
+  it('keeps a cold-launch recording snapshot idle so the next tap starts a fresh mic', async () => {
+    const sttModule = await import('../client/src/voice/sttDaemon');
+    const startDaemonSTT = vi.mocked(sttModule.startDaemonSTT);
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      await act(async () => {
+        rendered.rtc.emitControl({
+          t: 'session.snapshot',
+          snapshot: {
+            turn: {
+              phase: 'recording',
+              transcript: 'old partial words',
+            },
+          },
+          events: [],
+        });
+      });
+
+      expect(rendered.loop().state).toBe('idle');
+      expect(rendered.loop().liveText).toBe('');
+      expect(rendered.loop().lastTurn).toBeNull();
+      expect(startDaemonSTT).not.toHaveBeenCalled();
+
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(rendered.loop().state).toBe('recording');
+      expect(startDaemonSTT).toHaveBeenCalledTimes(1);
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
+  it('preserves a same-tab recording snapshot while a pending STT start has already been stopped', async () => {
+    const sttModule = await import('../client/src/voice/sttDaemon');
+    const startDaemonSTT = vi.mocked(sttModule.startDaemonSTT);
+    const stop = vi.fn(async () => 'captured words');
+    const cancel = vi.fn();
+    let resolveStart!: (handle: { stop: typeof stop; cancel: typeof cancel }) => void;
+    const pendingStart = new Promise<{ stop: typeof stop; cancel: typeof cancel }>((resolve) => {
+      resolveStart = resolve;
+    });
+    startDaemonSTT.mockReturnValueOnce(pendingStart);
+
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      expect(rendered.loop().state).toBe('recording');
+
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      expect(rendered.loop().state).toBe('thinking');
+
+      await act(async () => {
+        rendered.rtc.emitControl({
+          t: 'session.snapshot',
+          snapshot: {
+            turn: {
+              phase: 'recording',
+              transcript: 'partial local words',
+            },
+          },
+          events: [],
+        });
+      });
+
+      expect(rendered.loop().state).toBe('thinking');
+      expect(stop).not.toHaveBeenCalled();
+      expect(cancel).not.toHaveBeenCalled();
+
+      await act(async () => {
+        resolveStart({ stop, cancel });
+        await pendingStart;
+        await Promise.resolve();
+      });
+      expect(rendered.loop().state).toBe('thinking');
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(cancel).not.toHaveBeenCalled();
+
+      await act(async () => {
+        rendered.rtc.emitControl({ t: 'stt.done', text: 'captured words' });
+      });
+      expect(rendered.loop().state).toBe('thinking');
+      expect(rendered.loop().liveText).toBe('captured words');
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
+  it.each(['recording', 'listening', 'stt'] as const)('preserves a same-tab %s snapshot while STT stop is in flight', async (phase) => {
+    const sttModule = await import('../client/src/voice/sttDaemon');
+    const startDaemonSTT = vi.mocked(sttModule.startDaemonSTT);
+    const stop = vi.fn(async () => 'captured words');
+    const cancel = vi.fn();
+    startDaemonSTT.mockResolvedValueOnce({ stop, cancel });
+
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(rendered.loop().state).toBe('recording');
+
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      expect(rendered.loop().state).toBe('thinking');
+      expect(stop).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        rendered.rtc.emitControl({
+          t: 'session.snapshot',
+          snapshot: {
+            turn: {
+              phase,
+              transcript: 'partial local words',
+            },
+          },
+          events: [],
+        });
+      });
+
+      expect(rendered.loop().state).toBe('thinking');
+
+      await act(async () => {
+        rendered.rtc.emitControl({ t: 'stt.done', text: 'captured words' });
+      });
+      expect(rendered.loop().state).toBe('thinking');
+      expect(rendered.loop().liveText).toBe('captured words');
+      expect(cancel).not.toHaveBeenCalled();
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
+  it.each([
+    { event: { t: 'stt.done' as const, text: 'captured words' }, expectedAfterReplay: 'thinking' as const },
+    { event: { t: 'stt.error' as const, message: 'stt crashed' }, expectedAfterReplay: 'idle' as const },
+  ])('clears stop-in-flight preservation after replayed $event.t from a session snapshot', async ({ event, expectedAfterReplay }) => {
+    const sttModule = await import('../client/src/voice/sttDaemon');
+    const startDaemonSTT = vi.mocked(sttModule.startDaemonSTT);
+    const stop = vi.fn(async () => 'captured words');
+    const cancel = vi.fn();
+    startDaemonSTT.mockResolvedValueOnce({ stop, cancel });
+
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      expect(rendered.loop().state).toBe('thinking');
+      expect(stop).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        rendered.rtc.emitControl({
+          t: 'session.snapshot',
+          snapshot: { turn: { phase: expectedAfterReplay === 'thinking' ? 'thinking' : 'error', transcript: 'captured words' } },
+          events: [{ msg: event }],
+        });
+      });
+      expect(rendered.loop().state).toBe(expectedAfterReplay);
+
+      await act(async () => {
+        rendered.rtc.emitControl({
+          t: 'session.snapshot',
+          snapshot: { turn: { phase: 'recording', transcript: 'old partial words' } },
+          events: [],
+        });
+      });
+
+      expect(rendered.loop().state).toBe('idle');
+      expect(rendered.loop().liveText).toBe('');
+      expect(rendered.loop().lastTurn).toBeNull();
+      expect(rendered.loop().error).toBeNull();
+      expect(cancel).not.toHaveBeenCalled();
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
+  it('cancels a pending local STT start when an idle snapshot catches up before the handle resolves', async () => {
+    const sttModule = await import('../client/src/voice/sttDaemon');
+    const startDaemonSTT = vi.mocked(sttModule.startDaemonSTT);
+    const firstStop = vi.fn(async () => 'stale words');
+    const firstCancel = vi.fn();
+    const secondStop = vi.fn(async () => 'fresh words');
+    const secondCancel = vi.fn();
+    let resolveFirstStart!: (handle: { stop: typeof firstStop; cancel: typeof firstCancel }) => void;
+    const firstStart = new Promise<{ stop: typeof firstStop; cancel: typeof firstCancel }>((resolve) => {
+      resolveFirstStart = resolve;
+    });
+    startDaemonSTT
+      .mockReturnValueOnce(firstStart)
+      .mockResolvedValueOnce({ stop: secondStop, cancel: secondCancel });
+
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      expect(rendered.loop().state).toBe('recording');
+      expect(startDaemonSTT).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        rendered.rtc.emitControl({
+          t: 'session.snapshot',
+          snapshot: { phase: 'idle' },
+          events: [],
+        });
+      });
+
+      expect(rendered.loop().state).toBe('idle');
+
+      await act(async () => {
+        resolveFirstStart({ stop: firstStop, cancel: firstCancel });
+        await firstStart;
+        await Promise.resolve();
+      });
+
+      expect(firstCancel).toHaveBeenCalledTimes(1);
+      expect(firstStop).not.toHaveBeenCalled();
+      expect(rendered.loop().state).toBe('idle');
+
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(rendered.loop().state).toBe('recording');
+      expect(startDaemonSTT).toHaveBeenCalledTimes(2);
+      expect(secondStop).not.toHaveBeenCalled();
+      expect(secondCancel).not.toHaveBeenCalled();
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
+  it('cancels an active local STT handle before replaying a non-STT snapshot into thinking', async () => {
+    const sttModule = await import('../client/src/voice/sttDaemon');
+    const startDaemonSTT = vi.mocked(sttModule.startDaemonSTT);
+    const stop = vi.fn(async () => 'local words');
+    const cancel = vi.fn();
+    startDaemonSTT.mockResolvedValueOnce({ stop, cancel });
+
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(rendered.loop().state).toBe('recording');
+
+      await act(async () => {
+        rendered.rtc.emitControl({
+          t: 'session.snapshot',
+          snapshot: { phase: 'reply-ready', userText: 'daemon words', pendingReplyText: 'daemon reply' },
+          events: [{ msg: { t: 'reply.done', text: 'daemon reply' } }],
+        });
+      });
+
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(stop).not.toHaveBeenCalled();
+      expect(rendered.loop().state).toBe('thinking');
+      expect(rendered.loop().liveText).toBe('daemon words');
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
+  it('cancels an active local STT handle before replayed stt.done hydrates thinking', async () => {
+    const sttModule = await import('../client/src/voice/sttDaemon');
+    const startDaemonSTT = vi.mocked(sttModule.startDaemonSTT);
+    const stop = vi.fn(async () => 'local words');
+    const cancel = vi.fn();
+    startDaemonSTT.mockResolvedValueOnce({ stop, cancel });
+
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(rendered.loop().state).toBe('recording');
+
+      await act(async () => {
+        rendered.rtc.emitControl({
+          t: 'session.snapshot',
+          snapshot: { turn: { phase: 'thinking', transcript: 'daemon final words' } },
+          events: [{ msg: { t: 'stt.done', text: 'daemon final words' } }],
+        });
+      });
+
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(stop).not.toHaveBeenCalled();
+      expect(rendered.loop().state).toBe('thinking');
+      expect(rendered.loop().liveText).toBe('daemon final words');
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
+  it('discards a pending stop-in-flight start after replayed stt.done finalizes the turn', async () => {
+    const sttModule = await import('../client/src/voice/sttDaemon');
+    const startDaemonSTT = vi.mocked(sttModule.startDaemonSTT);
+    const stop = vi.fn(async () => 'late local words');
+    const cancel = vi.fn();
+    let resolveStart!: (handle: { stop: typeof stop; cancel: typeof cancel }) => void;
+    const pendingStart = new Promise<{ stop: typeof stop; cancel: typeof cancel }>((resolve) => {
+      resolveStart = resolve;
+    });
+    startDaemonSTT.mockReturnValueOnce(pendingStart);
+
+    const rendered = await renderDrivingLoopHarness();
+    try {
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      await act(async () => {
+        rendered.loop().tap();
+      });
+      expect(rendered.loop().state).toBe('thinking');
+
+      await act(async () => {
+        rendered.rtc.emitControl({
+          t: 'session.snapshot',
+          snapshot: { turn: { phase: 'thinking', transcript: 'daemon final words' } },
+          events: [{ msg: { t: 'stt.done', text: 'daemon final words' } }],
+        });
+      });
+
+      expect(rendered.loop().state).toBe('thinking');
+      expect(rendered.loop().liveText).toBe('daemon final words');
+
+      await act(async () => {
+        resolveStart({ stop, cancel });
+        await pendingStart;
+        await Promise.resolve();
+      });
+
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(stop).not.toHaveBeenCalled();
+      expect(rendered.loop().state).toBe('thinking');
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
+});
+
 describe('driving loop visualizer frame rendering', () => {
   it('applies a light time-smoothing pass before rendering frames', () => {
     const source = readFileSync(resolve(root, 'client/src/voice/drivingLoop.ts'), 'utf8');
