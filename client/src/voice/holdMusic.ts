@@ -374,10 +374,9 @@ export class HoldMusicController {
     }
   }
 
-  private handleSessionMuteChange(session: HoldMusicSession, muted: boolean): void {
-    if (!muted || this.session !== session || session.stopped || !session.analyserSession) return;
-    cleanupAnalyserSession(session.analyserSession);
-    session.analyserSession = null;
+  private handleSessionMuteChange(_session: HoldMusicSession, _muted: boolean): void {
+    // Muting only changes audible media element volume. Keep any analyser session alive so
+    // unmuting resumes the visualization without rebuilding the audio graph.
   }
 }
 
