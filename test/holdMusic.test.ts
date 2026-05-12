@@ -603,7 +603,7 @@ describe('HoldMusicController', () => {
     expect(getActiveHoldMusicAnalyser()).toBeNull();
   });
 
-  it('stops and clears the hold music analyser when muted during playback', async () => {
+  it('preserves the hold music analyser across mute toggles during playback', async () => {
     vi.stubGlobal('window', { AudioContext: FakeAudioContext });
     vi.stubGlobal('Audio', FakeAudioElement);
     const { HoldMusicController, getActiveHoldMusicAnalyser, setHoldMusicMuted } = await import(
@@ -629,18 +629,20 @@ describe('HoldMusicController', () => {
 
     expect(music.muted).toBe(true);
     expect(music.volume).toBe(0);
-    expect(FakeAudioElement.instances[1].muted).toBe(true);
+    expect(originalMusic.muted).toBe(true);
     expect(FakeAudioElement.instances[2].muted).toBe(true);
     expect(FakeAudioElement.instances[3].muted).toBe(true);
-    expect(analyserAudio.pause).toHaveBeenCalled();
-    expect(analyserAudio.removeAttribute).toHaveBeenCalledWith('src');
-    expect(source.disconnect).toHaveBeenCalled();
-    expect(analyser.disconnect).toHaveBeenCalled();
-    expect(getActiveHoldMusicAnalyser()).toBeNull();
+    expect(analyserAudio.pause).not.toHaveBeenCalled();
+    expect(analyserAudio.removeAttribute).not.toHaveBeenCalled();
+    expect(source.disconnect).not.toHaveBeenCalled();
+    expect(analyser.disconnect).not.toHaveBeenCalled();
+    expect(getActiveHoldMusicAnalyser()).toBe(analyser as unknown as AnalyserNode);
 
     setHoldMusicMuted(false);
 
-    expect(getActiveHoldMusicAnalyser()).toBeNull();
+    expect(music.muted).toBe(false);
+    expect(music.volume).toBeGreaterThan(0);
+    expect(getActiveHoldMusicAnalyser()).toBe(analyser as unknown as AnalyserNode);
     expect(ctx.analysers).toHaveLength(1);
   });
 });

@@ -11,6 +11,7 @@ const root = resolve(__dirname, '..');
 let activeMicAnalyser: AnalyserNode | null = null;
 let activeHoldMusicAnalyser: AnalyserNode | null = null;
 let activeOutputAnalysers: AnalyserNode[] = [];
+let holdMusicMuted = false;
 let holdMusicStartCount = 0;
 let holdMusicStopCount = 0;
 
@@ -51,7 +52,7 @@ vi.mock('../client/src/voice/holdMusic', () => ({
     }
   },
   getActiveHoldMusicAnalyser: () => activeHoldMusicAnalyser,
-  getHoldMusicMuted: () => false,
+  getHoldMusicMuted: () => holdMusicMuted,
 }));
 
 class FakeAnalyser {
@@ -214,6 +215,7 @@ beforeEach(() => {
   activeMicAnalyser = null;
   activeHoldMusicAnalyser = null;
   activeOutputAnalysers = [];
+  holdMusicMuted = false;
   holdMusicStartCount = 0;
   holdMusicStopCount = 0;
 });
@@ -880,6 +882,27 @@ describe('driving loop thinking visualizer source selection', () => {
     expect(bands[13]).toBe(bands[14]);
     // High-bin signal: highs render on the outside edges, so center sits lower.
     expect(bands[13]).toBeLessThan(bands[0]);
+  });
+
+  it('returns quiet thinking bars while muted without clearing the hold analyser source', async () => {
+    const { readTargetBands } = await import('../client/src/voice/drivingLoop');
+    const holdAnalyser = new FakeAnalyser();
+    holdAnalyser.pushFrame([[50, 255]]);
+    holdAnalyser.pushFrame([[50, 255]]);
+    activeHoldMusicAnalyser = holdAnalyser as unknown as AnalyserNode;
+    const scratch = new WeakMap<AnalyserNode, AnalyserScratch>();
+
+    holdMusicMuted = true;
+    const mutedBands = readTargetBands('thinking', [], null, scratch);
+
+    expect(Math.max(...mutedBands)).toBeLessThan(0.1);
+    expect(activeHoldMusicAnalyser).toBe(holdAnalyser as unknown as AnalyserNode);
+
+    holdMusicMuted = false;
+    const liveBands = readTargetBands('thinking', [], null, scratch);
+
+    expect(Math.max(...liveBands)).toBeGreaterThan(0.1);
+    expect(activeHoldMusicAnalyser).toBe(holdAnalyser as unknown as AnalyserNode);
   });
 
   it('does not include the hold music analyser when state is ai', async () => {
