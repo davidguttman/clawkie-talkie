@@ -435,6 +435,34 @@ describe('daemon TTS playback audio context', () => {
     expect(detachBinary).toHaveBeenCalledTimes(1);
   });
 
+  it('returns a rejected replay handle instead of throwing when PCM WebAudio setup fails', async () => {
+    const boom = new Error('analyser setup failed');
+    class ThrowingAnalyserAudioContext extends FakeAudioContext {
+      createAnalyser(): FakeAnalyserNode {
+        throw boom;
+      }
+    }
+
+    vi.stubGlobal('window', { AudioContext: ThrowingAnalyserAudioContext });
+    const { startBufferedReplyAudioPlayback } = await import('../client/src/voice/tts');
+    let handle: ReturnType<typeof startBufferedReplyAudioPlayback> | undefined;
+
+    expect(() => {
+      handle = startBufferedReplyAudioPlayback({
+        kind: 'pcm',
+        sampleRate: 24000,
+        rate: 1,
+        chunks: [new Uint8Array([0, 0]).buffer],
+        byteLength: 2,
+        createdAt: 1,
+      });
+    }).not.toThrow();
+
+    expect(handle?.analyser).toBeNull();
+    handle!.stop();
+    await expect(handle!.done).rejects.toBe(boom);
+  });
+
   it('does not let a stale done timer finish before a following buffered replay start and EOF', async () => {
     vi.useFakeTimers();
     try {

@@ -3,6 +3,7 @@ import {
   canReplayAssistantReply,
   replayAssistantReply,
   selectReplaySource,
+  startReplayAssistantReply,
   type BufferedReplyAudio,
 } from '../client/src/replay';
 
@@ -80,6 +81,94 @@ describe('replay selection', () => {
 });
 
 describe('replay action', () => {
+
+
+  it('starts audio replay with saved assistant text metadata and a silence handle', async () => {
+    const stop = vi.fn();
+    const startAudio = vi.fn(() => ({
+      done: Promise.resolve(),
+      stop,
+      analyser: 'fake-analyser' as unknown as AnalyserNode,
+    }));
+    const startText = vi.fn();
+
+    const replay = startReplayAssistantReply({
+      audio,
+      text: 'visible assistant reply',
+      canSpeakText: true,
+      startAudio,
+      startText,
+    });
+
+    expect(replay).toMatchObject({ ok: true, mode: 'audio', text: 'visible assistant reply' });
+    expect(replay.analyser).toBe('fake-analyser');
+    expect(startAudio).toHaveBeenCalledWith(audio);
+    expect(startText).not.toHaveBeenCalled();
+
+    replay.stop();
+    expect(stop).toHaveBeenCalled();
+    await expect(replay.done).resolves.toBeUndefined();
+  });
+
+  it('starts text fallback replay with trimmed assistant text and a silence handle', () => {
+    const stop = vi.fn();
+    const startText = vi.fn(() => ({ done: Promise.resolve(), stop }));
+
+    const replay = startReplayAssistantReply({
+      audio: null,
+      text: '  visible text fallback  ',
+      canSpeakText: true,
+      startAudio: vi.fn(),
+      startText,
+    });
+
+    expect(replay).toMatchObject({ ok: true, mode: 'text', text: 'visible text fallback' });
+    expect(startText).toHaveBeenCalledWith('visible text fallback');
+    replay.stop();
+    expect(stop).toHaveBeenCalled();
+  });
+
+  it('turns synchronous audio starter failures into a rejected replay handle', async () => {
+    const boom = new Error('audio setup failed');
+    let replay: ReturnType<typeof startReplayAssistantReply> | undefined;
+
+    expect(() => {
+      replay = startReplayAssistantReply({
+        audio,
+        text: 'visible assistant reply',
+        canSpeakText: true,
+        startAudio: () => {
+          throw boom;
+        },
+        startText: vi.fn(),
+      });
+    }).not.toThrow();
+
+    expect(replay).toMatchObject({ ok: true, mode: 'audio', text: 'visible assistant reply', analyser: null });
+    replay!.stop();
+    await expect(replay!.done).rejects.toBe(boom);
+  });
+
+  it('turns synchronous text starter failures into a rejected replay handle', async () => {
+    const boom = new Error('text setup failed');
+    let replay: ReturnType<typeof startReplayAssistantReply> | undefined;
+
+    expect(() => {
+      replay = startReplayAssistantReply({
+        audio: null,
+        text: '  visible text fallback  ',
+        canSpeakText: true,
+        startAudio: vi.fn(),
+        startText: () => {
+          throw boom;
+        },
+      });
+    }).not.toThrow();
+
+    expect(replay).toMatchObject({ ok: true, mode: 'text', text: 'visible text fallback', analyser: null });
+    replay!.stop();
+    await expect(replay!.done).rejects.toBe(boom);
+  });
   it('plays audio without falling through to text', async () => {
     const playAudio = vi.fn(() => Promise.resolve());
     const speakText = vi.fn(() => Promise.resolve());

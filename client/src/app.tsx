@@ -19,20 +19,29 @@ import {
 } from './storage';
 import {
   canReplayAssistantReply,
-  replayAssistantReply,
+  startReplayAssistantReply,
   subscribeReplayAvailabilityChanges,
+  type ReplayStartResult,
 } from './replay';
 import {
   canSpeakReplayText,
   getLastBufferedReplyAudio,
-  playBufferedReplyAudio,
-  speakReplayText,
+  startBufferedReplyAudioPlayback,
+  startSpeakReplayText,
 } from './voice/tts';
 import { formatHandoffHash, parseHandoffUrl, parseHostDashboardUrl, type HandoffRoute } from './voice/handoffUrl';
 import type { RecentSession, VoiceSettings } from './voice/protocol';
 import { computeIsNarrow } from './responsive';
 
 type ScreenId = 'dashboard' | 'driving' | 'transcript' | 'error';
+
+type ActiveManualReplay = {
+  text: string;
+  mode: 'audio' | 'text';
+  analyser: AnalyserNode | null;
+};
+
+type ActiveReplayStartResult = Extract<ReplayStartResult, { ok: true }>;
 
 export function parseInitialSearch(search: string): {
   screen: ScreenId;
@@ -209,6 +218,8 @@ export function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [settings, setSettingsState] = useState<Settings>(() => loadSettings(initial.hostPeerId));
   const [replayAvailabilityTick, setReplayAvailabilityTick] = useState(0);
+  const [manualReplay, setManualReplay] = useState<ActiveManualReplay | null>(null);
+  const manualReplayRef = useRef<ActiveReplayStartResult | null>(null);
   const [isNarrow, setIsNarrow] = useState(computeIsNarrow);
 
   useEffect(() => {
@@ -244,6 +255,15 @@ export function App() {
   const currentSessionId =
     screen === 'driving' ? activeHandoff?.sessionId ?? initial.sessionId : openSession || activeHandoff?.sessionId || initial.sessionId;
 
+  const currentTranscriptSession = useMemo(() => {
+    void replayAvailabilityTick;
+    return currentSessionId ? loadTranscriptSession(currentSessionId) : null;
+  }, [currentSessionId, replayAvailabilityTick]);
+  const currentAssistantText = useMemo(
+    () => latestAssistantText(currentTranscriptSession),
+    [currentTranscriptSession],
+  );
+
   const rtcVoiceSettings = useMemo(() => voiceSettingsForRtc(settings), [settings]);
   const currentSessionFavoriteCandidate = useMemo(
     () => favoriteSessionFromHandoff(activeHandoff),
@@ -265,31 +285,51 @@ export function App() {
     }
   }, [activeHandoff, initial.handoff, activeHostPeerId]);
 
-  const replayLastReply = useCallback(async () => {
-    const session = currentSessionId ? loadTranscriptSession(currentSessionId) : null;
-    try {
-      await replayAssistantReply({
-        audio: getLastBufferedReplyAudio(),
-        text: latestAssistantText(session),
-        canSpeakText: canSpeakReplayText(),
-        playAudio: playBufferedReplyAudio,
-        speakText: speakReplayText,
-      });
-    } catch {
-      // The replay button is only enabled when a source exists, but playback
-      // can still fail if the browser rejects audio at the last moment.
-    }
+  const stopManualReplay = useCallback(() => {
+    const active = manualReplayRef.current;
+    manualReplayRef.current = null;
+    active?.stop();
+    setManualReplay(null);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      const active = manualReplayRef.current;
+      manualReplayRef.current = null;
+      active?.stop();
+    };
   }, [currentSessionId]);
 
+  const replayLastReply = useCallback(() => {
+    stopManualReplay();
+    const replay = startReplayAssistantReply({
+      audio: getLastBufferedReplyAudio(),
+      text: currentAssistantText,
+      canSpeakText: canSpeakReplayText(),
+      startAudio: startBufferedReplyAudioPlayback,
+      startText: startSpeakReplayText,
+    });
+    if (!replay.ok) return;
+    manualReplayRef.current = replay;
+    setManualReplay({
+      text: replay.text,
+      mode: replay.mode,
+      analyser: replay.analyser,
+    });
+    void replay.done.catch(() => undefined).finally(() => {
+      if (manualReplayRef.current !== replay) return;
+      manualReplayRef.current = null;
+      setManualReplay(null);
+    });
+  }, [currentAssistantText, stopManualReplay]);
+
   const canReplayLastReply = useMemo(() => {
-    void replayAvailabilityTick;
-    const session = currentSessionId ? loadTranscriptSession(currentSessionId) : null;
     return canReplayAssistantReply({
       audio: getLastBufferedReplyAudio(),
-      text: latestAssistantText(session),
+      text: currentAssistantText,
       canSpeakText: canSpeakReplayText(),
     });
-  }, [currentSessionId, replayAvailabilityTick]);
+  }, [currentAssistantText, replayAvailabilityTick]);
 
   const screenContent = (
     <>
@@ -312,6 +352,8 @@ export function App() {
               : undefined
           }
           canReplay={canReplayLastReply}
+          manualReplay={manualReplay ? { ...manualReplay, onSilence: stopManualReplay } : null}
+          restoredAssistantText={currentAssistantText}
           onSessions={() => go('dashboard')}
           onSettings={openSettings}
           compact={compact}

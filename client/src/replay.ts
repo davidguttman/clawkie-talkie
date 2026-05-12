@@ -33,6 +33,19 @@ export interface ReplayResult {
   mode: 'audio' | 'text' | 'none';
 }
 
+
+export interface ReplayPlaybackHandle {
+  done: Promise<void>;
+  stop: () => void;
+  analyser?: AnalyserNode | null;
+}
+
+export type ReplayNoneReason = Extract<ReplaySelection, { kind: 'none' }>['reason'];
+
+export type ReplayStartResult =
+  | { ok: true; mode: 'audio' | 'text'; text: string; done: Promise<void>; stop: () => void; analyser: AnalyserNode | null }
+  | { ok: false; mode: 'none'; text: ''; reason: ReplayNoneReason; done: Promise<void>; stop: () => void; analyser: null };
+
 export const REPLAY_AVAILABILITY_CHANGED_EVENT = 'clawkie:replay-availability-changed';
 
 export function selectReplaySource(request: ReplayRequest): ReplaySelection {
@@ -67,6 +80,69 @@ function hasReplayAudio(audio: BufferedReplyAudio | null): audio is BufferedRepl
   return audio.chunks.length > 0;
 }
 
+export function startReplayAssistantReply({
+  audio,
+  text,
+  canSpeakText,
+  startAudio,
+  startText,
+}: ReplayRequest & {
+  startAudio: (audio: BufferedReplyAudio) => ReplayPlaybackHandle;
+  startText: (text: string) => ReplayPlaybackHandle;
+}): ReplayStartResult {
+  const selection = selectReplaySource({ audio, text, canSpeakText });
+  if (selection.kind === 'audio') {
+    try {
+      const handle = startAudio(selection.audio);
+      return {
+        ok: true,
+        mode: 'audio',
+        text: text?.trim() ?? '',
+        done: handle.done,
+        stop: handle.stop,
+        analyser: handle.analyser ?? null,
+      };
+    } catch (err) {
+      return failedReplayStart('audio', text?.trim() ?? '', err);
+    }
+  }
+  if (selection.kind === 'text') {
+    try {
+      const handle = startText(selection.text);
+      return {
+        ok: true,
+        mode: 'text',
+        text: selection.text,
+        done: handle.done,
+        stop: handle.stop,
+        analyser: handle.analyser ?? null,
+      };
+    } catch (err) {
+      return failedReplayStart('text', selection.text, err);
+    }
+  }
+  return {
+    ok: false,
+    mode: 'none',
+    text: '',
+    reason: selection.reason,
+    done: Promise.resolve(),
+    stop: () => undefined,
+    analyser: null,
+  };
+}
+
+function failedReplayStart(mode: 'audio' | 'text', text: string, err: unknown): ReplayStartResult {
+  return {
+    ok: true,
+    mode,
+    text,
+    done: Promise.reject(err),
+    stop: () => undefined,
+    analyser: null,
+  };
+}
+
 export async function replayAssistantReply({
   audio,
   text,
@@ -77,17 +153,21 @@ export async function replayAssistantReply({
   playAudio: (audio: BufferedReplyAudio) => Promise<void>;
   speakText: (text: string) => Promise<void>;
 }): Promise<ReplayResult> {
-  const selection = selectReplaySource({ audio, text, canSpeakText });
-  if (selection.kind === 'audio') {
-    await playAudio(selection.audio);
-    return { ok: true, mode: 'audio' };
-  }
-  if (selection.kind === 'text') {
-    await speakText(selection.text);
-    return { ok: true, mode: 'text' };
-  }
-  return {
-    ok: false,
-    mode: 'none',
-  };
+  const replay = startReplayAssistantReply({
+    audio,
+    text,
+    canSpeakText,
+    startAudio: (selectedAudio) => ({
+      done: playAudio(selectedAudio),
+      stop: () => undefined,
+      analyser: null,
+    }),
+    startText: (selectedText) => ({
+      done: speakText(selectedText),
+      stop: () => undefined,
+      analyser: null,
+    }),
+  });
+  await replay.done;
+  return { ok: replay.ok, mode: replay.mode };
 }

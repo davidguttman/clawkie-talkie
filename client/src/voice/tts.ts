@@ -116,110 +116,252 @@ export function canSpeakReplayText(): boolean {
   );
 }
 
+export interface ReplayPlaybackHandle {
+  done: Promise<void>;
+  stop: () => void;
+  readonly analyser?: AnalyserNode | null;
+}
+
 export function speakReplayText(text: string): Promise<void> {
-  if (!canSpeakReplayText()) return Promise.reject(new Error('speech_synthesis_unavailable'));
-  return new Promise((resolve) => {
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.onend = () => resolve();
-    utterance.onerror = () => resolve();
-    try {
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.speak(utterance);
-    } catch {
-      resolve();
-    }
+  return startSpeakReplayText(text).done;
+}
+
+export function startSpeakReplayText(text: string): ReplayPlaybackHandle {
+  if (!canSpeakReplayText()) {
+    return rejectedReplayHandle(new Error('speech_synthesis_unavailable'));
+  }
+  let utterance: SpeechSynthesisUtterance | null = null;
+  let settled = false;
+  let resolveDone!: () => void;
+  const done = new Promise<void>((resolve) => {
+    resolveDone = resolve;
   });
+  const settle = () => {
+    if (settled) return;
+    settled = true;
+    if (utterance) {
+      utterance.onend = null;
+      utterance.onerror = null;
+    }
+    resolveDone();
+  };
+  try {
+    utterance = new SpeechSynthesisUtterance(text);
+    utterance.onend = settle;
+    utterance.onerror = settle;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
+  } catch {
+    settle();
+  }
+  return {
+    done,
+    stop: () => {
+      try {
+        window.speechSynthesis.cancel();
+      } catch {
+        // best-effort
+      }
+      settle();
+    },
+    analyser: null,
+  };
 }
 
 export function playBufferedReplyAudio(audio: BufferedReplyAudio): Promise<void> {
-  if (audio.kind === 'blob') return playBufferedBlobAudio(audio.blob, audio.mimeType);
-  return playBufferedPcmAudio(audio);
+  return startBufferedReplyAudioPlayback(audio).done;
 }
 
-function playBufferedBlobAudio(blob: Blob, mimeType: string): Promise<void> {
+export function startBufferedReplyAudioPlayback(audio: BufferedReplyAudio): ReplayPlaybackHandle {
+  if (audio.kind === 'blob') return startBufferedBlobAudioPlayback(audio.blob, audio.mimeType);
+  return startBufferedPcmAudioPlayback(audio);
+}
+
+function startBufferedBlobAudioPlayback(blob: Blob, mimeType: string): ReplayPlaybackHandle {
   if (typeof Audio === 'undefined' || typeof URL === 'undefined') {
-    return Promise.reject(new Error('audio_unsupported'));
+    return rejectedReplayHandle(new Error('audio_unsupported'));
   }
-  return new Promise((resolve, reject) => {
-    let url = '';
-    try {
-      url = URL.createObjectURL(new Blob([blob], { type: mimeType || blob.type }));
-      const el = new Audio(url);
-      el.setAttribute('playsinline', 'true');
-      el.onended = () => {
-        URL.revokeObjectURL(url);
-        resolve();
-      };
-      el.onerror = () => {
-        URL.revokeObjectURL(url);
-        reject(new Error('audio_replay_failed'));
-      };
-      const result = el.play();
-      if (result && typeof result.catch === 'function') {
-        result.catch((err) => {
-          URL.revokeObjectURL(url);
-          reject(err);
-        });
-      }
-    } catch (err) {
-      if (url) URL.revokeObjectURL(url);
-      reject(err);
-    }
+
+  let url = '';
+  let el: HTMLAudioElement | null = null;
+  let source: MediaElementAudioSourceNode | null = null;
+  let analyser: AnalyserNode | null = null;
+  let gain: GainNode | null = null;
+  let settled = false;
+  let resolveDone!: () => void;
+  let rejectDone!: (err: unknown) => void;
+  const done = new Promise<void>((resolve, reject) => {
+    resolveDone = resolve;
+    rejectDone = reject;
   });
+
+  const cleanup = () => {
+    if (url) {
+      URL.revokeObjectURL(url);
+      url = '';
+    }
+    try { source?.disconnect(); } catch { /* already disconnected */ }
+    try { analyser?.disconnect(); } catch { /* already disconnected */ }
+    try { gain?.disconnect(); } catch { /* already disconnected */ }
+    source = null;
+    gain = null;
+  };
+  const resolveOnce = () => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    resolveDone();
+  };
+  const rejectOnce = (err: unknown) => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    rejectDone(err);
+  };
+
+  try {
+    url = URL.createObjectURL(new Blob([blob], { type: mimeType || blob.type }));
+    el = new Audio(url);
+    el.setAttribute('playsinline', 'true');
+    el.onended = resolveOnce;
+    el.onerror = () => rejectOnce(new Error('audio_replay_failed'));
+
+    const audioCtx = getSharedAudioContext();
+    if (audioCtx) {
+      void resumeAudioContext(audioCtx);
+      try {
+        source = audioCtx.createMediaElementSource(el);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = VISUALIZER_FFT_SIZE;
+        analyser.smoothingTimeConstant = VISUALIZER_SMOOTHING;
+        gain = audioCtx.createGain();
+        gain.gain.value = 1;
+        source.connect(analyser);
+        analyser.connect(gain);
+        gain.connect(audioCtx.destination);
+      } catch {
+        try { source?.disconnect(); } catch { /* already disconnected */ }
+        try { analyser?.disconnect(); } catch { /* already disconnected */ }
+        try { gain?.disconnect(); } catch { /* already disconnected */ }
+        source = null;
+        analyser = null;
+        gain = null;
+      }
+    }
+
+    const result = el.play();
+    if (result && typeof result.catch === 'function') {
+      result.catch(rejectOnce);
+    }
+  } catch (err) {
+    rejectOnce(err);
+    analyser = null;
+    gain = null;
+  }
+
+  return {
+    done,
+    stop: () => {
+      try { el?.pause(); } catch { /* best-effort */ }
+      resolveOnce();
+    },
+    analyser,
+  };
 }
 
-function playBufferedPcmAudio(audio: Extract<BufferedReplyAudio, { kind: 'pcm' }>): Promise<void> {
+function startBufferedPcmAudioPlayback(audio: Extract<BufferedReplyAudio, { kind: 'pcm' }>): ReplayPlaybackHandle {
   const audioCtx = getSharedAudioContext();
-  if (!audioCtx || audio.chunks.length === 0) return Promise.reject(new Error('audio_unsupported'));
-  void resumeAudioContext(audioCtx);
+  if (!audioCtx || audio.chunks.length === 0) return rejectedReplayHandle(new Error('audio_unsupported'));
+
+  let settled = false;
+  let remaining = 0;
+  const sources: AudioBufferSourceNode[] = [];
+  let analyser: AnalyserNode | null = null;
+  let gain: GainNode | null = null;
+
+  let resolveDone!: () => void;
+  let rejectDone!: (err: unknown) => void;
+  const done = new Promise<void>((resolve, reject) => {
+    resolveDone = resolve;
+    rejectDone = reject;
+  });
+
+  const cleanup = () => {
+    for (const source of sources) {
+      try { source.disconnect(); } catch { /* already disconnected */ }
+    }
+    try { analyser?.disconnect(); } catch { /* already disconnected */ }
+    try { gain?.disconnect(); } catch { /* already disconnected */ }
+  };
+  const resolveOnce = () => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    resolveDone();
+  };
+  const rejectOnce = (err: unknown) => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    rejectDone(err);
+  };
+
   try {
-    const gain = audioCtx.createGain();
+    void resumeAudioContext(audioCtx);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = VISUALIZER_FFT_SIZE;
+    analyser.smoothingTimeConstant = VISUALIZER_SMOOTHING;
+    gain = audioCtx.createGain();
     gain.gain.value = 1;
+    analyser.connect(gain);
     gain.connect(audioCtx.destination);
+
     let nextStartTime = audioCtx.currentTime;
-    let remaining = 0;
-    return new Promise((resolve) => {
-      const finishOne = (source: AudioBufferSourceNode) => {
-        remaining -= 1;
-        try {
-          source.disconnect();
-        } catch {
-          // already disconnected
-        }
-        if (remaining === 0) {
-          try {
-            gain.disconnect();
-          } catch {
-            // already disconnected
-          }
-          resolve();
-        }
-      };
+    const finishOne = (source: AudioBufferSourceNode) => {
+      if (settled) return;
+      remaining -= 1;
+      try { source.disconnect(); } catch { /* already disconnected */ }
+      if (remaining === 0) resolveOnce();
+    };
 
-      for (const chunk of audio.chunks) {
-        if (chunk.byteLength < 2) continue;
-        const source = createPcmBufferSource(audioCtx, chunk, audio.sampleRate);
-        if (!source) continue;
-        source.connect(gain);
-        const startAt = Math.max(audioCtx.currentTime, nextStartTime);
-        nextStartTime = startAt + source.buffer!.duration / (source.playbackRate.value || 1);
-        remaining += 1;
-        source.onended = () => finishOne(source);
-        source.start(startAt);
-      }
+    for (const chunk of audio.chunks) {
+      if (chunk.byteLength < 2) continue;
+      const source = createPcmBufferSource(audioCtx, chunk, audio.sampleRate);
+      if (!source) continue;
+      source.connect(analyser);
+      const startAt = Math.max(audioCtx.currentTime, nextStartTime);
+      nextStartTime = startAt + source.buffer!.duration / (source.playbackRate.value || 1);
+      remaining += 1;
+      sources.push(source);
+      source.onended = () => finishOne(source);
+      source.start(startAt);
+    }
 
-      if (remaining === 0) {
-        try {
-          gain.disconnect();
-        } catch {
-          // already disconnected
-        }
-        resolve();
-      }
-    });
-  } catch {
-    return Promise.reject(new Error('audio_unsupported'));
+    if (remaining === 0) resolveOnce();
+  } catch (err) {
+    rejectOnce(err);
+    analyser = null;
+    gain = null;
   }
+
+  return {
+    done,
+    stop: () => {
+      for (const source of sources) {
+        try { source.stop(); } catch { /* already stopped */ }
+      }
+      resolveOnce();
+    },
+    analyser,
+  };
+}
+
+function rejectedReplayHandle(err: Error): ReplayPlaybackHandle {
+  return {
+    done: Promise.reject(err),
+    stop: () => undefined,
+    analyser: null,
+  };
 }
 
 export interface TTSPlayerOptions {

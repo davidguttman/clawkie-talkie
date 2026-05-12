@@ -25,11 +25,20 @@ import {
 // on the daemon side.
 
 
+export interface DrivingManualReplay {
+  text: string;
+  mode: 'audio' | 'text';
+  analyser: AnalyserNode | null;
+  onSilence: () => void;
+}
+
 export function DrivingScreen({
   accent = 'amber',
   fontMode = 'mono',
   onReplay,
   canReplay = false,
+  manualReplay = null,
+  restoredAssistantText = null,
   onSessions,
   onSettings,
   compact = false,
@@ -42,6 +51,8 @@ export function DrivingScreen({
   fontMode?: 'mono' | 'sans';
   onReplay?: () => void | Promise<void>;
   canReplay?: boolean;
+  manualReplay?: DrivingManualReplay | null;
+  restoredAssistantText?: string | null;
   onSessions?: () => void;
   onSettings?: () => void;
   compact?: boolean;
@@ -89,9 +100,22 @@ export function DrivingScreen({
     return subscribeHoldMusicCurrentTrack((track) => setHoldMusicTrack(track));
   }, []);
 
-  const isRec = state === 'recording';
-  const isAI = state === 'ai';
-  const isThink = state === 'thinking';
+  const replayActive = !!manualReplay;
+  const displayState: DrivingState = replayActive ? 'ai' : state;
+  const displayTap = replayActive ? manualReplay.onSilence : tap;
+  const restoredLastTurn =
+    state === 'idle' && restoredAssistantText
+      ? { who: 'ai' as const, text: restoredAssistantText }
+      : null;
+  const displayIntensities = useReplayDisplayIntensities(
+    replayActive,
+    manualReplay?.analyser ?? null,
+    intensities,
+  );
+
+  const isRec = displayState === 'recording';
+  const isAI = displayState === 'ai';
+  const isThink = displayState === 'thinking';
 
   const stateColor = isRec
     ? accentCfg.rec
@@ -134,15 +158,15 @@ export function DrivingScreen({
         : 'TAP TO TALK';
 
   const caption = pickCaption({
-    state,
+    state: displayState,
     stateColor,
-    liveText,
-    isTranscribing,
-    lastTurn,
+    liveText: manualReplay?.text ?? liveText,
+    isTranscribing: replayActive ? false : isTranscribing,
+    lastTurn: replayActive ? null : (lastTurn ?? restoredLastTurn),
     accentRec: accentCfg.rec,
   });
 
-  const showHoldMusicTrack = state === 'thinking' && holdMusicTrack;
+  const showHoldMusicTrack = displayState === 'thinking' && holdMusicTrack;
   const trackLabel = showHoldMusicTrack ? holdMusicTrackLabel(holdMusicTrack) : null;
 
   const rowGap = compact ? 8 : 10;
@@ -346,7 +370,7 @@ export function DrivingScreen({
         }}
       >
         <LiveWave
-          intensities={intensities}
+          intensities={displayIntensities}
           color={stateColor}
           width="100%"
           height={compact ? 30 : 34}
@@ -384,10 +408,10 @@ export function DrivingScreen({
         }}
       >
         <PTTButton
-          onTap={tap}
+          onTap={displayTap}
           onToggleHoldMusicMuted={() => setHoldMusicMuted(!getHoldMusicMuted())}
           holdMusicMuted={holdMusicMuted}
-          state={state}
+          state={displayState}
           stateColor={stateColor}
           stateGlow={stateGlow}
           label={btnLabel}
@@ -400,7 +424,7 @@ export function DrivingScreen({
         <AudioDebugPanel
           baseFont={baseFont}
           compact={compact}
-          state={state}
+          state={displayState}
           rtcStatus={rtc.status}
         />
       )}
@@ -446,6 +470,50 @@ export function DrivingScreen({
       </div>
     </div>
   );
+}
+
+
+const REPLAY_FALLBACK_INTENSITIES = [
+  0.18, 0.28, 0.44, 0.62, 0.5, 0.34, 0.24,
+  0.2, 0.3, 0.48, 0.66, 0.52, 0.36, 0.26,
+  0.26, 0.36, 0.52, 0.66, 0.48, 0.3, 0.2,
+  0.24, 0.34, 0.5, 0.62, 0.44, 0.28, 0.18,
+];
+
+function useReplayDisplayIntensities(
+  replayActive: boolean,
+  analyser: AnalyserNode | null,
+  loopIntensities: number[],
+): number[] {
+  const [replayIntensities, setReplayIntensities] = useState<number[]>(REPLAY_FALLBACK_INTENSITIES);
+
+  useEffect(() => {
+    if (!replayActive) return;
+    if (!analyser) {
+      setReplayIntensities(REPLAY_FALLBACK_INTENSITIES);
+      return;
+    }
+    const bins = new Uint8Array(analyser.frequencyBinCount);
+    let raf = 0;
+    const tick = () => {
+      analyser.getByteFrequencyData(bins);
+      const barCount = REPLAY_FALLBACK_INTENSITIES.length;
+      const next = Array.from({ length: barCount }, (_, index) => {
+        const start = Math.floor((index / barCount) * bins.length);
+        const end = Math.max(start + 1, Math.floor(((index + 1) / barCount) * bins.length));
+        let total = 0;
+        for (let i = start; i < end; i += 1) total += bins[i] ?? 0;
+        const average = total / (end - start || 1);
+        return Math.max(0.12, Math.min(1, average / 255));
+      });
+      setReplayIntensities(next);
+      raf = window.requestAnimationFrame(tick);
+    };
+    raf = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(raf);
+  }, [analyser, replayActive]);
+
+  return replayActive ? replayIntensities : loopIntensities;
 }
 
 

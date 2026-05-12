@@ -11,7 +11,7 @@ describe('DrivingScreen waveform wiring', () => {
     expect(source).not.toContain('idleIntensities');
     expect(source).not.toContain('Math.sin');
     expect(source).not.toContain('waveIntensities');
-    expect(source).toContain('intensities={intensities}');
+    expect(source).toContain('intensities={displayIntensities}');
   });
 
   it('does not smooth LiveWave bar height changes in CSS', () => {
@@ -79,6 +79,29 @@ describe('DrivingScreen settings button', () => {
 });
 
 describe('DrivingScreen replay control', () => {
+
+  it('lets manual replay override the driving loop with visible, silenceable AI playback UI', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    expect(source).toContain('manualReplay?: DrivingManualReplay | null;');
+    expect(source).toContain("const replayActive = !!manualReplay;");
+    expect(source).toContain("const displayState: DrivingState = replayActive ? 'ai' : state;");
+    expect(source).toContain('const displayTap = replayActive ? manualReplay.onSilence : tap;');
+    expect(source).toContain('liveText: manualReplay?.text ?? liveText');
+    expect(source).toContain('state={displayState}');
+    expect(source).toContain('onTap={displayTap}');
+  });
+
+  it('uses restored assistant text as the idle last turn when the loop has no last turn yet', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    expect(source).toContain('restoredAssistantText?: string | null;');
+    expect(source).toContain('const restoredLastTurn');
+    expect(source).toContain("state === 'idle' && restoredAssistantText");
+    expect(source).toContain("{ who: 'ai' as const, text: restoredAssistantText }");
+    expect(source).toContain('lastTurn: replayActive ? null : (lastTurn ?? restoredLastTurn)');
+  });
+
   it('gates the replay footer button on an explicit canReplay prop', () => {
     const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
 
