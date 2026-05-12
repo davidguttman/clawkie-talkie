@@ -303,7 +303,9 @@ describe('DaemonPeer rendezvous voice settings', () => {
       JSON.stringify({ t: 'tts.catalog.request' }),
     );
 
-    expect(rendezvousPeer.peer.send).toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(rendezvousPeer.peer.send).toHaveBeenCalled();
+    });
     const sendArg = JSON.parse(
       (rendezvousPeer.peer.send as ReturnType<typeof vi.fn>).mock.calls[0][0] as string,
     );

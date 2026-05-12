@@ -50,9 +50,14 @@ export function parseInitialSearch(search: string): {
   return { screen: 'error', errorKind, hostPeerId, sessionId, threadId };
 }
 
+const DEFAULT_DASHBOARD_HOST_PEER_ID =
+  typeof import.meta.env.VITE_DEFAULT_HOST_ID === 'string' && import.meta.env.VITE_DEFAULT_HOST_ID.trim().length > 0
+    ? import.meta.env.VITE_DEFAULT_HOST_ID.trim()
+    : '';
+
 export function parseInitialLocation(
   location: { pathname?: string; search: string; hash: string },
-  options: { savedDashboardHostPeerId?: string | null } = {},
+  options: { savedDashboardHostPeerId?: string | null; defaultDashboardHostPeerId?: string | null } = {},
 ) {
   const legacy = parseInitialSearch(location.search);
   const pathname = location.pathname || '/voice';
@@ -82,12 +87,14 @@ export function parseInitialLocation(
     };
   }
   const savedDashboardHostPeerId = options.savedDashboardHostPeerId?.trim();
+  const defaultDashboardHostPeerId = options.defaultDashboardHostPeerId?.trim();
   const dashboardPath = pathname.replace(/\/$/, '') === '/dashboard';
-  if (dashboardPath && savedDashboardHostPeerId) {
+  const fallbackDashboardHostPeerId = savedDashboardHostPeerId || defaultDashboardHostPeerId;
+  if (dashboardPath && fallbackDashboardHostPeerId) {
     return {
       ...legacy,
       screen: 'dashboard' as ScreenId,
-      hostPeerId: savedDashboardHostPeerId,
+      hostPeerId: fallbackDashboardHostPeerId,
       sessionId: undefined,
       handoff: null as HandoffRoute | null,
     };
@@ -98,6 +105,7 @@ export function parseInitialLocation(
 function parseInitial() {
   const initial = parseInitialLocation(window.location, {
     savedDashboardHostPeerId: loadLastDashboardHostPeerId(),
+    defaultDashboardHostPeerId: DEFAULT_DASHBOARD_HOST_PEER_ID,
   });
   if (initial.hostPeerId && (initial.screen === 'dashboard' || initial.screen === 'driving')) {
     saveLastDashboardHostPeerId(initial.hostPeerId);
