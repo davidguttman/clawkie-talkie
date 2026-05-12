@@ -1039,7 +1039,11 @@ function errorLabelFor(code: string): string {
   if (code === 'audio_unsupported') return 'AUDIO PLAYBACK UNSUPPORTED ON THIS BROWSER';
   // Daemon-originated codes from transcription / chat / TTS upstreams.
   if (code === 'openclaw_infer_stt_failed') return 'INFER ERROR · OPENCLAW INFER STT FAILED';
-  if (code === 'openclaw_infer_tts_failed') return 'TTS ERROR · OPENCLAW INFER TTS FAILED';
+  // TTS failures arrive after the reply text was already generated and saved
+  // to the thread. Frame this as a non-fatal audio-only problem instead of a
+  // generic voice failure so the visible reply text on screen is the answer
+  // to the user's question.
+  if (code.startsWith('openclaw_infer_tts_failed')) return 'AUDIO UNAVAILABLE · REPLY IS IN THE THREAD';
   if (code === 'openclaw_auth_unavailable') return 'REPLY ERROR · OPENCLAW AUTH UNAVAILABLE';
   if (code.startsWith('xai_http_')) return `DAEMON · XAI ${code.replace('xai_http_', 'HTTP ')}`;
   if (code === 'xai_empty_reply') return 'DAEMON · XAI EMPTY REPLY';

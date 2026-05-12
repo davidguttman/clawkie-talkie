@@ -149,11 +149,15 @@ export function reduce(ctx: DrivingContext, event: DrivingEvent): Reduction {
         };
       }
       if (event.type === 'tts.error') {
+        // Audio synthesis is non-fatal once the reply itself was generated:
+        // promote the pending reply into the visible "last AI turn" so the
+        // user can still read what was said and surface a soft audio error.
         return {
           next: {
             ...ctx,
             state: 'idle',
             error: event.reason,
+            lastReplyText: ctx.pendingReplyText || ctx.lastReplyText,
             pendingReplyText: '',
             liveReplyText: '',
           },
@@ -185,7 +189,7 @@ export function reduce(ctx: DrivingContext, event: DrivingEvent): Reduction {
       }
       if (event.type === 'tts.error') {
         return {
-          next: { ...ctx, state: 'idle', error: event.reason },
+          next: { ...ctx, state: 'idle', error: event.reason, liveReplyText: '' },
           side: [],
         };
       }

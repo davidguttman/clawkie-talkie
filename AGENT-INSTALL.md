@@ -12,7 +12,7 @@ Before reporting success, verify all of this:
 2. The daemon has a stable `DAEMON_PEER_ID` in repo-root `.env`.
 3. The daemon is persistent after login/reboot through launchd or `systemd --user`.
 4. The OpenClaw `clawkie-voice-handoff` skill is installed and points at the same daemon host ID.
-5. OpenClaw infer STT and TTS work for the same OS user that runs the daemon.
+5. OpenClaw infer STT and TTS work for the same OS user that runs the daemon, and `messages.tts.timeoutMs` is raised to at least `120000` so long replies don't hit the 30s default and fail with `openclaw_infer_tts_failed: fetch timeout after 30000ms`.
 6. `ffmpeg` is installed and available on `PATH` for the daemon service user, because the daemon currently decodes OpenClaw TTS output into PCM before sending it over WebRTC.
 7. The daemon, skill, infer config, persistence, and OpenClaw agent-turn path are verified. See [`docs/agent-install-verification.md`](docs/agent-install-verification.md).
 8. The browser client is current by definition; if verification shows a daemon protocol/capability mismatch, update the installed daemon from the current source instead of changing the browser link.

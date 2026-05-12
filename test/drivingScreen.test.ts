@@ -202,12 +202,19 @@ describe('DrivingScreen connection retry control', () => {
 });
 
 describe('DrivingScreen voice error labels', () => {
-  it('surfaces infer STT, infer TTS, and reply auth failures with distinct labels', () => {
+  it('surfaces infer STT and reply auth failures with distinct fatal labels', () => {
     const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
 
     expect(source).toMatch(/if \(code === 'openclaw_infer_stt_failed'\)\s*return 'INFER ERROR/);
-    expect(source).toMatch(/if \(code === 'openclaw_infer_tts_failed'\)\s*return 'TTS ERROR/);
     expect(source).toMatch(/if \(code === 'openclaw_auth_unavailable'\)\s*return 'REPLY ERROR/);
+  });
+
+  it('surfaces TTS failure (including timeout suffixes) as a non-fatal audio-only message that points the user at the thread', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    expect(source).toMatch(/code\.startsWith\('openclaw_infer_tts_failed'\)/);
+    expect(source).toMatch(/AUDIO UNAVAILABLE · REPLY IS IN THE THREAD/);
+    expect(source).not.toMatch(/'openclaw_infer_tts_failed'\)\s*return 'TTS ERROR/);
   });
 });
 

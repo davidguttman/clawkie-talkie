@@ -127,18 +127,18 @@ describe('thinking', () => {
     expect(side).toEqual([]);
   });
 
-  it('reply.done then tts.error returns idle without exposing the pending reply', () => {
+  it('reply.done then tts.error preserves the reply as the last AI turn so the user can still read it', () => {
     let ctx = reduce(thinking, { type: 'reply.done', text: 'unheard reply' }).next;
 
     const { next, side } = reduce(ctx, {
       type: 'tts.error',
-      reason: 'openclaw_infer_tts_failed',
+      reason: 'openclaw_infer_tts_failed: fetch timeout after 30000ms',
     });
 
     expect(next.state).toBe('idle');
-    expect(next.error).toBe('openclaw_infer_tts_failed');
+    expect(next.error).toBe('openclaw_infer_tts_failed: fetch timeout after 30000ms');
     expect(next.pendingReplyText).toBe('');
-    expect(next.lastReplyText).toBe('');
+    expect(next.lastReplyText).toBe('unheard reply');
     expect(next.liveReplyText).toBe('');
     expect(side).toEqual([]);
   });
@@ -213,10 +213,12 @@ describe('ai', () => {
     expect(side).toEqual([{ kind: 'stopTts' }]);
   });
 
-  it('tts.error surfaces the reason and returns to idle', () => {
+  it('tts.error surfaces the reason but keeps the reply text visible as the last AI turn', () => {
     const { next, side } = reduce(ai, { type: 'tts.error', reason: 'x' });
     expect(next.state).toBe('idle');
     expect(next.error).toBe('x');
+    expect(next.lastReplyText).toBe('hi there');
+    expect(next.liveReplyText).toBe('');
     expect(side).toEqual([]);
   });
 });
