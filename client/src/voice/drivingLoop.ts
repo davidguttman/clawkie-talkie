@@ -118,6 +118,8 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
   const [intensities, setIntensities] = useState<number[]>(() => [...IDLE_INTENSITIES]);
 
   const sttRef = useRef<STTHandle | null>(null);
+  const pendingSttStartRef = useRef<PendingSttStart | null>(null);
+  const localSttStopInFlightRef = useRef(false);
   const ttsRef = useRef<TTSHandle | null>(null);
   const holdMusicRef = useRef<HoldMusicController | null>(null);
   const micBandsRef = useRef<number[]>([...QUIET_INTENSITIES]);
@@ -145,7 +147,7 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
   useEffect(() => {
     accumulatedRef.current = [];
     setCurrentTurnTranscript({ active: false, sttDone: false, text: '' });
-    runCancelMic(sttRef);
+    runCancelMic(sttRef, pendingSttStartRef, localSttStopInFlightRef);
     runStopTts(ttsRef);
     dispatch({ type: 'session.reset' });
   }, [opts.sessionId, opts.threadId, opts.hostPeerId]);
@@ -169,6 +171,25 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
         }
         const plan = sessionSnapshotReplayPlanFromControlMessage(msg, { deferTtsDone, deferTtsError });
         if (plan) {
+          if (replayControls.some(isSttTerminalControlMessage)) {
+            localSttStopInFlightRef.current = false;
+          }
+          if (hasActiveLocalSttLifecycle(sttRef, pendingSttStartRef, localSttStopInFlightRef) && shouldPreserveActiveLocalSttSnapshot(msg, plan)) {
+            // Same-tab reconnects can replay the daemon's in-progress STT
+            // snapshot while this browser still owns the live mic handle. The
+            // pure cold-launch hydration intentionally maps that snapshot to
+            // idle, but doing so here would hide the push-to-stop UI and leak
+            // the handle. Keep the local recording lifecycle authoritative.
+            return;
+          }
+          if (hasActiveLocalSttLifecycle(sttRef, pendingSttStartRef, localSttStopInFlightRef) && shouldDiscardLocalSttForSnapshotReplay(plan)) {
+            // Any non-bare STT snapshot is now daemon catch-up, not proof that
+            // this tab's local mic lifecycle is still authoritative. Drop the
+            // pending/active handle before replay/hydration moves the UI away
+            // from recording, otherwise a late start can install a hidden mic
+            // or an active handle can survive behind idle/thinking UI.
+            runCancelMic(sttRef, pendingSttStartRef, localSttStopInFlightRef);
+          }
           for (const event of replayControls) {
             applyReplayControlSideEffects(event, sessionMetaRef.current, holdMusicRef.current);
           }
@@ -205,6 +226,7 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
         return;
       }
       if (msg.t === 'stt.done') {
+        localSttStopInFlightRef.current = false;
         const result = resolveSttDone(msg.text, accumulatedRef.current);
         accumulatedRef.current = result.nextAccumulated;
         setCurrentTurnTranscript(result.transcript);
@@ -213,6 +235,7 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
         return;
       }
       if (msg.t === 'stt.error') {
+        localSttStopInFlightRef.current = false;
         const reason = typeof msg.message === 'string' ? msg.message : 'stt_error';
         setCurrentTurnTranscript({ active: false, sttDone: false, text: '' });
         dispatch({ type: 'stt.error', reason });
@@ -270,10 +293,10 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
     if (!side.length) return;
     for (const s of side) {
       if (s.kind === 'startMic') {
-        runStartMic(rtcRef, sttRef, micBandsRef, dispatch);
+        runStartMic(rtcRef, sttRef, pendingSttStartRef, localSttStopInFlightRef, micBandsRef, dispatch);
       }
-      else if (s.kind === 'stopMic') runStopMic(sttRef);
-      else if (s.kind === 'cancelMic') runCancelMic(sttRef);
+      else if (s.kind === 'stopMic') runStopMic(sttRef, pendingSttStartRef, localSttStopInFlightRef);
+      else if (s.kind === 'cancelMic') runCancelMic(sttRef, pendingSttStartRef, localSttStopInFlightRef);
       else if (s.kind === 'armTts') runArmTts(rtcRef, ttsRef, dispatch);
       else if (s.kind === 'stopTts') runStopTts(ttsRef);
       else if (s.kind === 'cancelReply') runCancelReply(rtcRef, ttsRef);
@@ -316,6 +339,8 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
   useEffect(() => {
     return () => {
       sttRef.current?.cancel();
+      pendingSttStartRef.current?.cancelLateHandle();
+      localSttStopInFlightRef.current = false;
       ttsRef.current?.stop();
       holdMusicRef.current?.stop();
     };
@@ -370,12 +395,40 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
 
 type Dispatch = (e: DrivingEvent) => void;
 
+interface PendingSttStart {
+  stopLateHandle(): void;
+  cancelLateHandle(): void;
+  shouldPreserveSnapshot(): boolean;
+}
+
+function hasActiveLocalSttLifecycle(
+  sttRef: React.MutableRefObject<STTHandle | null>,
+  pendingSttStartRef: React.MutableRefObject<PendingSttStart | null>,
+  localSttStopInFlightRef: React.MutableRefObject<boolean>,
+): boolean {
+  return !!sttRef.current
+    || !!pendingSttStartRef.current?.shouldPreserveSnapshot()
+    || localSttStopInFlightRef.current;
+}
+
 function runStartMic(
   rtcRef: React.MutableRefObject<DrivingLoopOptions['rtc']>,
   sttRef: React.MutableRefObject<STTHandle | null>,
+  pendingSttStartRef: React.MutableRefObject<PendingSttStart | null>,
+  localSttStopInFlightRef: React.MutableRefObject<boolean>,
   micBandsRef: React.MutableRefObject<number[]>,
   dispatch: Dispatch,
 ): void {
+  const pending: PendingSttStartState = { action: 'active' };
+  let sttLifecycle: SttStartLifecycle = 'pending';
+  let acceptedHandle: STTHandle | null = null;
+  const pendingRef: PendingSttStart = {
+    stopLateHandle: () => { pending.action = 'stop'; },
+    cancelLateHandle: () => { pending.action = 'cancel'; sttLifecycle = 'cancelled'; },
+    shouldPreserveSnapshot: () => pending.action !== 'cancel',
+  };
+  pendingSttStartRef.current = pendingRef;
+  localSttStopInFlightRef.current = false;
   void (async () => {
     try {
       micBandsRef.current = [...QUIET_INTENSITIES];
@@ -384,15 +437,58 @@ function runStartMic(
         sendBinary: rtcRef.current.sendBinary,
         addControlListener: rtcRef.current.addControlListener,
         isConnected: () => rtcRef.current.status === 'open',
-        onError: (reason) => dispatch({ type: 'stt.error', reason }),
+        onError: (reason) => {
+          const acceptedPendingError = pendingSttStartRef.current === pendingRef;
+          if (!shouldAcceptSttStartError(pendingSttStartRef, pendingRef, pending, sttLifecycle, acceptedHandle, sttRef, localSttStopInFlightRef)) return;
+          if (acceptedPendingError) {
+            pendingSttStartRef.current = null;
+            pending.action = 'cancel';
+            sttLifecycle = 'cancelled';
+          }
+          localSttStopInFlightRef.current = false;
+          dispatch({ type: 'stt.error', reason });
+        },
         onAudioFrame: (pcm) => {
           micBandsRef.current = mirrorCenterOutBands(
             pcm16ToBandIntensities(pcm, UNIQUE_WAVE_BANDS),
           );
         },
       });
-      sttRef.current = handle;
+      if (pendingSttStartRef.current !== pendingRef) {
+        sttLifecycle = 'cancelled';
+        handle.cancel();
+        return;
+      }
+      pendingSttStartRef.current = null;
+      if (pending.action === 'stop') {
+        sttLifecycle = 'stopping';
+        localSttStopInFlightRef.current = true;
+        handle.stop().catch(() => undefined);
+        return;
+      }
+      if (pending.action === 'cancel') {
+        sttLifecycle = 'cancelled';
+        localSttStopInFlightRef.current = false;
+        handle.cancel();
+        return;
+      }
+      const guardedHandle: STTHandle = {
+        stop: () => {
+          sttLifecycle = 'stopping';
+          return handle.stop();
+        },
+        cancel: () => {
+          sttLifecycle = 'cancelled';
+          handle.cancel();
+        },
+      };
+      acceptedHandle = guardedHandle;
+      sttLifecycle = 'active';
+      localSttStopInFlightRef.current = false;
+      sttRef.current = guardedHandle;
     } catch (err) {
+      if (pendingSttStartRef.current !== pendingRef) return;
+      pendingSttStartRef.current = null;
       const reason =
         err instanceof DaemonNotConnectedError
           ? 'daemon_not_connected'
@@ -401,15 +497,50 @@ function runStartMic(
             : err instanceof Error
               ? err.message
               : 'stt_start_failed';
+      if (pending.action === 'cancel') {
+        localSttStopInFlightRef.current = false;
+        return;
+      }
+      localSttStopInFlightRef.current = false;
       dispatch({ type: 'stt.error', reason });
     }
   })();
 }
 
-function runStopMic(sttRef: React.MutableRefObject<STTHandle | null>): void {
+type PendingSttStartState = { action: 'active' | 'stop' | 'cancel' };
+type SttStartLifecycle = 'pending' | 'active' | 'stopping' | 'cancelled';
+
+function shouldAcceptSttStartError(
+  pendingSttStartRef: React.MutableRefObject<PendingSttStart | null>,
+  pendingRef: PendingSttStart,
+  pending: PendingSttStartState,
+  lifecycle: SttStartLifecycle,
+  acceptedHandle: STTHandle | null,
+  sttRef: React.MutableRefObject<STTHandle | null>,
+  localSttStopInFlightRef: React.MutableRefObject<boolean>,
+): boolean {
+  if (pendingSttStartRef.current === pendingRef) return pending.action !== 'cancel';
+  if (lifecycle === 'active') return !!acceptedHandle && sttRef.current === acceptedHandle;
+  if (lifecycle === 'stopping') return localSttStopInFlightRef.current;
+  return false;
+}
+
+function runStopMic(
+  sttRef: React.MutableRefObject<STTHandle | null>,
+  pendingSttStartRef: React.MutableRefObject<PendingSttStart | null>,
+  localSttStopInFlightRef: React.MutableRefObject<boolean>,
+): void {
   const handle = sttRef.current;
   sttRef.current = null;
-  if (!handle) return;
+  const pendingStart = pendingSttStartRef.current;
+  if (!handle) {
+    if (pendingStart) {
+      localSttStopInFlightRef.current = true;
+      pendingStart.stopLateHandle();
+    }
+    return;
+  }
+  localSttStopInFlightRef.current = true;
   // stop() resolves with the final transcript. We don't need the value
   // here — the daemon will emit `stt.done` on the control channel, and
   // the listener above will turn that into an `stt.done` reducer event.
@@ -418,10 +549,20 @@ function runStopMic(sttRef: React.MutableRefObject<STTHandle | null>): void {
   });
 }
 
-function runCancelMic(sttRef: React.MutableRefObject<STTHandle | null>): void {
+function runCancelMic(
+  sttRef: React.MutableRefObject<STTHandle | null>,
+  pendingSttStartRef: React.MutableRefObject<PendingSttStart | null>,
+  localSttStopInFlightRef: React.MutableRefObject<boolean>,
+): void {
   const handle = sttRef.current;
   sttRef.current = null;
-  handle?.cancel();
+  localSttStopInFlightRef.current = false;
+  if (!handle) {
+    pendingSttStartRef.current?.cancelLateHandle();
+    return;
+  }
+  pendingSttStartRef.current?.cancelLateHandle();
+  handle.cancel();
 }
 
 function runArmTts(
@@ -572,6 +713,10 @@ export function sessionSnapshotReplayPlanFromControlMessage(
   };
 }
 
+function isSttTerminalControlMessage(msg: ControlMessage): boolean {
+  return msg.t === 'stt.done' || msg.t === 'stt.error';
+}
+
 export function sessionSnapshotControlEvents(msg: ControlMessage): ControlMessage[] {
   const events = Array.isArray(msg.events) ? msg.events : [];
   return events
@@ -586,6 +731,25 @@ export function sessionSnapshotControlEvents(msg: ControlMessage): ControlMessag
       return null;
     })
     .filter((event): event is ControlMessage => !!event);
+}
+
+function shouldPreserveActiveLocalSttSnapshot(
+  msg: ControlMessage,
+  plan: SessionSnapshotReplayPlan,
+): boolean {
+  if (msg.t !== 'session.snapshot') return false;
+  if (plan.event.events.length > 0) return false;
+  if (plan.event.hydration?.context.state !== 'idle') return false;
+  const snapshot = sessionSnapshotRecord(msg);
+  if (!snapshot) return false;
+  return normalizeSnapshotPhase(
+    firstString(snapshot, ['phase', 'turnPhase', 'status', 'state']),
+    snapshot,
+  ) === 'recording';
+}
+
+function shouldDiscardLocalSttForSnapshotReplay(plan: SessionSnapshotReplayPlan): boolean {
+  return plan.event.events.length > 0 || !!plan.event.hydration;
 }
 
 function isTerminalReplayEvent(event: DrivingReplayEvent): boolean {
@@ -747,16 +911,21 @@ function snapshotHydrationPlan(
   }
 
   if (phase === 'recording') {
+    // A reconnect/launch snapshot can report an in-progress mic/STT phase, but
+    // hydration has no proof that this browser still owns a live local mic/STT
+    // handle. Treat it as a safe idle state instead of rendering push-to-stop;
+    // otherwise tapping stop would dispatch stopMic with no handle and leave the
+    // reducer in thinking forever waiting for stt.done/stt.error.
     return {
       hydration: {
         context: {
           ...initialContext,
-          state: 'recording',
-          lastUserText,
+          state: 'idle',
+          lastUserText: '',
         },
         armTts: false,
       },
-      transcript: { active: true, sttDone: false, text: lastUserText },
+      transcript: { active: false, sttDone: false, text: '' },
     };
   }
 
