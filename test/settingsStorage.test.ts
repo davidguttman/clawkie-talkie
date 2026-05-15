@@ -44,7 +44,7 @@ describe('settings storage', () => {
     expect(settings.tts.model).toBeUndefined();
     expect(settings.tts.voice).toBeUndefined();
     expect(settings.stt).toEqual({});
-    expect(settings.music).toEqual({ muted: false, effects: true, volume: 1, disabledTracks: [] });
+    expect(settings.music).toEqual({ muted: false, effects: true, volume: 0.5, disabledTracks: [] });
   });
 
   it('ignores legacy global TTS, STT, and voice settings for a host-scoped load', async () => {
@@ -64,7 +64,7 @@ describe('settings storage', () => {
       voice: '',
       tts: {},
       stt: {},
-      music: { muted: false, effects: true, volume: 1, disabledTracks: [] },
+      music: { muted: false, effects: true, volume: 0.5, disabledTracks: [] },
       format: 'txt',
       timestamps: true,
     });
@@ -86,7 +86,7 @@ describe('settings storage', () => {
       voice: '',
       tts: {},
       stt: {},
-      music: { muted: false, effects: true, volume: 1, disabledTracks: [] },
+      music: { muted: false, effects: true, volume: 0.5, disabledTracks: [] },
       format: 'json',
       timestamps: false,
     });
@@ -118,7 +118,7 @@ describe('settings storage', () => {
       voice: 'nova',
       tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' },
       stt: { providerId: 'xai', model: 'grok-stt' },
-      music: { muted: false, effects: true, volume: 1, disabledTracks: [] },
+      music: { muted: false, effects: true, volume: 0.5, disabledTracks: [] },
       format: 'txt',
       timestamps: true,
     });
@@ -126,7 +126,7 @@ describe('settings storage', () => {
       voice: '',
       tts: {},
       stt: {},
-      music: { muted: false, effects: true, volume: 1, disabledTracks: [] },
+      music: { muted: false, effects: true, volume: 0.5, disabledTracks: [] },
       format: 'txt',
       timestamps: true,
     });
@@ -314,8 +314,8 @@ describe('settings storage', () => {
     localStorage.setItem('clawkie.holdMusic.muted.v1', '1');
     const { loadSettings, loadMusicSettings } = await import('../client/src/storage');
 
-    expect(loadMusicSettings()).toEqual({ muted: true, effects: true, volume: 1, disabledTracks: [] });
-    expect(loadSettings('host-1').music).toEqual({ muted: true, effects: true, volume: 1, disabledTracks: [] });
+    expect(loadMusicSettings()).toEqual({ muted: true, effects: true, volume: 0.5, disabledTracks: [] });
+    expect(loadSettings('host-1').music).toEqual({ muted: true, effects: true, volume: 0.5, disabledTracks: [] });
   });
 
 
@@ -376,9 +376,9 @@ describe('settings storage', () => {
     );
     const { saveMusicSettings, loadMusicSettings } = await import('../client/src/storage');
 
-    saveMusicSettings({ muted: false, effects: true, volume: 1, disabledTracks: [] });
+    saveMusicSettings({ muted: false, effects: true, volume: 0.5, disabledTracks: [] });
 
-    expect(loadMusicSettings()).toEqual({ muted: false, effects: true, volume: 1, disabledTracks: [] });
+    expect(loadMusicSettings()).toEqual({ muted: false, effects: true, volume: 0.5, disabledTracks: [] });
     expect(localStorage.getItem('clawkie.holdMusic.muted.v1')).toBeNull();
     expect(JSON.parse(localStorage.getItem('clawkie.settings.v1') as string).music).toBeUndefined();
   });
