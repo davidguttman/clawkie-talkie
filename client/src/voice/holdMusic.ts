@@ -6,7 +6,7 @@ import {
   processedHoldMusicTrackUrl,
 } from './holdMusicCatalog';
 
-const MUSIC_VOLUME = 0.15;
+const MUSIC_VOLUME = 0.85;
 const HISS_VOLUME = 0.00225;
 const CRACKLE_VOLUME = 0.00325;
 const HOLD_MUSIC_LAYER_TRACKS: readonly HoldMusicLayerSpec[] = [

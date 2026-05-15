@@ -300,7 +300,7 @@ describe('SettingsScreen toggle accessibility', () => {
       stt: {},
       format: 'md',
       timestamps: false,
-      music: { muted: false, effects: true, volume: 1, disabledTracks: [] },
+      music: { muted: false, effects: true, volume: 0.5, disabledTracks: [] },
     };
 
     function Harness() {
@@ -326,7 +326,7 @@ describe('SettingsScreen toggle accessibility', () => {
       expect(volume?.min).toBe('0');
       expect(volume?.max).toBe('1');
       expect(volume?.step).toBe('0.01');
-      expect(volume?.value).toBe('1');
+      expect(volume?.value).toBe('0.5');
 
       await act(async () => {
         const valueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;

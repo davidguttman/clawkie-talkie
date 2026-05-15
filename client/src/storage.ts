@@ -72,7 +72,7 @@ export const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
 export const DEFAULT_MUSIC_SETTINGS: MusicSettings = {
   muted: false,
   effects: true,
-  volume: 1,
+  volume: 0.5,
   disabledTracks: [],
 };
 
