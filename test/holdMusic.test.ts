@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 class FakeAudioParam {
   value = 0;
-  setValueAtTime = vi.fn((value: number) => {
+  setValueAtTime = vi.fn((value: number, _time = 0) => {
     this.value = value;
     return this;
   });
@@ -152,6 +152,7 @@ describe('hold music selection', () => {
     expect(pickHoldMusicUrl(() => 0, {
       muted: false,
       effects: false,
+      volume: 1,
       disabledTracks: [],
     })).toBe('/music-original/Dial%20Tone%20Reverie.mp3');
   });
@@ -165,11 +166,13 @@ describe('hold music selection', () => {
     expect(pickHoldMusicUrl(() => 0, {
       muted: false,
       effects: true,
+      volume: 1,
       disabledTracks: [tracks[0]],
     })).toBe('/music/Dockside%20Hold.mp3');
     expect(pickHoldMusicUrl(() => 0.999, {
       muted: false,
       effects: true,
+      volume: 1,
       disabledTracks: [...tracks],
     })).toBe('');
   });
@@ -345,6 +348,7 @@ describe('HoldMusicController', () => {
       music: {
         muted: false,
         effects: true,
+        volume: 1,
         disabledTracks: [
           'Dial Tone Reverie.mp3',
           'Dockside Hold.mp3',
@@ -374,7 +378,7 @@ describe('HoldMusicController', () => {
   it('starts with original music audible and processed music plus static layers muted when audio effects are disabled', async () => {
     const storage = new Map<string, string>([[
       'clawkie.settings.v1',
-      JSON.stringify({ music: { muted: false, effects: false, disabledTracks: [] } }),
+      JSON.stringify({ music: { muted: false, effects: false, volume: 1, disabledTracks: [] } }),
     ]]);
     vi.stubGlobal('localStorage', {
       getItem: vi.fn((key: string) => storage.get(key) ?? null),
@@ -432,7 +436,7 @@ describe('HoldMusicController', () => {
     originalMusic.duration = 100;
     processedMusic.dispatch('loadedmetadata');
 
-    setHoldMusicSettings({ muted: false, effects: false, disabledTracks: [] });
+    setHoldMusicSettings({ muted: false, effects: false, volume: 1, disabledTracks: [] });
 
     expect(FakeAudioElement.instances).toHaveLength(4);
     for (const audio of [processedMusic, originalMusic, hiss, crackle]) {
@@ -448,6 +452,54 @@ describe('HoldMusicController', () => {
     expect(crackle.muted).toBe(true);
     expect(processedMusic.play).toHaveBeenCalledTimes(1);
     expect(originalMusic.play).toHaveBeenCalledTimes(1);
+  });
+
+
+  it('applies hold music volume changes to Web Audio gain live without replacing media or analyser playback', async () => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn((key: string) => storage.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => storage.set(key, value)),
+      removeItem: vi.fn((key: string) => storage.delete(key)),
+    });
+    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+    vi.stubGlobal('Audio', FakeAudioElement);
+    const { HoldMusicController, setHoldMusicSettings } = await import('../client/src/voice/holdMusic');
+
+    const controller = new HoldMusicController();
+    controller.start();
+
+    const [processedMusic, originalMusic, hiss, crackle] = FakeAudioElement.instances;
+    processedMusic.duration = 100;
+    originalMusic.duration = 100;
+    processedMusic.dispatch('loadedmetadata');
+
+    const ctx = FakeAudioContext.instances[0];
+    const initialAnalyser = ctx.analysers[0];
+    expect(ctx.gains).toHaveLength(4);
+    expect(ctx.gains[0].gain.value).toBeCloseTo(0.15);
+    expect(ctx.gains[1].gain.value).toBe(0);
+    expect(ctx.gains[2].gain.value).toBeCloseTo(0.00225);
+    expect(ctx.gains[3].gain.value).toBeCloseTo(0.00325);
+    expect(ctx.analysers).toHaveLength(1);
+    expect(FakeAudioElement.instances).toHaveLength(5);
+
+    setHoldMusicSettings({ muted: false, effects: true, volume: 0.5, disabledTracks: [] });
+
+    expect(FakeAudioElement.instances).toHaveLength(5);
+    expect(ctx.analysers).toHaveLength(1);
+    expect(ctx.analysers[0]).toBe(initialAnalyser);
+    for (const audio of [processedMusic, originalMusic, hiss, crackle]) {
+      expect(audio.pause).not.toHaveBeenCalled();
+    }
+    expect(ctx.gains[0].gain.value).toBeCloseTo(0.075);
+    expect(ctx.gains[1].gain.value).toBe(0);
+    expect(ctx.gains[2].gain.value).toBeCloseTo(0.001125);
+    expect(ctx.gains[3].gain.value).toBeCloseTo(0.001625);
+    expect(processedMusic.volume).toBe(1);
+    expect(processedMusic.muted).toBe(false);
+    expect(originalMusic.volume).toBe(1);
+    expect(originalMusic.muted).toBe(true);
   });
 
   it('stops an active session when every song is disabled and resumes when songs return', async () => {
@@ -466,7 +518,7 @@ describe('HoldMusicController', () => {
     controller.start();
     const [processedMusic, originalMusic, hiss, crackle] = FakeAudioElement.instances;
 
-    setHoldMusicSettings({ muted: false, effects: true, disabledTracks: tracks });
+    setHoldMusicSettings({ muted: false, effects: true, volume: 1, disabledTracks: tracks });
 
     expect(processedMusic.pause).toHaveBeenCalled();
     expect(originalMusic.pause).toHaveBeenCalled();
@@ -474,7 +526,7 @@ describe('HoldMusicController', () => {
     expect(crackle.pause).toHaveBeenCalled();
     expect(FakeAudioElement.instances).toHaveLength(4);
 
-    setHoldMusicSettings({ muted: false, effects: true, disabledTracks: [] });
+    setHoldMusicSettings({ muted: false, effects: true, volume: 1, disabledTracks: [] });
 
     expect(FakeAudioElement.instances).toHaveLength(8);
     expect(FakeAudioElement.instances[4].src).toMatch(/^\/music\/.+\.mp3$/);
@@ -538,7 +590,7 @@ describe('HoldMusicController', () => {
     expect(listener).toHaveBeenCalledWith(true);
   });
 
-  it('exposes a best-effort analyser without routing audible playback through Web Audio', async () => {
+  it('exposes a best-effort analyser while routing audible playback through Web Audio gain nodes', async () => {
     vi.stubGlobal('window', { AudioContext: FakeAudioContext });
     vi.stubGlobal('Audio', FakeAudioElement);
     const { HoldMusicController, getActiveHoldMusicAnalyser } = await import(
@@ -557,20 +609,26 @@ describe('HoldMusicController', () => {
     music.dispatch('loadedmetadata');
 
     const ctx = FakeAudioContext.instances[0];
+    expect(ctx.gains).toHaveLength(4);
+    expect(ctx.mediaElementSources).toHaveLength(5);
+    expect(ctx.mediaElementSources[0].element).toBe(music);
+    expect(ctx.mediaElementSources[0].connect).toHaveBeenCalledWith(ctx.gains[0]);
+    expect(ctx.gains[0].connect).toHaveBeenCalledWith(ctx.destination);
     expect(ctx.analysers).toHaveLength(1);
     const analyser = ctx.analysers[0];
+    const analyserSource = ctx.mediaElementSources[4];
     expect(analyser.fftSize).toBe(64);
     expect(analyser.smoothingTimeConstant).toBeCloseTo(0.1);
     expect(analyser.minDecibels).toBe(-90);
     expect(analyser.maxDecibels).toBe(-10);
-    expect(ctx.mediaElementSources).toHaveLength(1);
-    expect(ctx.mediaElementSources[0].element).not.toBe(music);
-    expect(ctx.mediaElementSources[0].connect).toHaveBeenCalledWith(analyser);
-    expect(ctx.mediaElementSources[0].connect).not.toHaveBeenCalledWith(ctx.destination);
+    expect(analyserSource.element).not.toBe(music);
+    expect(analyserSource.connect).toHaveBeenCalledWith(analyser);
+    expect(analyserSource.connect).not.toHaveBeenCalledWith(ctx.destination);
     expect(getActiveHoldMusicAnalyser()).toBe(analyser as unknown as AnalyserNode);
 
     controller.stop();
 
+    expect(ctx.gains[0].disconnect).toHaveBeenCalled();
     expect(analyser.disconnect).toHaveBeenCalled();
     expect(getActiveHoldMusicAnalyser()).toBeNull();
   });
@@ -620,28 +678,30 @@ describe('HoldMusicController', () => {
     music.dispatch('loadedmetadata');
 
     const ctx = FakeAudioContext.instances[0];
-    const source = ctx.mediaElementSources[0];
+    const analyserSource = ctx.mediaElementSources[ctx.mediaElementSources.length - 1];
     const analyser = ctx.analysers[0];
-    const analyserAudio = source.element;
+    const analyserAudio = analyserSource.element;
+    expect(ctx.gains).toHaveLength(4);
     expect(getActiveHoldMusicAnalyser()).toBe(analyser as unknown as AnalyserNode);
 
     setHoldMusicMuted(true);
 
     expect(music.muted).toBe(true);
-    expect(music.volume).toBe(0);
+    expect(ctx.gains[0].gain.value).toBe(0);
     expect(originalMusic.muted).toBe(true);
     expect(FakeAudioElement.instances[2].muted).toBe(true);
     expect(FakeAudioElement.instances[3].muted).toBe(true);
     expect(analyserAudio.pause).not.toHaveBeenCalled();
     expect(analyserAudio.removeAttribute).not.toHaveBeenCalled();
-    expect(source.disconnect).not.toHaveBeenCalled();
+    expect(analyserSource.disconnect).not.toHaveBeenCalled();
     expect(analyser.disconnect).not.toHaveBeenCalled();
     expect(getActiveHoldMusicAnalyser()).toBe(analyser as unknown as AnalyserNode);
 
     setHoldMusicMuted(false);
 
     expect(music.muted).toBe(false);
-    expect(music.volume).toBeGreaterThan(0);
+    expect(music.volume).toBe(1);
+    expect(ctx.gains[0].gain.value).toBeGreaterThan(0);
     expect(getActiveHoldMusicAnalyser()).toBe(analyser as unknown as AnalyserNode);
     expect(ctx.analysers).toHaveLength(1);
   });

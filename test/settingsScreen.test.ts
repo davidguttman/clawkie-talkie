@@ -5,7 +5,16 @@ import { createRoot } from 'react-dom/client';
 import { describe, expect, it, vi } from 'vitest';
 
 const holdMusicMock = vi.hoisted(() => {
+  type MockController = { start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> };
+  const controllerInstances: MockController[] = [];
+  const HoldMusicController = vi.fn(function MockHoldMusicController(this: MockController) {
+    this.start = vi.fn();
+    this.stop = vi.fn();
+    controllerInstances.push(this);
+  });
   const mock = {
+    HoldMusicController,
+    controllerInstances,
     muteListener: null as ((muted: boolean) => void) | null,
     setHoldMusicSettings: vi.fn(),
     subscribeHoldMusicMuted: vi.fn((listener: (muted: boolean) => void) => {
@@ -43,8 +52,10 @@ import {
   withMusicEffects,
   withMusicMuted,
   withMusicTrackEnabled,
+  withMusicVolume,
 } from '../client/src/screens/Settings';
 import type { Settings } from '../client/src/storage';
+import { getHoldMusicTrackOptions } from '../client/src/voice/holdMusicCatalog';
 import type { SttCatalog, TtsCatalog } from '../client/src/voice/protocol';
 
 function catalog(overrides: Partial<TtsCatalog> = {}): TtsCatalog {
@@ -100,7 +111,7 @@ describe('SettingsScreen toggle accessibility', () => {
       stt: {},
       format: 'md',
       timestamps: true,
-      music: { muted: false, effects: true, disabledTracks: [] },
+      music: { muted: false, effects: true, volume: 1, disabledTracks: [] },
     };
 
     try {
@@ -161,7 +172,7 @@ describe('SettingsScreen toggle accessibility', () => {
       stt: {},
       format: 'md',
       timestamps: false,
-      music: { muted: false, effects: true, disabledTracks: ['Soft Hold Tone.mp3'] },
+      music: { muted: false, effects: true, volume: 1, disabledTracks: ['Soft Hold Tone.mp3'] },
     };
 
     function Harness() {
@@ -209,6 +220,7 @@ describe('SettingsScreen toggle accessibility', () => {
       expect(holdMusicMock.setHoldMusicSettings).toHaveBeenLastCalledWith({
         muted: false,
         effects: true,
+        volume: 1,
         disabledTracks: [],
       });
     } finally {
@@ -233,7 +245,7 @@ describe('SettingsScreen toggle accessibility', () => {
       stt: {},
       format: 'md',
       timestamps: false,
-      music: { muted: false, effects: true, disabledTracks: [] },
+      music: { muted: false, effects: true, volume: 1, disabledTracks: [] },
     };
 
     function Harness() {
@@ -272,6 +284,188 @@ describe('SettingsScreen toggle accessibility', () => {
       vi.unstubAllGlobals();
     }
   });
+
+
+  it('updates hold music volume and owns a settings-only preview controller', async () => {
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    holdMusicMock.setHoldMusicSettings.mockClear();
+    holdMusicMock.HoldMusicController.mockClear();
+    holdMusicMock.controllerInstances.length = 0;
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const initialSettings: Settings = {
+      voice: '',
+      tts: {},
+      stt: {},
+      format: 'md',
+      timestamps: false,
+      music: { muted: false, effects: true, volume: 1, disabledTracks: [] },
+    };
+
+    function Harness() {
+      const [settings, setSettings] = useState(initialSettings);
+      return createElement(SettingsScreen, {
+        onBack: () => undefined,
+        settings,
+        setSettings,
+        ttsCatalog: null,
+        sttCatalog: null,
+        compact: true,
+      });
+    }
+
+    try {
+      await act(async () => {
+        root.render(createElement(Harness));
+      });
+
+      const volume = container.querySelector<HTMLInputElement>('input[aria-label="Hold music volume"]');
+      expect(volume).toBeDefined();
+      expect(volume?.type).toBe('range');
+      expect(volume?.min).toBe('0');
+      expect(volume?.max).toBe('1');
+      expect(volume?.step).toBe('0.01');
+      expect(volume?.value).toBe('1');
+
+      await act(async () => {
+        const valueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+        valueSetter?.call(volume, '0.42');
+        volume!.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+
+      expect(holdMusicMock.setHoldMusicSettings).toHaveBeenLastCalledWith({
+        muted: false,
+        effects: true,
+        volume: 0.42,
+        disabledTracks: [],
+      });
+      expect(container.querySelector<HTMLInputElement>('input[aria-label="Hold music volume"]')?.value).toBe('0.42');
+
+      const startButton = () => Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+        .find((button) => button.textContent === 'Start');
+      const stopButton = () => Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+        .find((button) => button.textContent === 'Stop');
+
+      expect(holdMusicMock.HoldMusicController).not.toHaveBeenCalled();
+      await act(async () => {
+        startButton()?.click();
+      });
+      expect(holdMusicMock.HoldMusicController).toHaveBeenCalledTimes(1);
+      expect(holdMusicMock.controllerInstances[0].start).toHaveBeenCalledTimes(1);
+      expect(stopButton()).toBeDefined();
+
+      await act(async () => {
+        stopButton()?.click();
+      });
+      expect(holdMusicMock.controllerInstances[0].stop).toHaveBeenCalledTimes(1);
+      expect(startButton()).toBeDefined();
+
+      await act(async () => {
+        startButton()?.click();
+      });
+      expect(holdMusicMock.HoldMusicController).toHaveBeenCalledTimes(2);
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      if (holdMusicMock.controllerInstances[0]) {
+        expect(holdMusicMock.controllerInstances[0].stop).toHaveBeenCalledTimes(1);
+      }
+      if (holdMusicMock.controllerInstances[1]) {
+        expect(holdMusicMock.controllerInstances[1].stop).toHaveBeenCalledTimes(1);
+      }
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('disables the preview and stops it when every hold music track is disabled', async () => {
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    holdMusicMock.setHoldMusicSettings.mockClear();
+    holdMusicMock.HoldMusicController.mockClear();
+    holdMusicMock.controllerInstances.length = 0;
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const trackOptions = getHoldMusicTrackOptions();
+    const initialSettings: Settings = {
+      voice: '',
+      tts: {},
+      stt: {},
+      format: 'md',
+      timestamps: false,
+      music: { muted: false, effects: true, volume: 1, disabledTracks: [] },
+    };
+
+    function Harness() {
+      const [settings, setSettings] = useState(initialSettings);
+      return createElement(SettingsScreen, {
+        onBack: () => undefined,
+        settings,
+        setSettings,
+        ttsCatalog: null,
+        sttCatalog: null,
+        compact: true,
+      });
+    }
+
+    const previewButton = () => Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === 'Start' || button.textContent === 'Stop');
+    const songSwitch = (label: string) => container.querySelector<HTMLButtonElement>(
+      `button[role="switch"][aria-label="${label.replace(/"/g, '\\"')}"]`,
+    );
+
+    try {
+      await act(async () => {
+        root.render(createElement(Harness));
+      });
+
+      expect(previewButton()?.textContent).toBe('Start');
+      expect(previewButton()?.disabled).toBe(false);
+
+      await act(async () => {
+        previewButton()?.click();
+      });
+
+      expect(holdMusicMock.HoldMusicController).toHaveBeenCalledTimes(1);
+      expect(holdMusicMock.controllerInstances[0].start).toHaveBeenCalledTimes(1);
+      expect(previewButton()?.textContent).toBe('Stop');
+      expect(previewButton()?.disabled).toBe(false);
+
+      await act(async () => {
+        container.querySelector<HTMLDivElement>('[role="button"][aria-label="Songs, expand"]')?.click();
+      });
+
+      for (const track of trackOptions) {
+        await act(async () => {
+          songSwitch(track.label)?.click();
+        });
+      }
+
+      expect(holdMusicMock.setHoldMusicSettings).toHaveBeenLastCalledWith({
+        muted: false,
+        effects: true,
+        volume: 1,
+        disabledTracks: trackOptions.map((track) => track.id),
+      });
+      expect(holdMusicMock.controllerInstances[0].stop).toHaveBeenCalledTimes(1);
+      expect(previewButton()?.textContent).toBe('Start');
+      expect(previewButton()?.disabled).toBe(true);
+
+      await act(async () => {
+        previewButton()?.click();
+      });
+      expect(holdMusicMock.HoldMusicController).toHaveBeenCalledTimes(1);
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
 
 });
 
@@ -523,16 +717,20 @@ describe('SettingsScreen music helpers', () => {
       stt: { providerId: 'xai', model: 'grok-stt' },
       format: 'json',
       timestamps: true,
-      music: { muted: false, effects: true, disabledTracks: [] },
+      music: { muted: false, effects: true, volume: 1, disabledTracks: [] },
     };
 
     expect(withMusicMuted(settings, true)).toEqual({
       ...settings,
-      music: { muted: true, effects: true, disabledTracks: [] },
+      music: { muted: true, effects: true, volume: 1, disabledTracks: [] },
     });
     expect(withMusicEffects(settings, false)).toEqual({
       ...settings,
-      music: { muted: false, effects: false, disabledTracks: [] },
+      music: { muted: false, effects: false, volume: 1, disabledTracks: [] },
+    });
+    expect(withMusicVolume(settings, 0.25)).toEqual({
+      ...settings,
+      music: { muted: false, effects: true, volume: 0.25, disabledTracks: [] },
     });
   });
 
@@ -543,7 +741,7 @@ describe('SettingsScreen music helpers', () => {
       stt: {},
       format: 'md',
       timestamps: false,
-      music: { muted: false, effects: true, disabledTracks: ['Soft Hold Tone.mp3'] },
+      music: { muted: false, effects: true, volume: 1, disabledTracks: ['Soft Hold Tone.mp3'] },
     };
 
     expect(withMusicTrackEnabled(settings, 'Dockside Hold.mp3', false).music.disabledTracks).toEqual([

@@ -38,6 +38,7 @@ export interface ExportSettings {
 export interface MusicSettings {
   muted: boolean;
   effects: boolean;
+  volume: number;
   disabledTracks: string[];
 }
 
@@ -71,6 +72,7 @@ export const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
 export const DEFAULT_MUSIC_SETTINGS: MusicSettings = {
   muted: false,
   effects: true,
+  volume: 1,
   disabledTracks: [],
 };
 
@@ -318,16 +320,23 @@ function normalizeMusicSettings(value: unknown): MusicSettings {
   const effects = typeof source.effects === 'boolean'
     ? source.effects
     : DEFAULT_MUSIC_SETTINGS.effects;
+  const volume = normalizeMusicVolume(source.volume);
   const disabledTracks = Array.isArray(source.disabledTracks)
     ? uniqueStrings(source.disabledTracks)
     : DEFAULT_MUSIC_SETTINGS.disabledTracks;
-  return { muted, effects, disabledTracks };
+  return { muted, effects, volume, disabledTracks };
 }
 
 function isDefaultMusicSettings(settings: MusicSettings): boolean {
   return settings.muted === DEFAULT_MUSIC_SETTINGS.muted
     && settings.effects === DEFAULT_MUSIC_SETTINGS.effects
+    && settings.volume === DEFAULT_MUSIC_SETTINGS.volume
     && settings.disabledTracks.length === 0;
+}
+
+function normalizeMusicVolume(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_MUSIC_SETTINGS.volume;
+  return Math.min(1, Math.max(0, value));
 }
 
 function uniqueStrings(values: unknown[]): string[] {

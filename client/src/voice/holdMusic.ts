@@ -43,6 +43,14 @@ interface HoldMusicAudioEntry {
   audio: HTMLAudioElement;
   baseVolume: number;
   volume: number;
+  outputRoute: HoldMusicOutputRoute | null;
+  webAudioUnavailable: boolean;
+}
+
+interface HoldMusicOutputRoute {
+  audioCtx: AudioContext;
+  source: MediaElementAudioSourceNode;
+  gain: GainNode;
 }
 
 let shuffledHoldMusicDeck: string[] = [];
@@ -122,11 +130,12 @@ export function setHoldMusicSettings(settings: MusicSettings): void {
   publishHoldMusicMuted(after.muted);
 
   const effectsChanged = before.effects !== after.effects;
+  const volumeChanged = before.volume !== after.volume;
   const disabledTracksChanged = !stringSetsEqual(before.disabledTracks, after.disabledTracks);
-  if (effectsChanged || disabledTracksChanged) {
+  if (effectsChanged || volumeChanged || disabledTracksChanged) {
     resetPreloadedHoldMusicTrackIfNeeded(after);
     for (const controller of Array.from(desiredHoldMusicControllers)) {
-      controller.applySettingsChange(after, { effectsChanged, disabledTracksChanged });
+      controller.applySettingsChange(after, { effectsChanged, volumeChanged, disabledTracksChanged });
     }
   }
 }
@@ -138,11 +147,26 @@ export function subscribeHoldMusicMuted(listener: (muted: boolean) => void): () 
 
 function applyHoldMusicMute(target: HoldMusicMuteTarget, muted: boolean): void {
   for (const entry of target.entries) {
+    const effectiveVolume = muted ? 0 : entry.volume;
+    const outputRoute = muted ? entry.outputRoute : ensureHoldMusicOutputRoute(entry);
+    if (outputRoute) {
+      // iOS Safari does not expose reliable per-element volume control. When Web Audio is
+      // available, keep the media element at unity and make the GainNode the app-level fader.
+      setHoldMusicOutputGain(outputRoute, effectiveVolume);
+      try {
+        entry.audio.muted = effectiveVolume <= 0;
+        entry.audio.volume = 1;
+      } catch {
+        // Element mute/volume can fail in unusual browser states; the gain node remains authoritative.
+      }
+      continue;
+    }
+
     try {
-      entry.audio.muted = muted || entry.volume <= 0;
-      entry.audio.volume = muted ? 0 : entry.volume;
+      entry.audio.muted = muted || effectiveVolume <= 0;
+      entry.audio.volume = effectiveVolume;
     } catch {
-      // Element volume/mute can fail in unusual browser states; keep the rest of the bed alive.
+      // Fallback volume is best-effort only; some mobile browsers ignore HTMLMediaElement.volume.
     }
   }
 }
@@ -198,11 +222,15 @@ export class HoldMusicController {
         audio: preloaded.processedAudio,
         baseVolume: MUSIC_VOLUME,
         volume: 0,
+        outputRoute: null,
+        webAudioUnavailable: false,
       };
       const originalMain: HoldMusicAudioEntry = {
         audio: preloaded.originalAudio,
         baseVolume: MUSIC_VOLUME,
         volume: 0,
+        outputRoute: null,
+        webAudioUnavailable: false,
       };
       const layers = createHoldMusicLayerEntries();
       const mainEntries = [processedMain, originalMain];
@@ -259,7 +287,7 @@ export class HoldMusicController {
 
   applySettingsChange(
     settings: MusicSettings,
-    change: { effectsChanged: boolean; disabledTracksChanged: boolean },
+    change: { effectsChanged: boolean; volumeChanged: boolean; disabledTracksChanged: boolean },
   ): void {
     if (!this.wantsPlayback) return;
 
@@ -270,16 +298,19 @@ export class HoldMusicController {
       }
     }
 
-    if (change.effectsChanged && this.session) {
-      this.applyLiveSettings(settings);
+    if ((change.effectsChanged || change.volumeChanged) && this.session) {
+      this.applyLiveSettings(settings, { restartAnalyser: change.effectsChanged });
     }
   }
 
-  private applyLiveSettings(settings: MusicSettings): void {
+  private applyLiveSettings(
+    settings: MusicSettings,
+    options: { restartAnalyser: boolean } = { restartAnalyser: true },
+  ): void {
     const session = this.session;
     if (!session || session.stopped) return;
     applyHoldMusicSessionVolumes(session, settings);
-    if (session.started && !getHoldMusicMuted()) {
+    if (options.restartAnalyser && session.started && !getHoldMusicMuted()) {
       this.restartSessionAnalyser(session);
     }
   }
@@ -305,8 +336,8 @@ export class HoldMusicController {
     } catch {
       // best-effort cleanup
     }
-    for (const entry of session.mainEntries) cleanupAudioElement(entry.audio);
-    for (const layer of session.layers) cleanupAudioElement(layer.audio);
+    for (const entry of session.mainEntries) cleanupHoldMusicEntry(entry);
+    for (const layer of session.layers) cleanupHoldMusicEntry(layer);
 
     preloadNextHoldMusicTrack();
   }
@@ -466,10 +497,11 @@ function isTrackEnabled(track: string, settings: MusicSettings): boolean {
 }
 
 function applyHoldMusicSessionVolumes(session: HoldMusicSession, settings: MusicSettings): void {
-  session.processedMain.volume = settings.effects ? session.processedMain.baseVolume : 0;
-  session.originalMain.volume = settings.effects ? 0 : session.originalMain.baseVolume;
+  const volume = settings.volume;
+  session.processedMain.volume = settings.effects ? session.processedMain.baseVolume * volume : 0;
+  session.originalMain.volume = settings.effects ? 0 : session.originalMain.baseVolume * volume;
   for (const layer of session.layers) {
-    layer.volume = settings.effects ? layer.baseVolume : 0;
+    layer.volume = settings.effects ? layer.baseVolume * volume : 0;
   }
   applyHoldMusicMute(session.muteTarget, getHoldMusicMuted());
 }
@@ -505,7 +537,13 @@ function createHoldMusicLayerEntries(): HoldMusicAudioEntry[] {
       audio.loop = true;
       audio.preload = 'auto';
       audio.load();
-      entries.push({ audio, baseVolume: layer.volume, volume: layer.volume });
+      entries.push({
+        audio,
+        baseVolume: layer.volume,
+        volume: layer.volume,
+        outputRoute: null,
+        webAudioUnavailable: false,
+      });
     } catch {
       // Static layers are nice-to-have; do not block the music track.
     }
@@ -528,6 +566,61 @@ function cleanupAudioElement(audio: HTMLAudioElement): void {
     audio.load();
   } catch {
     // best-effort cleanup
+  }
+}
+
+function cleanupHoldMusicEntry(entry: HoldMusicAudioEntry): void {
+  cleanupHoldMusicOutputRoute(entry.outputRoute);
+  entry.outputRoute = null;
+  cleanupAudioElement(entry.audio);
+}
+
+function ensureHoldMusicOutputRoute(entry: HoldMusicAudioEntry): HoldMusicOutputRoute | null {
+  if (entry.outputRoute) return entry.outputRoute;
+  if (entry.webAudioUnavailable) return null;
+  const audioCtx = getSharedHoldAudioContext();
+  if (!audioCtx || typeof audioCtx.createMediaElementSource !== 'function' || typeof audioCtx.createGain !== 'function') {
+    return null;
+  }
+  void resumeAudioContext(audioCtx);
+
+  try {
+    const source = audioCtx.createMediaElementSource(entry.audio);
+    const gain = audioCtx.createGain();
+    gain.gain.value = 0;
+    source.connect(gain);
+    gain.connect(audioCtx.destination);
+    entry.outputRoute = { audioCtx, source, gain };
+    return entry.outputRoute;
+  } catch {
+    // createMediaElementSource can throw when the browser blocks the graph or an element was
+    // already bound. Fall back to best-effort HTMLMediaElement.volume for this entry.
+    entry.webAudioUnavailable = true;
+    return null;
+  }
+}
+
+function setHoldMusicOutputGain(route: HoldMusicOutputRoute, value: number): void {
+  const gain = route.gain.gain;
+  try {
+    if (typeof gain.setValueAtTime === 'function') {
+      gain.setValueAtTime(value, route.audioCtx.currentTime);
+    } else {
+      gain.value = value;
+    }
+  } catch {
+    try { gain.value = value; } catch { /* non-essential gain update */ }
+  }
+}
+
+function cleanupHoldMusicOutputRoute(route: HoldMusicOutputRoute | null): void {
+  if (!route) return;
+  for (const node of [route.source, route.gain]) {
+    try {
+      node.disconnect();
+    } catch {
+      // already disconnected
+    }
   }
 }
 

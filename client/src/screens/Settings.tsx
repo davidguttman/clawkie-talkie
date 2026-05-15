@@ -1,8 +1,8 @@
-import { useEffect, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
+import { useEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { HIFI } from '../tokens';
 import { ScreenHeader, ScrollBody } from '../components/ScreenChrome';
 import { DEFAULT_MUSIC_SETTINGS, type MusicSettings, type Settings } from '../storage';
-import { setHoldMusicSettings, subscribeHoldMusicMuted } from '../voice/holdMusic';
+import { HoldMusicController, setHoldMusicSettings, subscribeHoldMusicMuted } from '../voice/holdMusic';
 import { getHoldMusicTrackOptions, type HoldMusicTrackOption } from '../voice/holdMusicCatalog';
 import type { SttCatalog, SttSelection, TtsCatalog, TtsSelection } from '../voice/protocol';
 
@@ -71,10 +71,32 @@ export function SettingsScreen({
     setSettings(withTtsSelection(settings, selection));
   const updateSttSelection = (selection: SttSelection) =>
     setSettings(withSttSelection(settings, selection));
+  const musicSettings = normalizeScreenMusicSettings(settings.music);
+  const musicTracks = getHoldMusicTrackOptions();
+  const disabledMusicTrackIds = new Set(musicSettings.disabledTracks);
+  const enabledMusicTrackCount = musicTracks.filter((track) => !disabledMusicTrackIds.has(track.id)).length;
+  const [musicPreviewPlaying, setMusicPreviewPlaying] = useState(false);
+  const musicPreviewControllerRef = useRef<HoldMusicController | null>(null);
   const updateMusicSettings = (music: MusicSettings) => {
     const normalized = normalizeScreenMusicSettings(music);
     setHoldMusicSettings(normalized);
     setSettings((current) => withMusicSettings(current, normalized));
+  };
+  const stopMusicPreview = () => {
+    musicPreviewControllerRef.current?.stop();
+    musicPreviewControllerRef.current = null;
+    setMusicPreviewPlaying(false);
+  };
+  const toggleMusicPreview = () => {
+    if (musicPreviewPlaying) {
+      stopMusicPreview();
+      return;
+    }
+    if (enabledMusicTrackCount === 0) return;
+    const controller = new HoldMusicController();
+    musicPreviewControllerRef.current = controller;
+    controller.start();
+    setMusicPreviewPlaying(true);
   };
 
   useEffect(() => subscribeHoldMusicMuted((muted) => {
@@ -84,6 +106,13 @@ export function SettingsScreen({
       return withMusicSettings(current, { ...music, muted });
     });
   }), [setSettings]);
+  useEffect(() => () => {
+    musicPreviewControllerRef.current?.stop();
+    musicPreviewControllerRef.current = null;
+  }, []);
+  useEffect(() => {
+    if (musicPreviewPlaying && enabledMusicTrackCount === 0) stopMusicPreview();
+  }, [enabledMusicTrackCount, musicPreviewPlaying]);
 
   const providerOptions = configuredTtsProviders(ttsCatalog);
   const currentProvider = providerForSelection(providerOptions, settings.tts);
@@ -121,9 +150,6 @@ export function SettingsScreen({
     currentSttProvider,
     isDefaultSttSelection(settings.stt),
   );
-  const musicSettings = normalizeScreenMusicSettings(settings.music);
-  const musicTracks = getHoldMusicTrackOptions();
-
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', color: HIFI.ink }}>
       <ScreenHeader title="Settings" onBack={onBack} />
@@ -274,6 +300,19 @@ export function SettingsScreen({
             value={musicSettings.effects}
             setValue={(effects) => updateMusicSettings({ ...musicSettings, effects })}
           />
+          <SliderRow
+            label="Hold music volume"
+            sub={`${Math.round(musicSettings.volume * 100)}%`}
+            value={musicSettings.volume}
+            setValue={(volume) => updateMusicSettings({ ...musicSettings, volume })}
+          />
+          <ButtonRow
+            label="Hold music test"
+            sub="Preview the current hold music settings"
+            buttonLabel={musicPreviewPlaying ? 'Stop' : 'Start'}
+            onClick={toggleMusicPreview}
+            disabled={enabledMusicTrackCount === 0}
+          />
           {musicTracks.length > 0 ? (
             <SongsSubCategory
               tracks={musicTracks}
@@ -404,6 +443,10 @@ export function withMusicEffects(settings: Settings, effects: boolean): Settings
   return withMusicSettings(settings, { ...normalizeScreenMusicSettings(settings.music), effects });
 }
 
+export function withMusicVolume(settings: Settings, volume: number): Settings {
+  return withMusicSettings(settings, { ...normalizeScreenMusicSettings(settings.music), volume });
+}
+
 export function withMusicTrackEnabled(
   settings: Settings,
   track: string,
@@ -431,8 +474,14 @@ function normalizeScreenMusicSettings(value: Partial<MusicSettings> | undefined)
   return {
     muted: typeof value?.muted === 'boolean' ? value.muted : DEFAULT_MUSIC_SETTINGS.muted,
     effects: typeof value?.effects === 'boolean' ? value.effects : DEFAULT_MUSIC_SETTINGS.effects,
+    volume: normalizeScreenMusicVolume(value?.volume),
     disabledTracks: Array.isArray(value?.disabledTracks) ? [...value.disabledTracks] : [],
   };
+}
+
+function normalizeScreenMusicVolume(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_MUSIC_SETTINGS.volume;
+  return Math.min(1, Math.max(0, value));
 }
 
 export function isDefaultTtsSelection(selection: TtsSelection): boolean {
@@ -732,6 +781,134 @@ function ToggleRow({
             }}
           />
         </span>
+      </button>
+    </div>
+  );
+}
+
+
+function SliderRow({
+  label,
+  sub,
+  value,
+  setValue,
+}: {
+  label: string;
+  sub: string;
+  value: number;
+  setValue: (v: number) => void;
+}) {
+  return (
+    <div style={{ padding: '13px 14px', borderBottom: `1px solid ${HIFI.stroke}` }}>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'baseline',
+          gap: 12,
+          marginBottom: 10,
+        }}
+      >
+        <label
+          htmlFor="hold-music-volume"
+          style={{ fontSize: 13, color: HIFI.ink, fontFamily: HIFI.fonts.sans }}
+        >
+          {label}
+        </label>
+        <div
+          aria-hidden="true"
+          style={{
+            fontFamily: HIFI.fonts.mono,
+            fontSize: 10,
+            letterSpacing: 1,
+            color: HIFI.ink3,
+            fontWeight: 700,
+          }}
+        >
+          {sub}
+        </div>
+      </div>
+      <input
+        id="hold-music-volume"
+        type="range"
+        min="0"
+        max="1"
+        step="0.01"
+        value={value}
+        aria-label={label}
+        aria-valuetext={sub}
+        onChange={(e) => setValue(Number(e.currentTarget.value))}
+        style={{
+          width: '100%',
+          minHeight: 44,
+          accentColor: '#ff9e3b',
+          cursor: 'pointer',
+        }}
+      />
+    </div>
+  );
+}
+
+function ButtonRow({
+  label,
+  sub,
+  buttonLabel,
+  onClick,
+  disabled = false,
+}: {
+  label: string;
+  sub?: string;
+  buttonLabel: string;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        padding: '13px 14px',
+        borderBottom: `1px solid ${HIFI.stroke}`,
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        gap: 12,
+      }}
+    >
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 13, color: HIFI.ink, fontFamily: HIFI.fonts.sans }}>{label}</div>
+        {sub && (
+          <div
+            style={{
+              fontSize: 11,
+              color: HIFI.ink3,
+              fontFamily: HIFI.fonts.sans,
+              marginTop: 2,
+              lineHeight: 1.4,
+            }}
+          >
+            {sub}
+          </div>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={disabled}
+        style={{
+          minHeight: 44,
+          minWidth: 76,
+          borderRadius: 12,
+          border: `1px solid ${HIFI.stroke}`,
+          background: disabled ? HIFI.surface2 : HIFI.ink,
+          color: disabled ? HIFI.ink3 : '#000',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          fontFamily: HIFI.fonts.mono,
+          fontSize: 11,
+          fontWeight: 800,
+          letterSpacing: 1,
+          textTransform: 'uppercase',
+        }}
+      >
+        {buttonLabel}
       </button>
     </div>
   );
