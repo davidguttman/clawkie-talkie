@@ -255,7 +255,7 @@ describe('HoldMusicController', () => {
     expect(originalMusic.loop).toBe(true);
     expect(processedMusic.preload).toBe('auto');
     expect(originalMusic.preload).toBe('auto');
-    expect(processedMusic.volume).toBeCloseTo(0.425);
+    expect(processedMusic.volume).toBeCloseTo(0.5);
     expect(processedMusic.muted).toBe(false);
     expect(originalMusic.volume).toBe(0);
     expect(originalMusic.muted).toBe(true);
@@ -397,7 +397,7 @@ describe('HoldMusicController', () => {
     expect(originalMusic.src).toBe(processedMusic.src.replace('/music/', '/music-original/'));
     expect(processedMusic.volume).toBe(0);
     expect(processedMusic.muted).toBe(true);
-    expect(originalMusic.volume).toBeCloseTo(0.85);
+    expect(originalMusic.volume).toBeCloseTo(1);
     expect(originalMusic.muted).toBe(false);
     expect(FakeAudioElement.instances[2].src).toBe('/music-layers/hiss.mp3');
     expect(FakeAudioElement.instances[2].volume).toBe(0);
@@ -444,7 +444,7 @@ describe('HoldMusicController', () => {
     }
     expect(processedMusic.volume).toBe(0);
     expect(processedMusic.muted).toBe(true);
-    expect(originalMusic.volume).toBeCloseTo(0.85);
+    expect(originalMusic.volume).toBeCloseTo(1);
     expect(originalMusic.muted).toBe(false);
     expect(hiss.volume).toBe(0);
     expect(hiss.muted).toBe(true);
@@ -477,7 +477,7 @@ describe('HoldMusicController', () => {
     const ctx = FakeAudioContext.instances[0];
     const initialAnalyser = ctx.analysers[0];
     expect(ctx.gains).toHaveLength(4);
-    expect(ctx.gains[0].gain.value).toBeCloseTo(0.425);
+    expect(ctx.gains[0].gain.value).toBeCloseTo(0.5);
     expect(ctx.gains[1].gain.value).toBe(0);
     expect(ctx.gains[2].gain.value).toBeCloseTo(0.001125);
     expect(ctx.gains[3].gain.value).toBeCloseTo(0.001625);
@@ -492,7 +492,7 @@ describe('HoldMusicController', () => {
     for (const audio of [processedMusic, originalMusic, hiss, crackle]) {
       expect(audio.pause).not.toHaveBeenCalled();
     }
-    expect(ctx.gains[0].gain.value).toBeCloseTo(0.85);
+    expect(ctx.gains[0].gain.value).toBeCloseTo(1);
     expect(ctx.gains[1].gain.value).toBe(0);
     expect(ctx.gains[2].gain.value).toBeCloseTo(0.00225);
     expect(ctx.gains[3].gain.value).toBeCloseTo(0.00325);
@@ -562,7 +562,7 @@ describe('HoldMusicController', () => {
 
     expect(storage.has('clawkie.holdMusic.muted.v1')).toBe(false);
     expect(processedMusic.muted).toBe(false);
-    expect(processedMusic.volume).toBeCloseTo(0.425);
+    expect(processedMusic.volume).toBeCloseTo(0.5);
     expect(originalMusic.muted).toBe(true);
     expect(originalMusic.volume).toBe(0);
     expect(hiss.muted).toBe(false);
