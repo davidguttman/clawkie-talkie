@@ -125,6 +125,22 @@ describe('DrivingScreen hold music mute control', () => {
   });
 });
 
+describe('DrivingScreen caption readability', () => {
+  it('uses a larger named font size for compact driving captions without changing AI auto-scroll constants', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    expect(source).toContain('COMPACT_DRIVING_CAPTION_FONT_SIZE = 22');
+    expect(source).toContain('DEFAULT_DRIVING_CAPTION_FONT_SIZE = 16');
+    expect(source).toContain('const captionFontMetrics = compact ? COMPACT_DRIVING_CAPTION_METRICS : DEFAULT_DRIVING_CAPTION_METRICS;');
+    expect(source).toContain('fontSize: captionFontMetrics.fontSize');
+    expect(source).toContain('lineHeight: captionFontMetrics.lineHeight');
+    expect(source).toContain('height: captionFontMetrics.caretHeight');
+    expect(source).toContain('AI_RESPONSE_AUTOSCROLL_WPM = 175');
+    expect(source).toContain('AI_RESPONSE_AUTOSCROLL_START_WORDS = 18');
+    expect(source).toContain('AI_RESPONSE_AUTOSCROLL_VIEWPORT_ANCHOR = 0.38');
+  });
+});
+
 describe('DrivingScreen response scroll timing', () => {
   it('resets new AI response captions to the top before heuristic scrolling starts', () => {
     const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');

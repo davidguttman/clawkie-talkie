@@ -710,6 +710,18 @@ interface CaptionData {
 }
 
 const AI_RESPONSE_CAPTION_LABEL = 'AI · READING ALOUD';
+const DEFAULT_DRIVING_CAPTION_FONT_SIZE = 16;
+const COMPACT_DRIVING_CAPTION_FONT_SIZE = 22;
+const DEFAULT_DRIVING_CAPTION_METRICS = {
+  fontSize: DEFAULT_DRIVING_CAPTION_FONT_SIZE,
+  lineHeight: 1.5,
+  caretHeight: DEFAULT_DRIVING_CAPTION_FONT_SIZE,
+};
+const COMPACT_DRIVING_CAPTION_METRICS = {
+  fontSize: COMPACT_DRIVING_CAPTION_FONT_SIZE,
+  lineHeight: 1.35,
+  caretHeight: COMPACT_DRIVING_CAPTION_FONT_SIZE,
+};
 const AI_RESPONSE_AUTOSCROLL_WPM = 175;
 const AI_RESPONSE_AUTOSCROLL_START_WORDS = 18;
 const AI_RESPONSE_AUTOSCROLL_INTERVAL_MS = 250;
@@ -817,6 +829,7 @@ function Caption({
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const lastAiResponseTextRef = useRef<string | null>(null);
+  const captionFontMetrics = compact ? COMPACT_DRIVING_CAPTION_METRICS : DEFAULT_DRIVING_CAPTION_METRICS;
   const autoScrollDisabledForResponseRef = useRef(false);
   const programmaticScrollRef = useRef(false);
   const programmaticScrollClearTimerRef = useRef<number | null>(null);
@@ -936,8 +949,8 @@ function Caption({
         ref={scrollRef}
         className="transcript-scroll"
         style={{
-          fontSize: 16,
-          lineHeight: 1.5,
+          fontSize: captionFontMetrics.fontSize,
+          lineHeight: captionFontMetrics.lineHeight,
           color: HIFI.ink,
           fontWeight: 400,
           fontFamily: baseFont,
@@ -955,7 +968,7 @@ function Caption({
             style={{
               display: 'inline-block',
               width: 8,
-              height: 16,
+              height: captionFontMetrics.caretHeight,
               background: caption.color,
               marginLeft: 2,
               verticalAlign: 'text-bottom',
