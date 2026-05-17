@@ -6,7 +6,6 @@ import {
   processedHoldMusicTrackUrl,
 } from './holdMusicCatalog';
 
-const MUSIC_VOLUME = 0.85;
 const HISS_VOLUME = 0.00225;
 const CRACKLE_VOLUME = 0.00325;
 const HOLD_MUSIC_LAYER_TRACKS: readonly HoldMusicLayerSpec[] = [
@@ -220,14 +219,14 @@ export class HoldMusicController {
       const musicSettings = loadMusicSettings();
       const processedMain: HoldMusicAudioEntry = {
         audio: preloaded.processedAudio,
-        baseVolume: MUSIC_VOLUME,
+        baseVolume: 1,
         volume: 0,
         outputRoute: null,
         webAudioUnavailable: false,
       };
       const originalMain: HoldMusicAudioEntry = {
         audio: preloaded.originalAudio,
-        baseVolume: MUSIC_VOLUME,
+        baseVolume: 1,
         volume: 0,
         outputRoute: null,
         webAudioUnavailable: false,
