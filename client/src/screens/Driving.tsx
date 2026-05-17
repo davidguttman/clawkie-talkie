@@ -709,6 +709,7 @@ interface CaptionData {
   live: boolean;
 }
 
+const LIVE_USER_CAPTION_LABEL = 'YOU · LIVE';
 const AI_RESPONSE_CAPTION_LABEL = 'AI · READING ALOUD';
 const DEFAULT_DRIVING_CAPTION_FONT_SIZE = 16;
 const COMPACT_DRIVING_CAPTION_FONT_SIZE = 22;
@@ -727,6 +728,20 @@ const AI_RESPONSE_AUTOSCROLL_START_WORDS = 18;
 const AI_RESPONSE_AUTOSCROLL_INTERVAL_MS = 250;
 const AI_RESPONSE_AUTOSCROLL_VIEWPORT_ANCHOR = 0.38;
 const AI_RESPONSE_AUTOSCROLL_EASING = 0.3;
+const DEFAULT_AI_RESPONSE_AUTOSCROLL_METRICS = {
+  wpm: AI_RESPONSE_AUTOSCROLL_WPM,
+  startWords: AI_RESPONSE_AUTOSCROLL_START_WORDS,
+  intervalMs: AI_RESPONSE_AUTOSCROLL_INTERVAL_MS,
+  viewportAnchor: AI_RESPONSE_AUTOSCROLL_VIEWPORT_ANCHOR,
+  easing: AI_RESPONSE_AUTOSCROLL_EASING,
+};
+const COMPACT_AI_RESPONSE_AUTOSCROLL_METRICS = {
+  wpm: 135,
+  startWords: AI_RESPONSE_AUTOSCROLL_START_WORDS,
+  intervalMs: AI_RESPONSE_AUTOSCROLL_INTERVAL_MS,
+  viewportAnchor: 0.5,
+  easing: 0.22,
+};
 const PROGRAMMATIC_SCROLL_GRACE_MS = 120;
 
 function pickCaption({
@@ -746,7 +761,7 @@ function pickCaption({
 }): CaptionData {
   if (state === 'recording') {
     return {
-      label: 'YOU · LIVE',
+      label: LIVE_USER_CAPTION_LABEL,
       color: accentRec,
       // liveText is populated by daemon STT progress when available.
       text: liveText || null,
@@ -829,11 +844,17 @@ function Caption({
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const lastAiResponseTextRef = useRef<string | null>(null);
+  const lastLiveUserTextRef = useRef<string | null>(null);
   const captionFontMetrics = compact ? COMPACT_DRIVING_CAPTION_METRICS : DEFAULT_DRIVING_CAPTION_METRICS;
+  const aiResponseAutoscrollMetrics = compact
+    ? COMPACT_AI_RESPONSE_AUTOSCROLL_METRICS
+    : DEFAULT_AI_RESPONSE_AUTOSCROLL_METRICS;
   const autoScrollDisabledForResponseRef = useRef(false);
+  const autoScrollDisabledForLiveUserRef = useRef(false);
   const programmaticScrollRef = useRef(false);
   const programmaticScrollClearTimerRef = useRef<number | null>(null);
   const isAiResponseCaption = caption.label === AI_RESPONSE_CAPTION_LABEL;
+  const isLiveUserCaption = caption.label === LIVE_USER_CAPTION_LABEL;
 
   const setProgrammaticScrollTop = useCallback((el: HTMLDivElement, scrollTop: number) => {
     programmaticScrollRef.current = true;
@@ -852,18 +873,20 @@ function Caption({
     if (!el) return;
     const handleScroll = () => {
       if (programmaticScrollRef.current) return;
-      if (!isAiResponseCaption || !caption.live) return;
-      autoScrollDisabledForResponseRef.current = true;
+      if (!caption.live) return;
+      if (isAiResponseCaption) autoScrollDisabledForResponseRef.current = true;
+      if (isLiveUserCaption) autoScrollDisabledForLiveUserRef.current = true;
     };
     el.addEventListener('scroll', handleScroll, { passive: true });
     return () => el.removeEventListener('scroll', handleScroll);
-  }, [caption.live, isAiResponseCaption]);
+  }, [caption.live, isAiResponseCaption, isLiveUserCaption]);
 
   useEffect(() => {
     const el = scrollRef.current;
-    if (!el || !isAiResponseCaption || !caption.live) return;
+    if (!el || (!isAiResponseCaption && !isLiveUserCaption) || !caption.live) return;
     const handleUserScrollIntent = () => {
-      autoScrollDisabledForResponseRef.current = true;
+      if (isAiResponseCaption) autoScrollDisabledForResponseRef.current = true;
+      if (isLiveUserCaption) autoScrollDisabledForLiveUserRef.current = true;
     };
     el.addEventListener('wheel', handleUserScrollIntent, { passive: true });
     el.addEventListener('touchstart', handleUserScrollIntent, { passive: true });
@@ -875,7 +898,7 @@ function Caption({
       el.removeEventListener('pointerdown', handleUserScrollIntent);
       el.removeEventListener('keydown', handleUserScrollIntent);
     };
-  }, [caption.live, isAiResponseCaption]);
+  }, [caption.live, isAiResponseCaption, isLiveUserCaption]);
 
   useEffect(() => {
     return () => {
@@ -902,9 +925,33 @@ function Caption({
   }, [isAiResponseCaption, caption.text, setProgrammaticScrollTop]);
 
   useEffect(() => {
+    if (!isLiveUserCaption || !caption.live) {
+      lastLiveUserTextRef.current = null;
+      autoScrollDisabledForLiveUserRef.current = false;
+      return;
+    }
+
+    const liveUserText = caption.text ?? '';
+    // Treat only entry into the live-user caption as a new capture. STT
+    // partials may shrink while correcting the same recording, and that
+    // must not override a user's manual scroll opt-out.
+    const isNewLiveUserCapture = lastLiveUserTextRef.current === null;
+
+    if (isNewLiveUserCapture) {
+      autoScrollDisabledForLiveUserRef.current = false;
+    }
+    lastLiveUserTextRef.current = liveUserText;
+
+    if (!caption.text || autoScrollDisabledForLiveUserRef.current) return;
+    const el = scrollRef.current;
+    if (!el || el.scrollHeight <= el.clientHeight) return;
+    setProgrammaticScrollTop(el, el.scrollHeight - el.clientHeight);
+  }, [caption.live, caption.text, isLiveUserCaption, setProgrammaticScrollTop]);
+
+  useEffect(() => {
     if (!isAiResponseCaption || !caption.live || !caption.text) return;
     const totalWords = countWords(caption.text);
-    if (totalWords <= AI_RESPONSE_AUTOSCROLL_START_WORDS) return;
+    if (totalWords <= aiResponseAutoscrollMetrics.startWords) return;
     const startedAtMs = Date.now();
     const interval = window.setInterval(() => {
       if (autoScrollDisabledForResponseRef.current) {
@@ -915,24 +962,24 @@ function Caption({
       if (!el || el.scrollHeight <= el.clientHeight) return;
 
       const elapsedMs = Date.now() - startedAtMs;
-      const estimatedWordsSpoken = (elapsedMs / 60000) * AI_RESPONSE_AUTOSCROLL_WPM;
-      if (estimatedWordsSpoken < AI_RESPONSE_AUTOSCROLL_START_WORDS) return;
+      const estimatedWordsSpoken = (elapsedMs / 60000) * aiResponseAutoscrollMetrics.wpm;
+      if (estimatedWordsSpoken < aiResponseAutoscrollMetrics.startWords) return;
 
       const maxScrollTop = el.scrollHeight - el.clientHeight;
       const readingProgress = Math.min(estimatedWordsSpoken / totalWords, 1);
       const approximateReadingY = readingProgress * el.scrollHeight;
       const targetScrollTop = clamp(
-        approximateReadingY - el.clientHeight * AI_RESPONSE_AUTOSCROLL_VIEWPORT_ANCHOR,
+        approximateReadingY - el.clientHeight * aiResponseAutoscrollMetrics.viewportAnchor,
         0,
         maxScrollTop,
       );
       if (targetScrollTop <= el.scrollTop) return;
 
-      const easedScrollTop = el.scrollTop + (targetScrollTop - el.scrollTop) * AI_RESPONSE_AUTOSCROLL_EASING;
+      const easedScrollTop = el.scrollTop + (targetScrollTop - el.scrollTop) * aiResponseAutoscrollMetrics.easing;
       setProgrammaticScrollTop(el, Math.min(targetScrollTop, easedScrollTop));
-    }, AI_RESPONSE_AUTOSCROLL_INTERVAL_MS);
+    }, aiResponseAutoscrollMetrics.intervalMs);
     return () => window.clearInterval(interval);
-  }, [caption.live, caption.text, isAiResponseCaption, setProgrammaticScrollTop]);
+  }, [caption.live, caption.text, isAiResponseCaption, aiResponseAutoscrollMetrics, setProgrammaticScrollTop]);
 
   return (
     <div

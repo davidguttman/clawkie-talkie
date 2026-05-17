@@ -126,7 +126,7 @@ describe('DrivingScreen hold music mute control', () => {
 });
 
 describe('DrivingScreen caption readability', () => {
-  it('uses a larger named font size for compact driving captions without changing AI auto-scroll constants', () => {
+  it('uses a larger named font size for compact driving captions', () => {
     const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
 
     expect(source).toContain('COMPACT_DRIVING_CAPTION_FONT_SIZE = 22');
@@ -137,7 +137,6 @@ describe('DrivingScreen caption readability', () => {
     expect(source).toContain('height: captionFontMetrics.caretHeight');
     expect(source).toContain('AI_RESPONSE_AUTOSCROLL_WPM = 175');
     expect(source).toContain('AI_RESPONSE_AUTOSCROLL_START_WORDS = 18');
-    expect(source).toContain('AI_RESPONSE_AUTOSCROLL_VIEWPORT_ANCHOR = 0.38');
   });
 });
 
@@ -160,12 +159,53 @@ describe('DrivingScreen response scroll timing', () => {
     expect(source).toContain('AI_RESPONSE_AUTOSCROLL_WPM');
     expect(source).toContain('AI_RESPONSE_AUTOSCROLL_START_WORDS');
     expect(source).toContain('AI_RESPONSE_AUTOSCROLL_INTERVAL_MS');
+    expect(source).toMatch(/DEFAULT_AI_RESPONSE_AUTOSCROLL_METRICS\s*=\s*\{[\s\S]*?wpm:\s*AI_RESPONSE_AUTOSCROLL_WPM,[\s\S]*?startWords:\s*AI_RESPONSE_AUTOSCROLL_START_WORDS,[\s\S]*?intervalMs:\s*AI_RESPONSE_AUTOSCROLL_INTERVAL_MS,[\s\S]*?viewportAnchor:\s*AI_RESPONSE_AUTOSCROLL_VIEWPORT_ANCHOR,[\s\S]*?easing:\s*AI_RESPONSE_AUTOSCROLL_EASING,[\s\S]*?\}/);
     expect(source).toContain('const startedAtMs = Date.now();');
-    expect(source).toMatch(/const estimatedWordsSpoken\s*=\s*\(elapsedMs \/ 60000\) \* AI_RESPONSE_AUTOSCROLL_WPM;/);
-    expect(source).toContain('if (estimatedWordsSpoken < AI_RESPONSE_AUTOSCROLL_START_WORDS) return;');
+    expect(source).toMatch(/const estimatedWordsSpoken\s*=\s*\(elapsedMs \/ 60000\) \* aiResponseAutoscrollMetrics\.wpm;/);
+    expect(source).toContain('if (estimatedWordsSpoken < aiResponseAutoscrollMetrics.startWords) return;');
     expect(source).toContain('const readingProgress = Math.min(estimatedWordsSpoken / totalWords, 1);');
-    expect(source).toContain('AI_RESPONSE_AUTOSCROLL_EASING');
+    expect(source).toContain('aiResponseAutoscrollMetrics.easing');
     expect(source).toContain('setProgrammaticScrollTop(el, Math.min(targetScrollTop, easedScrollTop));');
+  });
+
+  it('uses slower tuned AI response autoscroll metrics in compact caption mode', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    expect(source).toContain('COMPACT_AI_RESPONSE_AUTOSCROLL_METRICS');
+    expect(source).toMatch(/COMPACT_AI_RESPONSE_AUTOSCROLL_METRICS\s*=\s*\{[\s\S]*?wpm:\s*135,[\s\S]*?viewportAnchor:\s*0\.5,[\s\S]*?easing:\s*0\.22,[\s\S]*?\}/);
+    expect(source).toMatch(/const aiResponseAutoscrollMetrics\s*=\s*compact[\s\S]*?\? COMPACT_AI_RESPONSE_AUTOSCROLL_METRICS[\s\S]*?: DEFAULT_AI_RESPONSE_AUTOSCROLL_METRICS;/);
+    expect(source).toContain('approximateReadingY - el.clientHeight * aiResponseAutoscrollMetrics.viewportAnchor');
+    expect(source).toContain('(targetScrollTop - el.scrollTop) * aiResponseAutoscrollMetrics.easing');
+  });
+
+  it('bottom-follows appended live user transcription without reusing AI response scroll timing', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    expect(source).toContain('LIVE_USER_CAPTION_LABEL');
+    expect(source).toContain('isLiveUserCaption');
+    expect(source).toContain('lastLiveUserTextRef');
+    expect(source).toContain('autoScrollDisabledForLiveUserRef');
+    expect(source).toContain('setProgrammaticScrollTop(el, el.scrollHeight - el.clientHeight);');
+
+    const liveUserScrollEffect = source.match(/if \(!isLiveUserCaption \|\| !caption\.live\) \{[\s\S]*?setProgrammaticScrollTop\(el, el\.scrollHeight - el\.clientHeight\);[\s\S]*?\}, \[caption\.live, caption\.text, isLiveUserCaption, setProgrammaticScrollTop\]\);/)?.[0] ?? '';
+    expect(liveUserScrollEffect).toContain('if (!isLiveUserCaption || !caption.live) {');
+    expect(liveUserScrollEffect).toContain('autoScrollDisabledForLiveUserRef.current = false;');
+    expect(liveUserScrollEffect).toContain('if (!caption.text || autoScrollDisabledForLiveUserRef.current) return;');
+    expect(liveUserScrollEffect).not.toContain('AI_RESPONSE_AUTOSCROLL_INTERVAL_MS');
+    expect(liveUserScrollEffect).not.toContain('AI_RESPONSE_AUTOSCROLL_WPM');
+    expect(liveUserScrollEffect).not.toContain('DEFAULT_AI_RESPONSE_AUTOSCROLL_METRICS');
+    expect(liveUserScrollEffect).not.toContain('COMPACT_AI_RESPONSE_AUTOSCROLL_METRICS');
+    expect(liveUserScrollEffect).not.toContain('aiResponseAutoscrollMetrics');
+  });
+
+  it('keeps live user scroll opt-out when STT corrections shrink the same recording', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+    const liveUserScrollEffect = source.match(/if \(!isLiveUserCaption \|\| !caption\.live\) \{[\s\S]*?setProgrammaticScrollTop\(el, el\.scrollHeight - el\.clientHeight\);[\s\S]*?\}, \[caption\.live, caption\.text, isLiveUserCaption, setProgrammaticScrollTop\]\);/)?.[0] ?? '';
+
+    expect(liveUserScrollEffect).toContain('const isNewLiveUserCapture = lastLiveUserTextRef.current === null;');
+    expect(liveUserScrollEffect).toContain('lastLiveUserTextRef.current = liveUserText;');
+    expect(liveUserScrollEffect).not.toContain('liveUserText.length <');
+    expect(liveUserScrollEffect).not.toContain('lastLiveUserText.length');
   });
 
   it('cancels AI response auto-scroll on explicit user intent even during programmatic scroll grace', () => {
