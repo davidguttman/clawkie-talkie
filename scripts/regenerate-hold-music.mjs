@@ -36,6 +36,9 @@ const MUSIC_COMPRESSOR_ATTACK_MS = 3;
 const MUSIC_COMPRESSOR_RELEASE_MS = 100;
 const HISS_LAYER_GAIN_DB = -16;
 const CRACKLE_LAYER_GAIN_DB = -10;
+const MUSIC_LOUDNESS_TARGET_LUFS = -23;
+const MUSIC_LOUDNESS_RANGE_LU = 11;
+const MUSIC_LOUDNESS_TRUE_PEAK_DBTP = -2;
 
 const bitcrusherSampleHold = 1 / BITCRUSHER_NORM_FREQ;
 const compressorThreshold = dbToLinear(MUSIC_COMPRESSOR_THRESHOLD_DB);
@@ -44,7 +47,7 @@ const compressorThreshold = dbToLinear(MUSIC_COMPRESSOR_THRESHOLD_DB);
 // filter allows.
 const compressorKnee = dbToLinear(MUSIC_COMPRESSOR_KNEE_DB);
 
-const musicFilter = [
+const musicEffectsFilter = [
   `highpass=f=${MUSIC_HIGHPASS_HZ}:t=q:w=${MUSIC_HIGHPASS_Q}`,
   // Original AudioWorklet quantized to 8 bits and held each sample until
   // phase += normFreq crossed 1.0. normFreq 0.4 therefore holds for roughly
@@ -58,9 +61,22 @@ const musicFilter = [
   `aeval=exprs='${createAmifySaturationExpression(MUSIC_SATURATION_DRIVE, 0)}|${createAmifySaturationExpression(MUSIC_SATURATION_DRIVE, 1)}':channel_layout=stereo`,
   `acompressor=threshold=${compressorThreshold}:ratio=${MUSIC_COMPRESSOR_RATIO}:attack=${MUSIC_COMPRESSOR_ATTACK_MS}:release=${MUSIC_COMPRESSOR_RELEASE_MS}:knee=${compressorKnee}:makeup=1`,
   `tremolo=f=${MUSIC_WOBBLE_HZ}:d=${MUSIC_WOBBLE_DEPTH}`,
+].join(',');
+
+const musicFormatFilter = [
   // Preserve the stereo bed after aeval and hand libmp3lame fixed-point audio;
   // this is an encoder-format guard, not an extra tone-shaping stage.
   'aformat=sample_fmts=s16p:channel_layouts=stereo',
+].join(',');
+
+const musicPreNormalizeFilter = [
+  musicEffectsFilter,
+  musicFormatFilter,
+].join(',');
+
+const musicLoudnessMeasureFilter = [
+  musicPreNormalizeFilter,
+  `loudnorm=I=${MUSIC_LOUDNESS_TARGET_LUFS}:TP=${MUSIC_LOUDNESS_TRUE_PEAK_DBTP}:LRA=${MUSIC_LOUDNESS_RANGE_LU}:print_format=json`,
 ].join(',');
 
 const hissFilter = [
@@ -92,6 +108,58 @@ function createAmifySaturationExpression(drive, channel) {
   return `(${scale}*${sample})/(${Math.PI}+${amount}*abs(${sample}))`;
 }
 
+async function measureMusicLoudness(input) {
+  const stderr = await ffmpegCaptureStderr([
+    '-i', input,
+    '-vn',
+    '-af', musicLoudnessMeasureFilter,
+    '-f', 'null',
+    '-',
+  ]);
+  const stats = parseLoudnormJson(stderr, input);
+  return {
+    input_i: requireFiniteLoudnormValue(stats.input_i, 'input_i', input),
+    input_lra: requireFiniteLoudnormValue(stats.input_lra, 'input_lra', input),
+    input_tp: requireFiniteLoudnormValue(stats.input_tp, 'input_tp', input),
+    input_thresh: requireFiniteLoudnormValue(stats.input_thresh, 'input_thresh', input),
+    target_offset: requireFiniteLoudnormValue(stats.target_offset, 'target_offset', input),
+  };
+}
+
+function createMusicEncodeFilter(loudnessStats) {
+  return [
+    musicPreNormalizeFilter,
+    [
+      `loudnorm=I=${MUSIC_LOUDNESS_TARGET_LUFS}`,
+      `TP=${MUSIC_LOUDNESS_TRUE_PEAK_DBTP}`,
+      `LRA=${MUSIC_LOUDNESS_RANGE_LU}`,
+      `measured_I=${loudnessStats.input_i}`,
+      `measured_LRA=${loudnessStats.input_lra}`,
+      `measured_TP=${loudnessStats.input_tp}`,
+      `measured_thresh=${loudnessStats.input_thresh}`,
+      `offset=${loudnessStats.target_offset}`,
+      'linear=true',
+    ].join(':'),
+    musicFormatFilter,
+  ].join(',');
+}
+
+function parseLoudnormJson(output, input) {
+  const match = output.match(/\{[\s\S]*\}/);
+  if (!match) {
+    throw new Error(`Could not parse loudnorm stats for ${path.relative(repoRoot, input)}`);
+  }
+  return JSON.parse(match[0]);
+}
+
+function requireFiniteLoudnormValue(value, field, input) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    throw new Error(`Invalid loudnorm ${field} for ${path.relative(repoRoot, input)}: ${value}`);
+  }
+  return numeric;
+}
+
 async function main() {
   await mkdir(musicDir, { recursive: true });
   await mkdir(originalMusicDir, { recursive: true });
@@ -118,12 +186,13 @@ async function main() {
 
     const output = path.join(musicDir, track);
     console.log(`processing ${path.relative(repoRoot, output)}`);
+    const loudnessStats = await measureMusicLoudness(input);
     await ffmpeg([
       '-y',
       '-i', input,
       '-map_metadata', '0',
       '-vn',
-      '-af', musicFilter,
+      '-af', createMusicEncodeFilter(loudnessStats),
       '-codec:a', 'libmp3lame',
       '-q:a', '3',
       output,
@@ -179,13 +248,27 @@ async function removeStaleGeneratedTracks(outputDir, expectedTracks) {
 }
 
 function ffmpeg(args) {
+  return runFfmpeg(args, { captureStderr: false });
+}
+
+function ffmpegCaptureStderr(args) {
+  return runFfmpeg(args, { captureStderr: true });
+}
+
+function runFfmpeg(args, { captureStderr }) {
   return new Promise((resolve, reject) => {
-    const child = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', ...args], {
-      stdio: ['ignore', 'inherit', 'inherit'],
+    const child = spawn('ffmpeg', ['-hide_banner', '-loglevel', captureStderr ? 'info' : 'error', ...args], {
+      stdio: ['ignore', 'inherit', captureStderr ? 'pipe' : 'inherit'],
     });
+    let stderr = '';
+    if (captureStderr) {
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk;
+      });
+    }
     child.on('error', reject);
     child.on('close', (code) => {
-      if (code === 0) resolve();
+      if (code === 0) resolve(stderr);
       else reject(new Error(`ffmpeg exited with ${code}`));
     });
   });
