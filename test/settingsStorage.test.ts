@@ -44,7 +44,7 @@ describe('settings storage', () => {
     expect(settings.tts.model).toBeUndefined();
     expect(settings.tts.voice).toBeUndefined();
     expect(settings.stt).toEqual({});
-    expect(settings.music).toEqual({ muted: false, effects: true, volume: 0.5, disabledTracks: [] });
+    expect(settings.music).toEqual({ muted: false, effects: true, volumeLevel: 'medium', disabledTracks: [] });
   });
 
   it('ignores legacy global TTS, STT, and voice settings for a host-scoped load', async () => {
@@ -64,7 +64,7 @@ describe('settings storage', () => {
       voice: '',
       tts: {},
       stt: {},
-      music: { muted: false, effects: true, volume: 0.5, disabledTracks: [] },
+      music: { muted: false, effects: true, volumeLevel: 'medium', disabledTracks: [] },
       format: 'txt',
       timestamps: true,
     });
@@ -86,7 +86,7 @@ describe('settings storage', () => {
       voice: '',
       tts: {},
       stt: {},
-      music: { muted: false, effects: true, volume: 0.5, disabledTracks: [] },
+      music: { muted: false, effects: true, volumeLevel: 'medium', disabledTracks: [] },
       format: 'json',
       timestamps: false,
     });
@@ -118,7 +118,7 @@ describe('settings storage', () => {
       voice: 'nova',
       tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' },
       stt: { providerId: 'xai', model: 'grok-stt' },
-      music: { muted: false, effects: true, volume: 0.5, disabledTracks: [] },
+      music: { muted: false, effects: true, volumeLevel: 'medium', disabledTracks: [] },
       format: 'txt',
       timestamps: true,
     });
@@ -126,7 +126,7 @@ describe('settings storage', () => {
       voice: '',
       tts: {},
       stt: {},
-      music: { muted: false, effects: true, volume: 0.5, disabledTracks: [] },
+      music: { muted: false, effects: true, volumeLevel: 'medium', disabledTracks: [] },
       format: 'txt',
       timestamps: true,
     });
@@ -314,27 +314,40 @@ describe('settings storage', () => {
     localStorage.setItem('clawkie.holdMusic.muted.v1', '1');
     const { loadSettings, loadMusicSettings } = await import('../client/src/storage');
 
-    expect(loadMusicSettings()).toEqual({ muted: true, effects: true, volume: 0.5, disabledTracks: [] });
-    expect(loadSettings('host-1').music).toEqual({ muted: true, effects: true, volume: 0.5, disabledTracks: [] });
+    expect(loadMusicSettings()).toEqual({ muted: true, effects: true, volumeLevel: 'medium', disabledTracks: [] });
+    expect(loadSettings('host-1').music).toEqual({ muted: true, effects: true, volumeLevel: 'medium', disabledTracks: [] });
   });
 
 
-  it('normalizes hold music volume globally and clamps persisted values', async () => {
+  it('normalizes hold music volume level globally and maps legacy numeric values', async () => {
     localStorage.setItem(
       'clawkie.settings.v1',
-      JSON.stringify({ music: { muted: false, effects: true, volume: 2, disabledTracks: [] } }),
+      JSON.stringify({ music: { muted: false, effects: true, volume: 0.2, disabledTracks: [] } }),
     );
-    const { loadMusicSettings, saveMusicSettings } = await import('../client/src/storage');
+    const { loadSettings, loadMusicSettings, saveMusicSettings } = await import('../client/src/storage');
 
-    expect(loadMusicSettings()).toEqual({ muted: false, effects: true, volume: 1, disabledTracks: [] });
+    expect(loadMusicSettings()).toEqual({ muted: false, effects: true, volumeLevel: 'low', disabledTracks: [] });
 
-    saveMusicSettings({ muted: false, effects: true, volume: -0.5, disabledTracks: [] });
+    localStorage.setItem(
+      'clawkie.settings.v1',
+      JSON.stringify({ music: { muted: false, effects: true, volume: 0, disabledTracks: [] } }),
+    );
+    expect(loadMusicSettings()).toEqual({ muted: true, effects: true, volumeLevel: 'low', disabledTracks: [] });
+    expect(loadSettings('host-1').music).toEqual({ muted: true, effects: true, volumeLevel: 'low', disabledTracks: [] });
 
-    expect(loadMusicSettings()).toEqual({ muted: false, effects: true, volume: 0, disabledTracks: [] });
+    localStorage.setItem(
+      'clawkie.settings.v1',
+      JSON.stringify({ music: { muted: false, effects: true, volume: 0.7, disabledTracks: [] } }),
+    );
+    expect(loadMusicSettings()).toEqual({ muted: false, effects: true, volumeLevel: 'high', disabledTracks: [] });
+
+    saveMusicSettings({ muted: false, effects: true, volumeLevel: 'low', disabledTracks: [] });
+
+    expect(loadMusicSettings()).toEqual({ muted: false, effects: true, volumeLevel: 'low', disabledTracks: [] });
     expect(JSON.parse(localStorage.getItem('clawkie.settings.v1') as string).music).toEqual({
       muted: false,
       effects: true,
-      volume: 0,
+      volumeLevel: 'low',
       disabledTracks: [],
     });
   });
@@ -347,7 +360,7 @@ describe('settings storage', () => {
       music: {
         muted: true,
         effects: false,
-        volume: 1,
+        volumeLevel: 'high',
         disabledTracks: [' Soft Hold Tone.mp3 ', '', 'Soft Hold Tone.mp3', 'Dockside Hold.mp3'],
       },
     }, 'host-1');
@@ -356,14 +369,14 @@ describe('settings storage', () => {
     expect(parsed.music).toEqual({
       muted: true,
       effects: false,
-      volume: 1,
+      volumeLevel: 'high',
       disabledTracks: ['Soft Hold Tone.mp3', 'Dockside Hold.mp3'],
     });
     expect(localStorage.getItem('clawkie.holdMusic.muted.v1')).toBe('1');
     expect(loadSettings('host-2').music).toEqual({
       muted: true,
       effects: false,
-      volume: 1,
+      volumeLevel: 'high',
       disabledTracks: ['Soft Hold Tone.mp3', 'Dockside Hold.mp3'],
     });
   });
@@ -372,13 +385,13 @@ describe('settings storage', () => {
     localStorage.setItem('clawkie.holdMusic.muted.v1', '1');
     localStorage.setItem(
       'clawkie.settings.v1',
-      JSON.stringify({ music: { muted: true, effects: false, volume: 1, disabledTracks: ['Soft Hold Tone.mp3'] } }),
+      JSON.stringify({ music: { muted: true, effects: false, volumeLevel: 'high', disabledTracks: ['Soft Hold Tone.mp3'] } }),
     );
     const { saveMusicSettings, loadMusicSettings } = await import('../client/src/storage');
 
-    saveMusicSettings({ muted: false, effects: true, volume: 0.5, disabledTracks: [] });
+    saveMusicSettings({ muted: false, effects: true, volumeLevel: 'medium', disabledTracks: [] });
 
-    expect(loadMusicSettings()).toEqual({ muted: false, effects: true, volume: 0.5, disabledTracks: [] });
+    expect(loadMusicSettings()).toEqual({ muted: false, effects: true, volumeLevel: 'medium', disabledTracks: [] });
     expect(localStorage.getItem('clawkie.holdMusic.muted.v1')).toBeNull();
     expect(JSON.parse(localStorage.getItem('clawkie.settings.v1') as string).music).toBeUndefined();
   });

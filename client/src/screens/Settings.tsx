@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { HIFI } from '../tokens';
 import { ScreenHeader, ScrollBody } from '../components/ScreenChrome';
-import { DEFAULT_MUSIC_SETTINGS, type MusicSettings, type Settings } from '../storage';
+import { DEFAULT_MUSIC_SETTINGS, type MusicSettings, type MusicVolumeLevel, type Settings } from '../storage';
 import { HoldMusicController, setHoldMusicSettings, subscribeHoldMusicMuted } from '../voice/holdMusic';
 import { getHoldMusicTrackOptions, type HoldMusicTrackOption } from '../voice/holdMusicCatalog';
 import type { SttCatalog, SttSelection, TtsCatalog, TtsSelection } from '../voice/protocol';
@@ -300,11 +300,16 @@ export function SettingsScreen({
             value={musicSettings.effects}
             setValue={(effects) => updateMusicSettings({ ...musicSettings, effects })}
           />
-          <SliderRow
-            label="Hold music volume"
-            sub={`${Math.round(musicSettings.volume * 100)}%`}
-            value={musicSettings.volume}
-            setValue={(volume) => updateMusicSettings({ ...musicSettings, volume })}
+          <SegmentedRow<MusicVolumeLevel>
+            label="Hold music level"
+            value={musicSettings.volumeLevel}
+            setValue={(volumeLevel) => updateMusicSettings({ ...musicSettings, volumeLevel })}
+            options={[
+              { id: 'low', label: 'Low' },
+              { id: 'medium', label: 'Medium' },
+              { id: 'high', label: 'High' },
+            ]}
+            compact={compact}
           />
           <ButtonRow
             label="Hold music test"
@@ -443,8 +448,8 @@ export function withMusicEffects(settings: Settings, effects: boolean): Settings
   return withMusicSettings(settings, { ...normalizeScreenMusicSettings(settings.music), effects });
 }
 
-export function withMusicVolume(settings: Settings, volume: number): Settings {
-  return withMusicSettings(settings, { ...normalizeScreenMusicSettings(settings.music), volume });
+export function withMusicVolumeLevel(settings: Settings, volumeLevel: MusicVolumeLevel): Settings {
+  return withMusicSettings(settings, { ...normalizeScreenMusicSettings(settings.music), volumeLevel });
 }
 
 export function withMusicTrackEnabled(
@@ -471,17 +476,32 @@ export function musicSettingsWithTrackEnabled(
 }
 
 function normalizeScreenMusicSettings(value: Partial<MusicSettings> | undefined): MusicSettings {
+  const legacyVolume = (value as { volume?: unknown } | undefined)?.volume;
   return {
-    muted: typeof value?.muted === 'boolean' ? value.muted : DEFAULT_MUSIC_SETTINGS.muted,
+    muted: isSilentLegacyScreenMusicVolume(legacyVolume)
+      ? true
+      : typeof value?.muted === 'boolean'
+        ? value.muted
+        : DEFAULT_MUSIC_SETTINGS.muted,
     effects: typeof value?.effects === 'boolean' ? value.effects : DEFAULT_MUSIC_SETTINGS.effects,
-    volume: normalizeScreenMusicVolume(value?.volume),
+    volumeLevel: normalizeScreenMusicVolumeLevel(value?.volumeLevel, legacyVolume),
     disabledTracks: Array.isArray(value?.disabledTracks) ? [...value.disabledTracks] : [],
   };
 }
 
-function normalizeScreenMusicVolume(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_MUSIC_SETTINGS.volume;
-  return Math.min(1, Math.max(0, value));
+function normalizeScreenMusicVolumeLevel(value: unknown, legacyVolume: unknown): MusicVolumeLevel {
+  if (isSilentLegacyScreenMusicVolume(legacyVolume)) return 'low';
+  if (value === 'low' || value === 'medium' || value === 'high') return value;
+  if (typeof legacyVolume === 'number' && Number.isFinite(legacyVolume)) {
+    const clamped = Math.min(1, Math.max(0, legacyVolume));
+    if (clamped <= 0.33) return 'low';
+    if (clamped >= 0.67) return 'high';
+  }
+  return DEFAULT_MUSIC_SETTINGS.volumeLevel;
+}
+
+function isSilentLegacyScreenMusicVolume(value: unknown): boolean {
+  return typeof value === 'number' && Number.isFinite(value) && value <= 0;
 }
 
 export function isDefaultTtsSelection(selection: TtsSelection): boolean {
@@ -786,68 +806,6 @@ function ToggleRow({
   );
 }
 
-
-function SliderRow({
-  label,
-  sub,
-  value,
-  setValue,
-}: {
-  label: string;
-  sub: string;
-  value: number;
-  setValue: (v: number) => void;
-}) {
-  return (
-    <div style={{ padding: '13px 14px', borderBottom: `1px solid ${HIFI.stroke}` }}>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'baseline',
-          gap: 12,
-          marginBottom: 10,
-        }}
-      >
-        <label
-          htmlFor="hold-music-volume"
-          style={{ fontSize: 13, color: HIFI.ink, fontFamily: HIFI.fonts.sans }}
-        >
-          {label}
-        </label>
-        <div
-          aria-hidden="true"
-          style={{
-            fontFamily: HIFI.fonts.mono,
-            fontSize: 10,
-            letterSpacing: 1,
-            color: HIFI.ink3,
-            fontWeight: 700,
-          }}
-        >
-          {sub}
-        </div>
-      </div>
-      <input
-        id="hold-music-volume"
-        type="range"
-        min="0"
-        max="1"
-        step="0.01"
-        value={value}
-        aria-label={label}
-        aria-valuetext={sub}
-        onChange={(e) => setValue(Number(e.currentTarget.value))}
-        style={{
-          width: '100%',
-          minHeight: 44,
-          accentColor: '#ff9e3b',
-          cursor: 'pointer',
-        }}
-      />
-    </div>
-  );
-}
 
 function ButtonRow({
   label,

@@ -181,7 +181,7 @@ That starts the daemon and the Vite client.
 
 ### Regenerate baked hold music
 
-The browser plays hold music from plain media elements so it can survive mobile PWA backgrounding better than a WebAudio-only effects graph. Raw/master MP3s live outside Vite's public directory in `assets/hold-music-raw`; processed tracks with stable public filenames are generated into `client/public/music`, and separate static layers are generated into `client/public/music-layers`.
+The browser plays hold music from plain media elements so it can survive mobile PWA backgrounding better than a WebAudio-only effects graph. Raw/master MP3s live outside Vite's public directory in `assets/hold-music-raw`; processed tracks with stable public filenames are generated into baked Low/Medium/High directories (`client/public/music-low`, `client/public/music`, `client/public/music-high`) plus matching original/effects-layer directories (`music-original*`, `music-layers*`). The runtime picks a discrete level by URL instead of changing media-element or WebAudio gain volume.
 
 After changing a raw track or the processing chain, regenerate with:
 

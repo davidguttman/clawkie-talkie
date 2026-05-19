@@ -7,16 +7,23 @@ import { spawn } from 'node:child_process';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
 const rawDir = path.join(repoRoot, 'assets/hold-music-raw');
+const musicLowDir = path.join(repoRoot, 'client/public/music-low');
 const musicDir = path.join(repoRoot, 'client/public/music');
+const musicHighDir = path.join(repoRoot, 'client/public/music-high');
+const originalMusicLowDir = path.join(repoRoot, 'client/public/music-original-low');
 const originalMusicDir = path.join(repoRoot, 'client/public/music-original');
+const originalMusicHighDir = path.join(repoRoot, 'client/public/music-original-high');
+const layerLowDir = path.join(repoRoot, 'client/public/music-layers-low');
 const layerDir = path.join(repoRoot, 'client/public/music-layers');
+const layerHighDir = path.join(repoRoot, 'client/public/music-layers-high');
 const tempDir = path.join(repoRoot, '.vite/hold-music-regen');
 
 // Keep this chain matched to the original runtime WebAudio graph from
 // client/src/voice/holdMusic.ts before the tracks were baked:
 // highpass -> AudioWorklet bitcrusher -> lowpass -> mid peak -> WaveShaper
-// saturation -> DynamicsCompressor -> wobble GainNode. MUSIC_GAIN remains a
-// runtime playback volume and is intentionally not baked into these files.
+// saturation -> DynamicsCompressor -> wobble GainNode. Playback loudness is
+// baked into low/medium/high output files so
+// iOS PWA lock-screen playback stays on plain media elements at unity volume.
 const MUSIC_HIGHPASS_HZ = 300;
 const MUSIC_HIGHPASS_Q = 0.8;
 const BITCRUSHER_BITS = 8;
@@ -39,6 +46,11 @@ const CRACKLE_LAYER_GAIN_DB = -10;
 const MUSIC_LOUDNESS_TARGET_LUFS = -23;
 const MUSIC_LOUDNESS_RANGE_LU = 11;
 const MUSIC_LOUDNESS_TRUE_PEAK_DBTP = -2;
+const HOLD_MUSIC_VOLUME_LEVELS = [
+  { id: 'low', suffix: '-low', scalar: 0.25, musicDir: musicLowDir, originalMusicDir: originalMusicLowDir, layerDir: layerLowDir },
+  { id: 'medium', suffix: '', scalar: 0.5, musicDir, originalMusicDir, layerDir },
+  { id: 'high', suffix: '-high', scalar: 1, musicDir: musicHighDir, originalMusicDir: originalMusicHighDir, layerDir: layerHighDir },
+];
 
 const bitcrusherSampleHold = 1 / BITCRUSHER_NORM_FREQ;
 const compressorThreshold = dbToLinear(MUSIC_COMPRESSOR_THRESHOLD_DB);
@@ -96,6 +108,11 @@ function dbToLinear(db) {
   return 10 ** (db / 20);
 }
 
+function linearToDb(value) {
+  if (!Number.isFinite(value) || value <= 0) throw new Error(`Invalid linear gain: ${value}`);
+  return 20 * Math.log10(value);
+}
+
 function createAmifySaturationExpression(drive, channel) {
   const amount = Math.max(0, drive) * 100;
   const scale = (3 + amount) * 20 * Math.PI / 180;
@@ -128,7 +145,7 @@ function createMusicLoudnessMeasureFilter(preNormalizeFilter) {
   ].filter(Boolean).join(',');
 }
 
-function createMusicEncodeFilter(loudnessStats, preNormalizeFilter) {
+function createMusicEncodeFilter(loudnessStats, preNormalizeFilter, playbackScalar = 1) {
   return [
     preNormalizeFilter,
     [
@@ -142,7 +159,15 @@ function createMusicEncodeFilter(loudnessStats, preNormalizeFilter) {
       `offset=${loudnessStats.target_offset}`,
       'linear=true',
     ].join(':'),
+    playbackScalar === 1 ? null : `volume=${linearToDb(playbackScalar)}dB`,
     musicFormatFilter,
+  ].filter(Boolean).join(',');
+}
+
+function createLayerEncodeFilter(baseFilter, playbackScalar) {
+  return [
+    baseFilter,
+    playbackScalar === 1 ? null : `volume=${linearToDb(playbackScalar)}dB`,
   ].filter(Boolean).join(',');
 }
 
@@ -163,9 +188,11 @@ function requireFiniteLoudnormValue(value, field, input) {
 }
 
 async function main() {
-  await mkdir(musicDir, { recursive: true });
-  await mkdir(originalMusicDir, { recursive: true });
-  await mkdir(layerDir, { recursive: true });
+  for (const level of HOLD_MUSIC_VOLUME_LEVELS) {
+    await mkdir(level.musicDir, { recursive: true });
+    await mkdir(level.originalMusicDir, { recursive: true });
+    await mkdir(level.layerDir, { recursive: true });
+  }
   await rm(tempDir, { recursive: true, force: true });
   await mkdir(tempDir, { recursive: true });
 
@@ -178,39 +205,44 @@ async function main() {
     throw new Error(`No raw MP3 files found in ${path.relative(repoRoot, rawDir)}`);
   }
 
-  await removeStaleGeneratedTracks(musicDir, rawTracks);
-  await removeStaleGeneratedTracks(originalMusicDir, rawTracks);
+  for (const level of HOLD_MUSIC_VOLUME_LEVELS) {
+    await removeStaleGeneratedTracks(level.musicDir, rawTracks);
+    await removeStaleGeneratedTracks(level.originalMusicDir, rawTracks);
+  }
 
   for (const track of rawTracks) {
     const input = path.join(rawDir, track);
 
-    const originalOutput = path.join(originalMusicDir, track);
-    console.log(`processing ${path.relative(repoRoot, originalOutput)}`);
     const originalLoudnessStats = await measureMusicLoudness(input, null);
-    await ffmpeg([
-      '-y',
-      '-i', input,
-      '-map_metadata', '0',
-      '-vn',
-      '-af', createMusicEncodeFilter(originalLoudnessStats, null),
-      '-codec:a', 'libmp3lame',
-      '-q:a', '3',
-      originalOutput,
-    ]);
-
-    const output = path.join(musicDir, track);
-    console.log(`processing ${path.relative(repoRoot, output)}`);
     const loudnessStats = await measureMusicLoudness(input, processedMusicPreNormalizeFilter);
-    await ffmpeg([
-      '-y',
-      '-i', input,
-      '-map_metadata', '0',
-      '-vn',
-      '-af', createMusicEncodeFilter(loudnessStats, processedMusicPreNormalizeFilter),
-      '-codec:a', 'libmp3lame',
-      '-q:a', '3',
-      output,
-    ]);
+
+    for (const level of HOLD_MUSIC_VOLUME_LEVELS) {
+      const originalOutput = path.join(level.originalMusicDir, track);
+      console.log(`processing ${path.relative(repoRoot, originalOutput)}`);
+      await ffmpeg([
+        '-y',
+        '-i', input,
+        '-map_metadata', '0',
+        '-vn',
+        '-af', createMusicEncodeFilter(originalLoudnessStats, null, level.scalar),
+        '-codec:a', 'libmp3lame',
+        '-q:a', '3',
+        originalOutput,
+      ]);
+
+      const output = path.join(level.musicDir, track);
+      console.log(`processing ${path.relative(repoRoot, output)}`);
+      await ffmpeg([
+        '-y',
+        '-i', input,
+        '-map_metadata', '0',
+        '-vn',
+        '-af', createMusicEncodeFilter(loudnessStats, processedMusicPreNormalizeFilter, level.scalar),
+        '-codec:a', 'libmp3lame',
+        '-q:a', '3',
+        output,
+      ]);
+    }
   }
 
   const hissWav = path.join(tempDir, 'hiss.wav');
@@ -218,25 +250,27 @@ async function main() {
   await writeFile(hissWav, createHissWav());
   await writeFile(crackleWav, createCrackleWav());
 
-  console.log(`processing ${path.relative(repoRoot, path.join(layerDir, 'hiss.mp3'))}`);
-  await ffmpeg([
-    '-y',
-    '-i', hissWav,
-    '-af', hissFilter,
-    '-codec:a', 'libmp3lame',
-    '-q:a', '5',
-    path.join(layerDir, 'hiss.mp3'),
-  ]);
+  for (const level of HOLD_MUSIC_VOLUME_LEVELS) {
+    console.log(`processing ${path.relative(repoRoot, path.join(level.layerDir, 'hiss.mp3'))}`);
+    await ffmpeg([
+      '-y',
+      '-i', hissWav,
+      '-af', createLayerEncodeFilter(hissFilter, level.scalar),
+      '-codec:a', 'libmp3lame',
+      '-q:a', '5',
+      path.join(level.layerDir, 'hiss.mp3'),
+    ]);
 
-  console.log(`processing ${path.relative(repoRoot, path.join(layerDir, 'crackle.mp3'))}`);
-  await ffmpeg([
-    '-y',
-    '-i', crackleWav,
-    '-af', crackleFilter,
-    '-codec:a', 'libmp3lame',
-    '-q:a', '5',
-    path.join(layerDir, 'crackle.mp3'),
-  ]);
+    console.log(`processing ${path.relative(repoRoot, path.join(level.layerDir, 'crackle.mp3'))}`);
+    await ffmpeg([
+      '-y',
+      '-i', crackleWav,
+      '-af', createLayerEncodeFilter(crackleFilter, level.scalar),
+      '-codec:a', 'libmp3lame',
+      '-q:a', '5',
+      path.join(level.layerDir, 'crackle.mp3'),
+    ]);
+  }
 
   await rm(tempDir, { recursive: true, force: true });
   console.log('hold music regenerated');

@@ -1,4 +1,5 @@
 import { HOLD_MUSIC_TRACKS } from 'virtual:hold-music-tracks';
+import type { MusicVolumeLevel } from '../storage';
 
 export interface HoldMusicTrackOption {
   id: string;
@@ -24,14 +25,34 @@ export function holdMusicTrackLabel(track: string): string {
   return track.replace(/\.[^.]+$/, '');
 }
 
-export function holdMusicTrackUrl(track: string, effects: boolean): string {
-  return effects ? processedHoldMusicTrackUrl(track) : originalHoldMusicTrackUrl(track);
+export function holdMusicTrackUrl(
+  track: string,
+  effects: boolean,
+  volumeLevel: MusicVolumeLevel = 'medium',
+): string {
+  return effects ? processedHoldMusicTrackUrl(track, volumeLevel) : originalHoldMusicTrackUrl(track, volumeLevel);
 }
 
-export function processedHoldMusicTrackUrl(track: string): string {
-  return `/music/${encodeURIComponent(track)}`;
+export function processedHoldMusicTrackUrl(
+  track: string,
+  volumeLevel: MusicVolumeLevel = 'medium',
+): string {
+  return `/music${holdMusicVolumeLevelPathSuffix(volumeLevel)}/${encodeURIComponent(track)}`;
 }
 
-export function originalHoldMusicTrackUrl(track: string): string {
-  return `/music-original/${encodeURIComponent(track)}`;
+export function originalHoldMusicTrackUrl(
+  track: string,
+  volumeLevel: MusicVolumeLevel = 'medium',
+): string {
+  return `/music-original${holdMusicVolumeLevelPathSuffix(volumeLevel)}/${encodeURIComponent(track)}`;
+}
+
+export function holdMusicLayerUrl(layer: string, volumeLevel: MusicVolumeLevel = 'medium'): string {
+  return `/music-layers${holdMusicVolumeLevelPathSuffix(volumeLevel)}/${encodeURIComponent(layer)}`;
+}
+
+function holdMusicVolumeLevelPathSuffix(volumeLevel: MusicVolumeLevel): string {
+  if (volumeLevel === 'low') return '-low';
+  if (volumeLevel === 'high') return '-high';
+  return '';
 }

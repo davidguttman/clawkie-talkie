@@ -29,6 +29,7 @@ export const VOICE_LABELS: Record<VoiceId, string> = {
 };
 
 export type ExportFormat = 'md' | 'txt' | 'json';
+export type MusicVolumeLevel = 'low' | 'medium' | 'high';
 
 export interface ExportSettings {
   format: ExportFormat;
@@ -38,7 +39,7 @@ export interface ExportSettings {
 export interface MusicSettings {
   muted: boolean;
   effects: boolean;
-  volume: number;
+  volumeLevel: MusicVolumeLevel;
   disabledTracks: string[];
 }
 
@@ -72,7 +73,7 @@ export const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
 export const DEFAULT_MUSIC_SETTINGS: MusicSettings = {
   muted: false,
   effects: true,
-  volume: 0.5,
+  volumeLevel: 'medium',
   disabledTracks: [],
 };
 
@@ -314,29 +315,45 @@ function normalizeExportSettings(value: unknown): ExportSettings {
 
 function normalizeMusicSettings(value: unknown): MusicSettings {
   const source = objectRecord(objectRecord(value).music ?? value);
-  const muted = typeof source.muted === 'boolean'
-    ? source.muted
-    : readLegacyHoldMusicMuted();
+  const legacyVolume = source.volume;
+  const muted = isSilentLegacyMusicVolume(legacyVolume)
+    ? true
+    : typeof source.muted === 'boolean'
+      ? source.muted
+      : readLegacyHoldMusicMuted();
   const effects = typeof source.effects === 'boolean'
     ? source.effects
     : DEFAULT_MUSIC_SETTINGS.effects;
-  const volume = normalizeMusicVolume(source.volume);
+  const volumeLevel = normalizeMusicVolumeLevel(source.volumeLevel, legacyVolume);
   const disabledTracks = Array.isArray(source.disabledTracks)
     ? uniqueStrings(source.disabledTracks)
     : DEFAULT_MUSIC_SETTINGS.disabledTracks;
-  return { muted, effects, volume, disabledTracks };
+  return { muted, effects, volumeLevel, disabledTracks };
 }
 
 function isDefaultMusicSettings(settings: MusicSettings): boolean {
   return settings.muted === DEFAULT_MUSIC_SETTINGS.muted
     && settings.effects === DEFAULT_MUSIC_SETTINGS.effects
-    && settings.volume === DEFAULT_MUSIC_SETTINGS.volume
+    && settings.volumeLevel === DEFAULT_MUSIC_SETTINGS.volumeLevel
     && settings.disabledTracks.length === 0;
 }
 
-function normalizeMusicVolume(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_MUSIC_SETTINGS.volume;
-  return Math.min(1, Math.max(0, value));
+function normalizeMusicVolumeLevel(value: unknown, legacyVolume: unknown): MusicVolumeLevel {
+  if (isSilentLegacyMusicVolume(legacyVolume)) return 'low';
+  if (value === 'low' || value === 'medium' || value === 'high') return value;
+  return legacyMusicVolumeToLevel(legacyVolume);
+}
+
+function isSilentLegacyMusicVolume(value: unknown): boolean {
+  return typeof value === 'number' && Number.isFinite(value) && value <= 0;
+}
+
+function legacyMusicVolumeToLevel(value: unknown): MusicVolumeLevel {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_MUSIC_SETTINGS.volumeLevel;
+  const clamped = Math.min(1, Math.max(0, value));
+  if (clamped <= 0.33) return 'low';
+  if (clamped >= 0.67) return 'high';
+  return 'medium';
 }
 
 function uniqueStrings(values: unknown[]): string[] {

@@ -152,9 +152,15 @@ describe('hold music selection', () => {
     expect(pickHoldMusicUrl(() => 0, {
       muted: false,
       effects: false,
-      volume: 1,
+      volumeLevel: 'high',
       disabledTracks: [],
-    })).toBe('/music-original/Dial%20Tone%20Reverie.mp3');
+    })).toBe('/music-original-high/Dial%20Tone%20Reverie.mp3');
+    expect(pickHoldMusicUrl(() => 0, {
+      muted: false,
+      effects: true,
+      volumeLevel: 'low',
+      disabledTracks: [],
+    })).toBe('/music-low/Dial%20Tone%20Reverie.mp3');
   });
 
 
@@ -166,13 +172,13 @@ describe('hold music selection', () => {
     expect(pickHoldMusicUrl(() => 0, {
       muted: false,
       effects: true,
-      volume: 1,
+      volumeLevel: 'high',
       disabledTracks: [tracks[0]],
-    })).toBe('/music/Dockside%20Hold.mp3');
+    })).toBe('/music-high/Dockside%20Hold.mp3');
     expect(pickHoldMusicUrl(() => 0.999, {
       muted: false,
       effects: true,
-      volume: 1,
+      volumeLevel: 'high',
       disabledTracks: [...tracks],
     })).toBe('');
   });
@@ -232,8 +238,8 @@ describe('HoldMusicController', () => {
 
     expect(FakeAudioElement.instances).toHaveLength(2);
     const [processedAudio, originalAudio] = FakeAudioElement.instances;
-    expect(processedAudio.src).toMatch(/^\/music\/.+\.mp3$/);
-    expect(originalAudio.src).toBe(processedAudio.src.replace('/music/', '/music-original/'));
+    expect(processedAudio.src).toMatch(/^\/music(?:-[^/]+)?\/.+\.mp3$/);
+    expect(originalAudio.src).toBe(processedAudio.src.replace(/^\/music/, '/music-original'));
     for (const audio of [processedAudio, originalAudio]) {
       expect(audio.preload).toBe('auto');
       expect(audio.load).toHaveBeenCalledTimes(1);
@@ -250,21 +256,23 @@ describe('HoldMusicController', () => {
 
     expect(FakeAudioElement.instances).toHaveLength(4);
     expect(FakeAudioContext.instances).toHaveLength(0);
-    expect(originalMusic.src).toBe(processedMusic.src.replace('/music/', '/music-original/'));
+    expect(originalMusic.src).toBe(processedMusic.src.replace(/^\/music/, '/music-original'));
     expect(processedMusic.loop).toBe(true);
     expect(originalMusic.loop).toBe(true);
     expect(processedMusic.preload).toBe('auto');
     expect(originalMusic.preload).toBe('auto');
-    expect(processedMusic.volume).toBeCloseTo(0.5);
+    expect(processedMusic.volume).toBe(1);
     expect(processedMusic.muted).toBe(false);
-    expect(originalMusic.volume).toBe(0);
+    expect(originalMusic.volume).toBe(1);
     expect(originalMusic.muted).toBe(true);
     expect(FakeAudioElement.instances[2].src).toBe('/music-layers/hiss.mp3');
     expect(FakeAudioElement.instances[2].loop).toBe(true);
-    expect(FakeAudioElement.instances[2].volume).toBeCloseTo(0.001125);
+    expect(FakeAudioElement.instances[2].volume).toBe(1);
+    expect(FakeAudioElement.instances[2].muted).toBe(false);
     expect(FakeAudioElement.instances[3].src).toBe('/music-layers/crackle.mp3');
     expect(FakeAudioElement.instances[3].loop).toBe(true);
-    expect(FakeAudioElement.instances[3].volume).toBeCloseTo(0.001625);
+    expect(FakeAudioElement.instances[3].volume).toBe(1);
+    expect(FakeAudioElement.instances[3].muted).toBe(false);
     expect(processedMusic.play).not.toHaveBeenCalled();
     expect(originalMusic.play).not.toHaveBeenCalled();
 
@@ -348,7 +356,7 @@ describe('HoldMusicController', () => {
       music: {
         muted: false,
         effects: true,
-        volume: 1,
+        volumeLevel: 'high',
         disabledTracks: [
           'Dial Tone Reverie.mp3',
           'Dockside Hold.mp3',
@@ -378,7 +386,7 @@ describe('HoldMusicController', () => {
   it('starts with original music audible and processed music plus static layers muted when audio effects are disabled', async () => {
     const storage = new Map<string, string>([[
       'clawkie.settings.v1',
-      JSON.stringify({ music: { muted: false, effects: false, volume: 1, disabledTracks: [] } }),
+      JSON.stringify({ music: { muted: false, effects: false, volumeLevel: 'high', disabledTracks: [] } }),
     ]]);
     vi.stubGlobal('localStorage', {
       getItem: vi.fn((key: string) => storage.get(key) ?? null),
@@ -393,17 +401,17 @@ describe('HoldMusicController', () => {
     controller.start();
 
     expect(FakeAudioElement.instances).toHaveLength(4);
-    expect(processedMusic.src).toMatch(/^\/music\/.+\.mp3$/);
-    expect(originalMusic.src).toBe(processedMusic.src.replace('/music/', '/music-original/'));
-    expect(processedMusic.volume).toBe(0);
+    expect(processedMusic.src).toMatch(/^\/music(?:-[^/]+)?\/.+\.mp3$/);
+    expect(originalMusic.src).toBe(processedMusic.src.replace(/^\/music/, '/music-original'));
+    expect(processedMusic.volume).toBe(1);
     expect(processedMusic.muted).toBe(true);
-    expect(originalMusic.volume).toBeCloseTo(1);
+    expect(originalMusic.volume).toBe(1);
     expect(originalMusic.muted).toBe(false);
-    expect(FakeAudioElement.instances[2].src).toBe('/music-layers/hiss.mp3');
-    expect(FakeAudioElement.instances[2].volume).toBe(0);
+    expect(FakeAudioElement.instances[2].src).toBe('/music-layers-high/hiss.mp3');
+    expect(FakeAudioElement.instances[2].volume).toBe(1);
     expect(FakeAudioElement.instances[2].muted).toBe(true);
-    expect(FakeAudioElement.instances[3].src).toBe('/music-layers/crackle.mp3');
-    expect(FakeAudioElement.instances[3].volume).toBe(0);
+    expect(FakeAudioElement.instances[3].src).toBe('/music-layers-high/crackle.mp3');
+    expect(FakeAudioElement.instances[3].volume).toBe(1);
     expect(FakeAudioElement.instances[3].muted).toBe(true);
 
     processedMusic.duration = 100;
@@ -428,34 +436,34 @@ describe('HoldMusicController', () => {
     controller.start();
 
     const [processedMusic, originalMusic, hiss, crackle] = FakeAudioElement.instances;
-    expect(processedMusic.src).toMatch(/^\/music\/.+\.mp3$/);
-    expect(originalMusic.src).toBe(processedMusic.src.replace('/music/', '/music-original/'));
+    expect(processedMusic.src).toMatch(/^\/music(?:-[^/]+)?\/.+\.mp3$/);
+    expect(originalMusic.src).toBe(processedMusic.src.replace(/^\/music/, '/music-original'));
     expect(hiss.src).toBe('/music-layers/hiss.mp3');
     expect(crackle.src).toBe('/music-layers/crackle.mp3');
     processedMusic.duration = 100;
     originalMusic.duration = 100;
     processedMusic.dispatch('loadedmetadata');
 
-    setHoldMusicSettings({ muted: false, effects: false, volume: 1, disabledTracks: [] });
+    setHoldMusicSettings({ muted: false, effects: false, volumeLevel: 'medium', disabledTracks: [] });
 
     expect(FakeAudioElement.instances).toHaveLength(4);
     for (const audio of [processedMusic, originalMusic, hiss, crackle]) {
       expect(audio.pause).not.toHaveBeenCalled();
     }
-    expect(processedMusic.volume).toBe(0);
+    expect(processedMusic.volume).toBe(1);
     expect(processedMusic.muted).toBe(true);
-    expect(originalMusic.volume).toBeCloseTo(1);
+    expect(originalMusic.volume).toBe(1);
     expect(originalMusic.muted).toBe(false);
-    expect(hiss.volume).toBe(0);
+    expect(hiss.volume).toBe(1);
     expect(hiss.muted).toBe(true);
-    expect(crackle.volume).toBe(0);
+    expect(crackle.volume).toBe(1);
     expect(crackle.muted).toBe(true);
     expect(processedMusic.play).toHaveBeenCalledTimes(1);
     expect(originalMusic.play).toHaveBeenCalledTimes(1);
   });
 
 
-  it('applies hold music volume changes to Web Audio gain live without replacing media or analyser playback', async () => {
+  it('restarts with baked audio paths for volume level changes without Web Audio output gain routes', async () => {
     const storage = new Map<string, string>();
     vi.stubGlobal('localStorage', {
       getItem: vi.fn((key: string) => storage.get(key) ?? null),
@@ -475,31 +483,21 @@ describe('HoldMusicController', () => {
     processedMusic.dispatch('loadedmetadata');
 
     const ctx = FakeAudioContext.instances[0];
-    const initialAnalyser = ctx.analysers[0];
-    expect(ctx.gains).toHaveLength(4);
-    expect(ctx.gains[0].gain.value).toBeCloseTo(0.5);
-    expect(ctx.gains[1].gain.value).toBe(0);
-    expect(ctx.gains[2].gain.value).toBeCloseTo(0.001125);
-    expect(ctx.gains[3].gain.value).toBeCloseTo(0.001625);
+    expect(ctx.gains).toHaveLength(0);
     expect(ctx.analysers).toHaveLength(1);
     expect(FakeAudioElement.instances).toHaveLength(5);
 
-    setHoldMusicSettings({ muted: false, effects: true, volume: 1, disabledTracks: [] });
+    setHoldMusicSettings({ muted: false, effects: true, volumeLevel: 'high', disabledTracks: [] });
 
-    expect(FakeAudioElement.instances).toHaveLength(5);
-    expect(ctx.analysers).toHaveLength(1);
-    expect(ctx.analysers[0]).toBe(initialAnalyser);
     for (const audio of [processedMusic, originalMusic, hiss, crackle]) {
-      expect(audio.pause).not.toHaveBeenCalled();
+      expect(audio.pause).toHaveBeenCalled();
     }
-    expect(ctx.gains[0].gain.value).toBeCloseTo(1);
-    expect(ctx.gains[1].gain.value).toBe(0);
-    expect(ctx.gains[2].gain.value).toBeCloseTo(0.00225);
-    expect(ctx.gains[3].gain.value).toBeCloseTo(0.00325);
-    expect(processedMusic.volume).toBe(1);
-    expect(processedMusic.muted).toBe(false);
-    expect(originalMusic.volume).toBe(1);
-    expect(originalMusic.muted).toBe(true);
+    expect(FakeAudioElement.instances).toHaveLength(9);
+    expect(FakeAudioElement.instances[5].src).toMatch(/^\/music-high\/.+\.mp3$/);
+    expect(FakeAudioElement.instances[6].src).toBe(FakeAudioElement.instances[5].src.replace(/^\/music/, '/music-original'));
+    expect(FakeAudioElement.instances[7].src).toBe('/music-layers-high/hiss.mp3');
+    expect(FakeAudioElement.instances[8].src).toBe('/music-layers-high/crackle.mp3');
+    expect(ctx.gains).toHaveLength(0);
   });
 
   it('stops an active session when every song is disabled and resumes when songs return', async () => {
@@ -518,7 +516,7 @@ describe('HoldMusicController', () => {
     controller.start();
     const [processedMusic, originalMusic, hiss, crackle] = FakeAudioElement.instances;
 
-    setHoldMusicSettings({ muted: false, effects: true, volume: 1, disabledTracks: tracks });
+    setHoldMusicSettings({ muted: false, effects: true, volumeLevel: 'high', disabledTracks: tracks });
 
     expect(processedMusic.pause).toHaveBeenCalled();
     expect(originalMusic.pause).toHaveBeenCalled();
@@ -526,13 +524,13 @@ describe('HoldMusicController', () => {
     expect(crackle.pause).toHaveBeenCalled();
     expect(FakeAudioElement.instances).toHaveLength(4);
 
-    setHoldMusicSettings({ muted: false, effects: true, volume: 1, disabledTracks: [] });
+    setHoldMusicSettings({ muted: false, effects: true, volumeLevel: 'high', disabledTracks: [] });
 
     expect(FakeAudioElement.instances).toHaveLength(8);
-    expect(FakeAudioElement.instances[4].src).toMatch(/^\/music\/.+\.mp3$/);
-    expect(FakeAudioElement.instances[5].src).toBe(FakeAudioElement.instances[4].src.replace('/music/', '/music-original/'));
-    expect(FakeAudioElement.instances[6].src).toBe('/music-layers/hiss.mp3');
-    expect(FakeAudioElement.instances[7].src).toBe('/music-layers/crackle.mp3');
+    expect(FakeAudioElement.instances[4].src).toMatch(/^\/music(?:-[^/]+)?\/.+\.mp3$/);
+    expect(FakeAudioElement.instances[5].src).toBe(FakeAudioElement.instances[4].src.replace(/^\/music/, '/music-original'));
+    expect(FakeAudioElement.instances[6].src).toBe('/music-layers-high/hiss.mp3');
+    expect(FakeAudioElement.instances[7].src).toBe('/music-layers-high/crackle.mp3');
   });
 
   it('persists mute preference and applies it to the active music and static media layers', async () => {
@@ -555,20 +553,20 @@ describe('HoldMusicController', () => {
     expect(getHoldMusicMuted()).toBe(true);
     for (const audio of [processedMusic, originalMusic, hiss, crackle]) {
       expect(audio.muted).toBe(true);
-      expect(audio.volume).toBe(0);
+      expect(audio.volume).toBe(1);
     }
 
     setHoldMusicMuted(false);
 
     expect(storage.has('clawkie.holdMusic.muted.v1')).toBe(false);
     expect(processedMusic.muted).toBe(false);
-    expect(processedMusic.volume).toBeCloseTo(0.5);
+    expect(processedMusic.volume).toBe(1);
     expect(originalMusic.muted).toBe(true);
-    expect(originalMusic.volume).toBe(0);
+    expect(originalMusic.volume).toBe(1);
     expect(hiss.muted).toBe(false);
-    expect(hiss.volume).toBeCloseTo(0.001125);
+    expect(hiss.volume).toBe(1);
     expect(crackle.muted).toBe(false);
-    expect(crackle.volume).toBeCloseTo(0.001625);
+    expect(crackle.volume).toBe(1);
   });
 
   it('notifies mute subscribers for external mute changes', async () => {
@@ -590,7 +588,7 @@ describe('HoldMusicController', () => {
     expect(listener).toHaveBeenCalledWith(true);
   });
 
-  it('exposes a best-effort analyser while routing audible playback through Web Audio gain nodes', async () => {
+  it('exposes a best-effort analyser without routing audible playback through Web Audio gain nodes', async () => {
     vi.stubGlobal('window', { AudioContext: FakeAudioContext });
     vi.stubGlobal('Audio', FakeAudioElement);
     const { HoldMusicController, getActiveHoldMusicAnalyser } = await import(
@@ -609,14 +607,11 @@ describe('HoldMusicController', () => {
     music.dispatch('loadedmetadata');
 
     const ctx = FakeAudioContext.instances[0];
-    expect(ctx.gains).toHaveLength(4);
-    expect(ctx.mediaElementSources).toHaveLength(5);
-    expect(ctx.mediaElementSources[0].element).toBe(music);
-    expect(ctx.mediaElementSources[0].connect).toHaveBeenCalledWith(ctx.gains[0]);
-    expect(ctx.gains[0].connect).toHaveBeenCalledWith(ctx.destination);
+    expect(ctx.gains).toHaveLength(0);
+    expect(ctx.mediaElementSources).toHaveLength(1);
     expect(ctx.analysers).toHaveLength(1);
     const analyser = ctx.analysers[0];
-    const analyserSource = ctx.mediaElementSources[4];
+    const analyserSource = ctx.mediaElementSources[0];
     expect(analyser.fftSize).toBe(64);
     expect(analyser.smoothingTimeConstant).toBeCloseTo(0.1);
     expect(analyser.minDecibels).toBe(-90);
@@ -628,7 +623,6 @@ describe('HoldMusicController', () => {
 
     controller.stop();
 
-    expect(ctx.gains[0].disconnect).toHaveBeenCalled();
     expect(analyser.disconnect).toHaveBeenCalled();
     expect(getActiveHoldMusicAnalyser()).toBeNull();
   });
@@ -681,13 +675,12 @@ describe('HoldMusicController', () => {
     const analyserSource = ctx.mediaElementSources[ctx.mediaElementSources.length - 1];
     const analyser = ctx.analysers[0];
     const analyserAudio = analyserSource.element;
-    expect(ctx.gains).toHaveLength(4);
+    expect(ctx.gains).toHaveLength(0);
     expect(getActiveHoldMusicAnalyser()).toBe(analyser as unknown as AnalyserNode);
 
     setHoldMusicMuted(true);
 
     expect(music.muted).toBe(true);
-    expect(ctx.gains[0].gain.value).toBe(0);
     expect(originalMusic.muted).toBe(true);
     expect(FakeAudioElement.instances[2].muted).toBe(true);
     expect(FakeAudioElement.instances[3].muted).toBe(true);
@@ -701,7 +694,6 @@ describe('HoldMusicController', () => {
 
     expect(music.muted).toBe(false);
     expect(music.volume).toBe(1);
-    expect(ctx.gains[0].gain.value).toBeGreaterThan(0);
     expect(getActiveHoldMusicAnalyser()).toBe(analyser as unknown as AnalyserNode);
     expect(ctx.analysers).toHaveLength(1);
   });
