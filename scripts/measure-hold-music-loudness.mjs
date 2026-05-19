@@ -6,7 +6,10 @@ import path from 'node:path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
-const musicDir = path.join(repoRoot, 'client/public/music');
+const playbackDirs = [
+  { label: 'processed effects /music', dir: path.join(repoRoot, 'client/public/music') },
+  { label: 'original no-effects /music-original', dir: path.join(repoRoot, 'client/public/music-original') },
+];
 const targetLufs = Number(process.env.HOLD_MUSIC_TARGET_LUFS ?? -23);
 const maxSpreadLu = Number(process.env.HOLD_MUSIC_MAX_SPREAD_LU ?? 1.5);
 const maxTargetDeltaLu = Number(process.env.HOLD_MUSIC_MAX_TARGET_DELTA_LU ?? 0.5);
@@ -21,69 +24,83 @@ if (!Number.isFinite(maxTargetDeltaLu) || maxTargetDeltaLu < 0) {
   throw new Error(`Invalid HOLD_MUSIC_MAX_TARGET_DELTA_LU: ${process.env.HOLD_MUSIC_MAX_TARGET_DELTA_LU}`);
 }
 
-const tracks = (await readdir(musicDir, { withFileTypes: true }))
-  .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.mp3'))
-  .map((entry) => entry.name)
-  .sort((a, b) => a.localeCompare(b));
+const allFailures = [];
+let printedSection = false;
 
-if (tracks.length === 0) {
-  throw new Error(`No MP3 files found in ${path.relative(repoRoot, musicDir)}`);
+for (const playbackDir of playbackDirs) {
+  if (printedSection) console.log('');
+  printedSection = true;
+  const failures = await measurePlaybackDir(playbackDir);
+  allFailures.push(...failures);
 }
 
-const rows = [];
-for (const track of tracks) {
-  const file = path.join(musicDir, track);
-  const stats = await measureLoudness(file);
-  rows.push({ track, lufs: stats.input_i, truePeak: stats.input_tp, lra: stats.input_lra });
+if (allFailures.length > 0) {
+  throw new Error(allFailures.join('\n'));
 }
 
-const loudnessValues = rows.map((row) => row.lufs);
-const min = Math.min(...loudnessValues);
-const max = Math.max(...loudnessValues);
-const spread = max - min;
-const average = loudnessValues.reduce((sum, value) => sum + value, 0) / loudnessValues.length;
+async function measurePlaybackDir({ label, dir }) {
+  const tracks = (await readdir(dir, { withFileTypes: true }))
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.mp3'))
+    .map((entry) => entry.name)
+    .sort((a, b) => a.localeCompare(b));
 
-console.log(`Hold music loudness (${path.relative(repoRoot, musicDir)})`);
-console.log('LUFS     TP     LRA   Track');
-for (const row of rows) {
-  console.log(`${format(row.lufs)}  ${format(row.truePeak)}  ${format(row.lra)}  ${row.track}`);
-}
-console.log(
-  `average=${average.toFixed(2)} LUFS target=${targetLufs.toFixed(2)} LUFS `
-    + `targetDelta=${Math.abs(average - targetLufs).toFixed(2)} LU `
-    + `maxTargetDelta=${maxTargetDeltaLu.toFixed(2)} LU `
-    + `spread=${spread.toFixed(2)} LU maxSpread=${maxSpreadLu.toFixed(2)} LU`,
-);
+  if (tracks.length === 0) {
+    throw new Error(`No MP3 files found for ${label} in ${path.relative(repoRoot, dir)}`);
+  }
 
-const failures = [];
-if (spread > maxSpreadLu) {
-  failures.push(`Hold music loudness spread ${spread.toFixed(2)} LU exceeds ${maxSpreadLu.toFixed(2)} LU`);
-}
+  const rows = [];
+  for (const track of tracks) {
+    const file = path.join(dir, track);
+    const stats = await measureLoudness(file);
+    rows.push({ track, lufs: stats.input_i, truePeak: stats.input_tp, lra: stats.input_lra });
+  }
 
-const averageTargetDelta = Math.abs(average - targetLufs);
-if (averageTargetDelta > maxTargetDeltaLu) {
-  failures.push(
-    `Hold music average loudness ${average.toFixed(2)} LUFS is `
-      + `${averageTargetDelta.toFixed(2)} LU from target ${targetLufs.toFixed(2)} LUFS; `
-      + `max allowed delta is ${maxTargetDeltaLu.toFixed(2)} LU`,
+  const loudnessValues = rows.map((row) => row.lufs);
+  const min = Math.min(...loudnessValues);
+  const max = Math.max(...loudnessValues);
+  const spread = max - min;
+  const average = loudnessValues.reduce((sum, value) => sum + value, 0) / loudnessValues.length;
+
+  console.log(`Hold music loudness: ${label} (${path.relative(repoRoot, dir)})`);
+  console.log('LUFS     TP     LRA   Track');
+  for (const row of rows) {
+    console.log(`${format(row.lufs)}  ${format(row.truePeak)}  ${format(row.lra)}  ${row.track}`);
+  }
+  console.log(
+    `average=${average.toFixed(2)} LUFS target=${targetLufs.toFixed(2)} LUFS `
+      + `targetDelta=${Math.abs(average - targetLufs).toFixed(2)} LU `
+      + `maxTargetDelta=${maxTargetDeltaLu.toFixed(2)} LU `
+      + `spread=${spread.toFixed(2)} LU maxSpread=${maxSpreadLu.toFixed(2)} LU`,
   );
-}
 
-const offTargetTracks = rows
-  .map((row) => ({ ...row, targetDelta: Math.abs(row.lufs - targetLufs) }))
-  .filter((row) => row.targetDelta > maxTargetDeltaLu);
-if (offTargetTracks.length > 0) {
-  const trackDetails = offTargetTracks
-    .map((row) => `${row.track} (${row.lufs.toFixed(2)} LUFS, delta ${row.targetDelta.toFixed(2)} LU)`)
-    .join(', ');
-  failures.push(
-    `Hold music tracks outside target ${targetLufs.toFixed(2)} LUFS by more than `
-      + `${maxTargetDeltaLu.toFixed(2)} LU: ${trackDetails}`,
-  );
-}
+  const failures = [];
+  if (spread > maxSpreadLu) {
+    failures.push(`${label} loudness spread ${spread.toFixed(2)} LU exceeds ${maxSpreadLu.toFixed(2)} LU`);
+  }
 
-if (failures.length > 0) {
-  throw new Error(failures.join('\n'));
+  const averageTargetDelta = Math.abs(average - targetLufs);
+  if (averageTargetDelta > maxTargetDeltaLu) {
+    failures.push(
+      `${label} average loudness ${average.toFixed(2)} LUFS is `
+        + `${averageTargetDelta.toFixed(2)} LU from target ${targetLufs.toFixed(2)} LUFS; `
+        + `max allowed delta is ${maxTargetDeltaLu.toFixed(2)} LU`,
+    );
+  }
+
+  const offTargetTracks = rows
+    .map((row) => ({ ...row, targetDelta: Math.abs(row.lufs - targetLufs) }))
+    .filter((row) => row.targetDelta > maxTargetDeltaLu);
+  if (offTargetTracks.length > 0) {
+    const trackDetails = offTargetTracks
+      .map((row) => `${row.track} (${row.lufs.toFixed(2)} LUFS, delta ${row.targetDelta.toFixed(2)} LU)`)
+      .join(', ');
+    failures.push(
+      `${label} tracks outside target ${targetLufs.toFixed(2)} LUFS by more than `
+        + `${maxTargetDeltaLu.toFixed(2)} LU: ${trackDetails}`,
+    );
+  }
+
+  return failures;
 }
 
 function format(value) {

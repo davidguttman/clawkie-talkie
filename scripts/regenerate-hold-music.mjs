@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { copyFile, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -69,14 +69,9 @@ const musicFormatFilter = [
   'aformat=sample_fmts=s16p:channel_layouts=stereo',
 ].join(',');
 
-const musicPreNormalizeFilter = [
+const processedMusicPreNormalizeFilter = [
   musicEffectsFilter,
   musicFormatFilter,
-].join(',');
-
-const musicLoudnessMeasureFilter = [
-  musicPreNormalizeFilter,
-  `loudnorm=I=${MUSIC_LOUDNESS_TARGET_LUFS}:TP=${MUSIC_LOUDNESS_TRUE_PEAK_DBTP}:LRA=${MUSIC_LOUDNESS_RANGE_LU}:print_format=json`,
 ].join(',');
 
 const hissFilter = [
@@ -108,11 +103,11 @@ function createAmifySaturationExpression(drive, channel) {
   return `(${scale}*${sample})/(${Math.PI}+${amount}*abs(${sample}))`;
 }
 
-async function measureMusicLoudness(input) {
+async function measureMusicLoudness(input, preNormalizeFilter) {
   const stderr = await ffmpegCaptureStderr([
     '-i', input,
     '-vn',
-    '-af', musicLoudnessMeasureFilter,
+    '-af', createMusicLoudnessMeasureFilter(preNormalizeFilter),
     '-f', 'null',
     '-',
   ]);
@@ -126,9 +121,16 @@ async function measureMusicLoudness(input) {
   };
 }
 
-function createMusicEncodeFilter(loudnessStats) {
+function createMusicLoudnessMeasureFilter(preNormalizeFilter) {
   return [
-    musicPreNormalizeFilter,
+    preNormalizeFilter,
+    `loudnorm=I=${MUSIC_LOUDNESS_TARGET_LUFS}:TP=${MUSIC_LOUDNESS_TRUE_PEAK_DBTP}:LRA=${MUSIC_LOUDNESS_RANGE_LU}:print_format=json`,
+  ].filter(Boolean).join(',');
+}
+
+function createMusicEncodeFilter(loudnessStats, preNormalizeFilter) {
+  return [
+    preNormalizeFilter,
     [
       `loudnorm=I=${MUSIC_LOUDNESS_TARGET_LUFS}`,
       `TP=${MUSIC_LOUDNESS_TRUE_PEAK_DBTP}`,
@@ -141,7 +143,7 @@ function createMusicEncodeFilter(loudnessStats) {
       'linear=true',
     ].join(':'),
     musicFormatFilter,
-  ].join(',');
+  ].filter(Boolean).join(',');
 }
 
 function parseLoudnormJson(output, input) {
@@ -181,18 +183,30 @@ async function main() {
 
   for (const track of rawTracks) {
     const input = path.join(rawDir, track);
-    const originalOutput = path.join(originalMusicDir, track);
-    await copyFile(input, originalOutput);
 
-    const output = path.join(musicDir, track);
-    console.log(`processing ${path.relative(repoRoot, output)}`);
-    const loudnessStats = await measureMusicLoudness(input);
+    const originalOutput = path.join(originalMusicDir, track);
+    console.log(`processing ${path.relative(repoRoot, originalOutput)}`);
+    const originalLoudnessStats = await measureMusicLoudness(input, null);
     await ffmpeg([
       '-y',
       '-i', input,
       '-map_metadata', '0',
       '-vn',
-      '-af', createMusicEncodeFilter(loudnessStats),
+      '-af', createMusicEncodeFilter(originalLoudnessStats, null),
+      '-codec:a', 'libmp3lame',
+      '-q:a', '3',
+      originalOutput,
+    ]);
+
+    const output = path.join(musicDir, track);
+    console.log(`processing ${path.relative(repoRoot, output)}`);
+    const loudnessStats = await measureMusicLoudness(input, processedMusicPreNormalizeFilter);
+    await ffmpeg([
+      '-y',
+      '-i', input,
+      '-map_metadata', '0',
+      '-vn',
+      '-af', createMusicEncodeFilter(loudnessStats, processedMusicPreNormalizeFilter),
       '-codec:a', 'libmp3lame',
       '-q:a', '3',
       output,
