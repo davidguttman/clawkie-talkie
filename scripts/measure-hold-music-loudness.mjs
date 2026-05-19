@@ -8,10 +8,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
 const baseTargetLufs = Number(process.env.HOLD_MUSIC_TARGET_LUFS ?? -23);
 const playbackDirs = [
-  { label: 'processed effects+noise low /music-low', dir: path.join(repoRoot, 'client/public/music-low'), targetLufs: baseTargetLufs + linearToDb(0.25) },
+  { label: 'processed effects+noise low /music-low', dir: path.join(repoRoot, 'client/public/music-low'), targetLufs: baseTargetLufs + linearToDb(0.125) },
   { label: 'processed effects+noise medium /music', dir: path.join(repoRoot, 'client/public/music'), targetLufs: baseTargetLufs + linearToDb(0.5) },
   { label: 'processed effects+noise high /music-high', dir: path.join(repoRoot, 'client/public/music-high'), targetLufs: baseTargetLufs },
-  { label: 'original no-effects low /music-original-low', dir: path.join(repoRoot, 'client/public/music-original-low'), targetLufs: baseTargetLufs + linearToDb(0.25) },
+  { label: 'original no-effects low /music-original-low', dir: path.join(repoRoot, 'client/public/music-original-low'), targetLufs: baseTargetLufs + linearToDb(0.125) },
   { label: 'original no-effects medium /music-original', dir: path.join(repoRoot, 'client/public/music-original'), targetLufs: baseTargetLufs + linearToDb(0.5) },
   { label: 'original no-effects high /music-original-high', dir: path.join(repoRoot, 'client/public/music-original-high'), targetLufs: baseTargetLufs },
 ];
