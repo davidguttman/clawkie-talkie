@@ -47,7 +47,7 @@ const MUSIC_LOUDNESS_TRUE_PEAK_DBTP = -2;
 // mixed together first, then loudness-normalized, then scaled for Low/Medium/High.
 // Original tracks stay no-effects/no-noise and use the same baked level scalars.
 const HOLD_MUSIC_VOLUME_LEVELS = [
-  { id: 'low', suffix: '-low', scalar: 0.25, musicDir: musicLowDir, originalMusicDir: originalMusicLowDir },
+  { id: 'low', suffix: '-low', scalar: 0.125, musicDir: musicLowDir, originalMusicDir: originalMusicLowDir },
   { id: 'medium', suffix: '', scalar: 0.5, musicDir, originalMusicDir },
   { id: 'high', suffix: '-high', scalar: 1, musicDir: musicHighDir, originalMusicDir: originalMusicHighDir },
 ];
