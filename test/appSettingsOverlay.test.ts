@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, createElement, Fragment, useEffect, type ReactNode } from 'react';
+import { act, createElement, Fragment, useEffect, useState, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -47,7 +47,8 @@ vi.mock('../client/src/rtc/RtcContext', async () => {
 });
 
 vi.mock('../client/src/screens/Driving', () => ({
-  DrivingScreen: ({ onSettings }: { onSettings?: () => void }) => {
+  DrivingScreen: ({ onSettings, onSessions }: { onSettings?: () => void; onSessions?: () => void }) => {
+    const [phase, setPhase] = useState('READY');
     useEffect(() => {
       drivingProbe.mounts += 1;
       return () => {
@@ -57,14 +58,67 @@ vi.mock('../client/src/screens/Driving', () => ({
 
     return createElement(
       'section',
-      { 'data-testid': 'driving-screen' },
+      { 'data-testid': 'driving-screen', 'data-phase': phase },
+      createElement('span', { 'data-testid': 'driving-phase' }, phase),
       createElement(
         'button',
         { type: 'button', 'aria-label': 'Settings', onClick: onSettings },
         'Settings',
       ),
+      createElement(
+        'button',
+        { type: 'button', 'aria-label': 'Start thinking', onClick: () => setPhase('THINKING') },
+        'Start thinking',
+      ),
+      createElement(
+        'button',
+        { type: 'button', 'aria-label': 'Sessions', onClick: onSessions },
+        'Sessions',
+      ),
     );
   },
+}));
+
+type MockRecentSession = {
+  sessionId: string;
+  sessionKey: string;
+  agent: string;
+  displayLabel: string;
+};
+
+vi.mock('../client/src/screens/Dashboard', () => ({
+  DashboardScreen: ({ onSelectSession }: { onSelectSession?: (session: MockRecentSession) => void }) => createElement(
+    'section',
+    { 'data-testid': 'dashboard-screen' },
+    createElement(
+      'button',
+      {
+        type: 'button',
+        'aria-label': 'Return to current session',
+        onClick: () => onSelectSession?.({
+          sessionId: 'session-1',
+          sessionKey: 'agent:main',
+          agent: 'main',
+          displayLabel: 'Main',
+        }),
+      },
+      'Return to current session',
+    ),
+    createElement(
+      'button',
+      {
+        type: 'button',
+        'aria-label': 'Open different session',
+        onClick: () => onSelectSession?.({
+          sessionId: 'session-2',
+          sessionKey: 'agent:main',
+          agent: 'main',
+          displayLabel: 'Other',
+        }),
+      },
+      'Open different session',
+    ),
+  ),
 }));
 
 vi.mock('../client/src/screens/Settings', () => ({
@@ -190,6 +244,71 @@ describe('App Settings overlay behavior', () => {
     expect(drivingProbe.unmounts).toBe(0);
   });
 
+  it('keeps the same Driving screen mounted during a same-session dashboard roundtrip', async () => {
+    const view = await renderApp();
+    expect(view.querySelector('[data-testid="driving-screen"]')).not.toBeNull();
+    expect(drivingProbe.mounts).toBe(1);
+
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('[aria-label="Start thinking"]')?.click();
+    });
+    expect(view.querySelector('[data-testid="driving-phase"]')?.textContent).toBe('THINKING');
+
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('[aria-label="Sessions"]')?.click();
+    });
+
+    expect(view.querySelector('[data-testid="dashboard-screen"]')).not.toBeNull();
+    expect(view.querySelector('[data-testid="driving-screen"]')).not.toBeNull();
+    expect(view.querySelector('[data-testid="driving-phase"]')?.textContent).toBe('THINKING');
+    expect(drivingProbe.mounts).toBe(1);
+    expect(drivingProbe.unmounts).toBe(0);
+
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('[aria-label="Return to current session"]')?.click();
+    });
+
+    expect(view.querySelector('[data-testid="dashboard-screen"]')).toBeNull();
+    expect(view.querySelector('[data-testid="driving-phase"]')?.textContent).toBe('THINKING');
+    expect(drivingProbe.mounts).toBe(1);
+    expect(drivingProbe.unmounts).toBe(0);
+  });
+
+  it('resets Driving screen state when selecting a different session from the dashboard', async () => {
+    const view = await renderApp();
+
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('[aria-label="Start thinking"]')?.click();
+    });
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('[aria-label="Sessions"]')?.click();
+    });
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('[aria-label="Open different session"]')?.click();
+    });
+
+    expect(view.querySelector('[data-testid="dashboard-screen"]')).toBeNull();
+    expect(view.querySelector('[data-testid="driving-phase"]')?.textContent).toBe('READY');
+    expect(drivingProbe.mounts).toBe(2);
+    expect(drivingProbe.unmounts).toBe(1);
+  });
+
+  it('hides the preserved Driving screen from layout and assistive tech while dashboard is visible', async () => {
+    const view = await renderApp();
+
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('[aria-label="Sessions"]')?.click();
+    });
+
+    const driving = view.querySelector<HTMLElement>('[data-testid="driving-screen"]');
+    const preservedWrapper = driving?.parentElement;
+    expect(view.querySelector('[data-testid="dashboard-screen"]')).not.toBeNull();
+    expect(preservedWrapper?.style.display).toBe('none');
+    expect(preservedWrapper?.getAttribute('aria-hidden')).toBe('true');
+    expect(drivingProbe.mounts).toBe(1);
+    expect(drivingProbe.unmounts).toBe(0);
+  });
+
   it('isolates the base content from assistive tech and focus while Settings is open', async () => {
     const view = await renderApp();
 
@@ -198,7 +317,7 @@ describe('App Settings overlay behavior', () => {
     });
 
     const driving = view.querySelector('[data-testid="driving-screen"]');
-    const baseContent = driving?.parentElement;
+    const baseContent = driving?.closest('[aria-hidden="true"][inert]');
     expect(baseContent?.getAttribute('aria-hidden')).toBe('true');
     expect(baseContent?.getAttribute('inert')).toBe('');
   });
