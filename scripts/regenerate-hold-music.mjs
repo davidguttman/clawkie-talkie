@@ -46,10 +46,13 @@ const CRACKLE_LAYER_GAIN_DB = -10;
 const MUSIC_LOUDNESS_TARGET_LUFS = -23;
 const MUSIC_LOUDNESS_RANGE_LU = 11;
 const MUSIC_LOUDNESS_TRUE_PEAK_DBTP = -2;
+// Layer beds are baked as separate plain media files. Keep high/medium at the
+// prior balance, but tuck low-level hiss/crackle down another 6 dB relative to
+// low music so noise does not feel louder when users pick quiet hold music.
 const HOLD_MUSIC_VOLUME_LEVELS = [
-  { id: 'low', suffix: '-low', scalar: 0.25, musicDir: musicLowDir, originalMusicDir: originalMusicLowDir, layerDir: layerLowDir },
-  { id: 'medium', suffix: '', scalar: 0.5, musicDir, originalMusicDir, layerDir },
-  { id: 'high', suffix: '-high', scalar: 1, musicDir: musicHighDir, originalMusicDir: originalMusicHighDir, layerDir: layerHighDir },
+  { id: 'low', suffix: '-low', scalar: 0.25, layerScalar: 0.125, musicDir: musicLowDir, originalMusicDir: originalMusicLowDir, layerDir: layerLowDir },
+  { id: 'medium', suffix: '', scalar: 0.5, layerScalar: 0.5, musicDir, originalMusicDir, layerDir },
+  { id: 'high', suffix: '-high', scalar: 1, layerScalar: 1, musicDir: musicHighDir, originalMusicDir: originalMusicHighDir, layerDir: layerHighDir },
 ];
 
 const bitcrusherSampleHold = 1 / BITCRUSHER_NORM_FREQ;
@@ -255,7 +258,7 @@ async function main() {
     await ffmpeg([
       '-y',
       '-i', hissWav,
-      '-af', createLayerEncodeFilter(hissFilter, level.scalar),
+      '-af', createLayerEncodeFilter(hissFilter, level.layerScalar),
       '-codec:a', 'libmp3lame',
       '-q:a', '5',
       path.join(level.layerDir, 'hiss.mp3'),
@@ -265,7 +268,7 @@ async function main() {
     await ffmpeg([
       '-y',
       '-i', crackleWav,
-      '-af', createLayerEncodeFilter(crackleFilter, level.scalar),
+      '-af', createLayerEncodeFilter(crackleFilter, level.layerScalar),
       '-codec:a', 'libmp3lame',
       '-q:a', '5',
       path.join(level.layerDir, 'crackle.mp3'),

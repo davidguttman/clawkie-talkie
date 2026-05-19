@@ -15,8 +15,11 @@ const playbackDirs = [
   { label: 'original no-effects medium /music-original', dir: path.join(repoRoot, 'client/public/music-original'), targetLufs: baseTargetLufs + linearToDb(0.5) },
   { label: 'original no-effects high /music-original-high', dir: path.join(repoRoot, 'client/public/music-original-high'), targetLufs: baseTargetLufs },
 ];
+// Layer scalars intentionally diverge from playback scalars at low volume:
+// high and medium retain the old balance, while low tucks hiss/crackle another
+// 6 dB below the music to avoid perceptually loud noise on quiet hold music.
 const layerDirs = [
-  { level: 'low', label: 'generated layers low /music-layers-low', dir: path.join(repoRoot, 'client/public/music-layers-low'), scalar: 0.25 },
+  { level: 'low', label: 'generated layers low /music-layers-low', dir: path.join(repoRoot, 'client/public/music-layers-low'), scalar: 0.125 },
   { level: 'medium', label: 'generated layers medium /music-layers', dir: path.join(repoRoot, 'client/public/music-layers'), scalar: 0.5 },
   { level: 'high', label: 'generated layers high /music-layers-high', dir: path.join(repoRoot, 'client/public/music-layers-high'), scalar: 1 },
 ];

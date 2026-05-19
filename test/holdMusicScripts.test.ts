@@ -18,6 +18,9 @@ describe('hold music asset scripts', () => {
     expect(script).not.toContain('copyFile');
     expect(script).toContain('const originalLoudnessStats = await measureMusicLoudness(input, null)');
     expect(script).toContain("'-af', createMusicEncodeFilter(originalLoudnessStats, null, level.scalar)");
+    expect(script).toContain("layerScalar: 0.125");
+    expect(script).toContain("'-af', createLayerEncodeFilter(hissFilter, level.layerScalar)");
+    expect(script).toContain("'-af', createLayerEncodeFilter(crackleFilter, level.layerScalar)");
     expect(script).toContain("const musicLowDir = path.join(repoRoot, 'client/public/music-low')");
     expect(script).toContain("const musicHighDir = path.join(repoRoot, 'client/public/music-high')");
   });
@@ -42,6 +45,7 @@ describe('hold music asset scripts', () => {
     expect(script).toContain("label: 'generated layers low /music-layers-low'");
     expect(script).toContain("label: 'generated layers medium /music-layers'");
     expect(script).toContain("label: 'generated layers high /music-layers-high'");
+    expect(script).toContain("scalar: 0.125");
     expect(script).toContain("const expectedLayerFiles = ['crackle.mp3', 'hiss.mp3']");
     expect(script).toContain('measureLayerLevelDirs(layerDirs)');
     expect(script).toContain('missing expected layer files');
