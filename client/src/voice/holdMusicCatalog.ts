@@ -47,10 +47,6 @@ export function originalHoldMusicTrackUrl(
   return `/music-original${holdMusicVolumeLevelPathSuffix(volumeLevel)}/${encodeURIComponent(track)}`;
 }
 
-export function holdMusicLayerUrl(layer: string, volumeLevel: MusicVolumeLevel = 'medium'): string {
-  return `/music-layers${holdMusicVolumeLevelPathSuffix(volumeLevel)}/${encodeURIComponent(layer)}`;
-}
-
 function holdMusicVolumeLevelPathSuffix(volumeLevel: MusicVolumeLevel): string {
   if (volumeLevel === 'low') return '-low';
   if (volumeLevel === 'high') return '-high';

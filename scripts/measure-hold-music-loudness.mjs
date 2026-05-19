@@ -8,26 +8,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
 const baseTargetLufs = Number(process.env.HOLD_MUSIC_TARGET_LUFS ?? -23);
 const playbackDirs = [
-  { label: 'processed effects low /music-low', dir: path.join(repoRoot, 'client/public/music-low'), targetLufs: baseTargetLufs + linearToDb(0.25) },
-  { label: 'processed effects medium /music', dir: path.join(repoRoot, 'client/public/music'), targetLufs: baseTargetLufs + linearToDb(0.5) },
-  { label: 'processed effects high /music-high', dir: path.join(repoRoot, 'client/public/music-high'), targetLufs: baseTargetLufs },
+  { label: 'processed effects+noise low /music-low', dir: path.join(repoRoot, 'client/public/music-low'), targetLufs: baseTargetLufs + linearToDb(0.25) },
+  { label: 'processed effects+noise medium /music', dir: path.join(repoRoot, 'client/public/music'), targetLufs: baseTargetLufs + linearToDb(0.5) },
+  { label: 'processed effects+noise high /music-high', dir: path.join(repoRoot, 'client/public/music-high'), targetLufs: baseTargetLufs },
   { label: 'original no-effects low /music-original-low', dir: path.join(repoRoot, 'client/public/music-original-low'), targetLufs: baseTargetLufs + linearToDb(0.25) },
   { label: 'original no-effects medium /music-original', dir: path.join(repoRoot, 'client/public/music-original'), targetLufs: baseTargetLufs + linearToDb(0.5) },
   { label: 'original no-effects high /music-original-high', dir: path.join(repoRoot, 'client/public/music-original-high'), targetLufs: baseTargetLufs },
 ];
-// Layer scalars intentionally diverge from playback scalars at low volume:
-// high and medium retain the old balance, while low tucks hiss/crackle another
-// 6 dB below the music to avoid perceptually loud noise on quiet hold music.
-const layerDirs = [
-  { level: 'low', label: 'generated layers low /music-layers-low', dir: path.join(repoRoot, 'client/public/music-layers-low'), scalar: 0.125 },
-  { level: 'medium', label: 'generated layers medium /music-layers', dir: path.join(repoRoot, 'client/public/music-layers'), scalar: 0.5 },
-  { level: 'high', label: 'generated layers high /music-layers-high', dir: path.join(repoRoot, 'client/public/music-layers-high'), scalar: 1 },
-];
-const expectedLayerFiles = ['crackle.mp3', 'hiss.mp3'];
 const targetLufs = baseTargetLufs;
 const maxSpreadLu = Number(process.env.HOLD_MUSIC_MAX_SPREAD_LU ?? 1.5);
 const maxTargetDeltaLu = Number(process.env.HOLD_MUSIC_MAX_TARGET_DELTA_LU ?? 0.5);
-const maxLayerLevelDeltaDb = Number(process.env.HOLD_MUSIC_MAX_LAYER_LEVEL_DELTA_DB ?? 1.5);
 
 if (!Number.isFinite(targetLufs)) {
   throw new Error(`Invalid HOLD_MUSIC_TARGET_LUFS: ${process.env.HOLD_MUSIC_TARGET_LUFS}`);
@@ -38,10 +28,6 @@ if (!Number.isFinite(maxSpreadLu) || maxSpreadLu < 0) {
 if (!Number.isFinite(maxTargetDeltaLu) || maxTargetDeltaLu < 0) {
   throw new Error(`Invalid HOLD_MUSIC_MAX_TARGET_DELTA_LU: ${process.env.HOLD_MUSIC_MAX_TARGET_DELTA_LU}`);
 }
-if (!Number.isFinite(maxLayerLevelDeltaDb) || maxLayerLevelDeltaDb < 0) {
-  throw new Error(`Invalid HOLD_MUSIC_MAX_LAYER_LEVEL_DELTA_DB: ${process.env.HOLD_MUSIC_MAX_LAYER_LEVEL_DELTA_DB}`);
-}
-
 const allFailures = [];
 let printedSection = false;
 
@@ -51,10 +37,6 @@ for (const playbackDir of playbackDirs) {
   const failures = await measurePlaybackDir(playbackDir);
   allFailures.push(...failures);
 }
-
-if (printedSection) console.log('');
-printedSection = true;
-allFailures.push(...await measureLayerLevelDirs(layerDirs));
 
 if (allFailures.length > 0) {
   throw new Error(allFailures.join('\n'));
@@ -125,81 +107,6 @@ async function measurePlaybackDir({ label, dir, targetLufs }) {
   return failures;
 }
 
-async function measureLayerLevelDirs(levelDirs) {
-  const measurementsByFile = new Map();
-  const failures = [];
-
-  for (const levelDir of levelDirs) {
-    const entries = await readdir(levelDir.dir, { withFileTypes: true });
-    const mp3Files = entries
-      .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.mp3'))
-      .map((entry) => entry.name)
-      .sort((a, b) => a.localeCompare(b));
-    const available = new Set(mp3Files);
-    const missing = expectedLayerFiles.filter((file) => !available.has(file));
-    if (missing.length > 0) {
-      failures.push(`${levelDir.label} missing expected layer files: ${missing.join(', ')}`);
-    }
-
-    const unexpected = mp3Files.filter((file) => !expectedLayerFiles.includes(file));
-    if (unexpected.length > 0) {
-      failures.push(`${levelDir.label} has unexpected MP3 layer files: ${unexpected.join(', ')}`);
-    }
-
-    const rows = [];
-    for (const layerFile of expectedLayerFiles) {
-      if (!available.has(layerFile)) continue;
-      const file = path.join(levelDir.dir, layerFile);
-      const stats = await measureVolumeStats(file);
-      const row = { file: layerFile, meanDb: stats.meanVolumeDb, peakDb: stats.maxVolumeDb };
-      rows.push(row);
-      const byLevel = measurementsByFile.get(layerFile) ?? new Map();
-      byLevel.set(levelDir.level, { ...row, scalar: levelDir.scalar, label: levelDir.label });
-      measurementsByFile.set(layerFile, byLevel);
-    }
-
-    console.log(`Hold music layer loudness: ${levelDir.label} (${path.relative(repoRoot, levelDir.dir)})`);
-    console.log('MEANdB  PEAKdB  Layer');
-    for (const row of rows) {
-      console.log(`${format(row.meanDb)}  ${format(row.peakDb)}  ${row.file}`);
-    }
-  }
-
-  for (const layerFile of expectedLayerFiles) {
-    const byLevel = measurementsByFile.get(layerFile);
-    if (!byLevel) continue;
-    for (const [fromLevel, toLevel] of [['low', 'medium'], ['medium', 'high'], ['low', 'high']]) {
-      const from = byLevel.get(fromLevel);
-      const to = byLevel.get(toLevel);
-      if (!from || !to) continue;
-      const expectedDelta = linearToDb(to.scalar / from.scalar);
-      const meanDelta = to.meanDb - from.meanDb;
-      const peakDelta = to.peakDb - from.peakDb;
-      if (Math.abs(meanDelta - expectedDelta) > maxLayerLevelDeltaDb) {
-        failures.push(
-          `${layerFile} ${fromLevel}->${toLevel} mean-volume delta ${meanDelta.toFixed(2)} dB `
-            + `differs from expected ${expectedDelta.toFixed(2)} dB by more than `
-            + `${maxLayerLevelDeltaDb.toFixed(2)} dB`,
-        );
-      }
-      if (Math.abs(peakDelta - expectedDelta) > maxLayerLevelDeltaDb) {
-        failures.push(
-          `${layerFile} ${fromLevel}->${toLevel} peak delta ${peakDelta.toFixed(2)} dB `
-            + `differs from expected ${expectedDelta.toFixed(2)} dB by more than `
-            + `${maxLayerLevelDeltaDb.toFixed(2)} dB`,
-        );
-      }
-    }
-  }
-
-  console.log(
-    `layer level relationship tolerance=${maxLayerLevelDeltaDb.toFixed(2)} dB `
-      + `expectedFiles=${expectedLayerFiles.join(', ')}`,
-  );
-
-  return failures;
-}
-
 function format(value) {
   if (value === -Infinity) return '  -inf';
   if (value === Infinity) return '   inf';
@@ -209,65 +116,6 @@ function format(value) {
 function linearToDb(value) {
   if (!Number.isFinite(value) || value <= 0) throw new Error(`Invalid linear gain: ${value}`);
   return 20 * Math.log10(value);
-}
-
-function measureVolumeStats(file) {
-  return new Promise((resolve, reject) => {
-    let stderr = '';
-    const child = spawn('ffmpeg', [
-      '-hide_banner',
-      '-nostats',
-      '-i', file,
-      '-af', 'volumedetect',
-      '-f', 'null',
-      '-',
-    ], {
-      stdio: ['ignore', 'ignore', 'pipe'],
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk;
-    });
-    child.on('error', reject);
-    child.on('close', (code) => {
-      if (code !== 0) {
-        const tail = stderrTail(stderr);
-        reject(new Error(
-          `ffmpeg exited with ${code} while measuring ${path.relative(repoRoot, file)}`
-            + `${tail ? `\nstderr tail:\n${tail}` : ''}`,
-        ));
-        return;
-      }
-      try {
-        resolve(parseVolumedetectStats(stderr, file));
-      } catch (error) {
-        reject(error);
-      }
-    });
-  });
-}
-
-function parseVolumedetectStats(output, file) {
-  const meanMatch = output.match(/mean_volume:\s*(-?(?:\d+(?:\.\d+)?|inf))\s*dB/i);
-  const maxMatch = output.match(/max_volume:\s*(-?(?:\d+(?:\.\d+)?|inf))\s*dB/i);
-  if (!meanMatch || !maxMatch) {
-    const tail = stderrTail(output);
-    throw new Error(
-      `Could not parse volumedetect stats for ${path.relative(repoRoot, file)}`
-        + `${tail ? `\nstderr tail:\n${tail}` : ''}`,
-    );
-  }
-  return {
-    meanVolumeDb: requireFiniteVolumeDb(meanMatch[1], 'mean_volume', file),
-    maxVolumeDb: requireFiniteVolumeDb(maxMatch[1], 'max_volume', file),
-  };
-}
-
-function requireFiniteVolumeDb(value, field, file) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) {
-    throw new Error(`Invalid volumedetect ${field} for ${path.relative(repoRoot, file)}: ${value}`);
-  }
-  return numeric;
 }
 
 function measureLoudness(file) {

@@ -13,9 +13,6 @@ const musicHighDir = path.join(repoRoot, 'client/public/music-high');
 const originalMusicLowDir = path.join(repoRoot, 'client/public/music-original-low');
 const originalMusicDir = path.join(repoRoot, 'client/public/music-original');
 const originalMusicHighDir = path.join(repoRoot, 'client/public/music-original-high');
-const layerLowDir = path.join(repoRoot, 'client/public/music-layers-low');
-const layerDir = path.join(repoRoot, 'client/public/music-layers');
-const layerHighDir = path.join(repoRoot, 'client/public/music-layers-high');
 const tempDir = path.join(repoRoot, '.vite/hold-music-regen');
 
 // Keep this chain matched to the original runtime WebAudio graph from
@@ -46,13 +43,13 @@ const CRACKLE_LAYER_GAIN_DB = -10;
 const MUSIC_LOUDNESS_TARGET_LUFS = -23;
 const MUSIC_LOUDNESS_RANGE_LU = 11;
 const MUSIC_LOUDNESS_TRUE_PEAK_DBTP = -2;
-// Layer beds are baked as separate plain media files. Keep high/medium at the
-// prior balance, but tuck low-level hiss/crackle down another 6 dB relative to
-// low music so noise does not feel louder when users pick quiet hold music.
+// Processed tracks are final baked beds: music effects plus static hiss/crackle
+// mixed together first, then loudness-normalized, then scaled for Low/Medium/High.
+// Original tracks stay no-effects/no-noise and use the same baked level scalars.
 const HOLD_MUSIC_VOLUME_LEVELS = [
-  { id: 'low', suffix: '-low', scalar: 0.25, layerScalar: 0.125, musicDir: musicLowDir, originalMusicDir: originalMusicLowDir, layerDir: layerLowDir },
-  { id: 'medium', suffix: '', scalar: 0.5, layerScalar: 0.5, musicDir, originalMusicDir, layerDir },
-  { id: 'high', suffix: '-high', scalar: 1, layerScalar: 1, musicDir: musicHighDir, originalMusicDir: originalMusicHighDir, layerDir: layerHighDir },
+  { id: 'low', suffix: '-low', scalar: 0.25, musicDir: musicLowDir, originalMusicDir: originalMusicLowDir },
+  { id: 'medium', suffix: '', scalar: 0.5, musicDir, originalMusicDir },
+  { id: 'high', suffix: '-high', scalar: 1, musicDir: musicHighDir, originalMusicDir: originalMusicHighDir },
 ];
 
 const bitcrusherSampleHold = 1 / BITCRUSHER_NORM_FREQ;
@@ -103,6 +100,14 @@ const crackleFilter = [
   'alimiter=limit=0.8',
   `volume=${CRACKLE_LAYER_GAIN_DB}dB`,
 ].join(',');
+
+const processedMusicMixFilter = [
+  `[0:a]${processedMusicPreNormalizeFilter}[music_fx]`,
+  `[1:a]${hissFilter}[hiss]`,
+  `[2:a]${crackleFilter}[crackle]`,
+  '[music_fx][hiss][crackle]amix=inputs=3:duration=first:normalize=0:dropout_transition=0,aformat=sample_fmts=s16:channel_layouts=stereo[hold_mix]',
+].join(';');
+
 
 await main();
 
@@ -167,13 +172,6 @@ function createMusicEncodeFilter(loudnessStats, preNormalizeFilter, playbackScal
   ].filter(Boolean).join(',');
 }
 
-function createLayerEncodeFilter(baseFilter, playbackScalar) {
-  return [
-    baseFilter,
-    playbackScalar === 1 ? null : `volume=${linearToDb(playbackScalar)}dB`,
-  ].filter(Boolean).join(',');
-}
-
 function parseLoudnormJson(output, input) {
   const match = output.match(/\{[\s\S]*\}/);
   if (!match) {
@@ -194,7 +192,6 @@ async function main() {
   for (const level of HOLD_MUSIC_VOLUME_LEVELS) {
     await mkdir(level.musicDir, { recursive: true });
     await mkdir(level.originalMusicDir, { recursive: true });
-    await mkdir(level.layerDir, { recursive: true });
   }
   await rm(tempDir, { recursive: true, force: true });
   await mkdir(tempDir, { recursive: true });
@@ -213,11 +210,20 @@ async function main() {
     await removeStaleGeneratedTracks(level.originalMusicDir, rawTracks);
   }
 
-  for (const track of rawTracks) {
+  const hissWav = path.join(tempDir, 'hiss.wav');
+  const crackleWav = path.join(tempDir, 'crackle.wav');
+  await writeFile(hissWav, createHissWav());
+  await writeFile(crackleWav, createCrackleWav());
+
+  for (const [index, track] of rawTracks.entries()) {
     const input = path.join(rawDir, track);
+    const processedMixInput = path.join(tempDir, `${String(index).padStart(2, '0')}-${track}.wav`);
+
+    console.log(`processing ${path.relative(repoRoot, processedMixInput)} baked effects+noise mix`);
+    await createProcessedMusicMix(input, hissWav, crackleWav, processedMixInput);
 
     const originalLoudnessStats = await measureMusicLoudness(input, null);
-    const loudnessStats = await measureMusicLoudness(input, processedMusicPreNormalizeFilter);
+    const loudnessStats = await measureMusicLoudness(processedMixInput, null);
 
     for (const level of HOLD_MUSIC_VOLUME_LEVELS) {
       const originalOutput = path.join(level.originalMusicDir, track);
@@ -237,10 +243,12 @@ async function main() {
       console.log(`processing ${path.relative(repoRoot, output)}`);
       await ffmpeg([
         '-y',
+        '-i', processedMixInput,
         '-i', input,
-        '-map_metadata', '0',
+        '-map', '0:a',
+        '-map_metadata', '1',
         '-vn',
-        '-af', createMusicEncodeFilter(loudnessStats, processedMusicPreNormalizeFilter, level.scalar),
+        '-af', createMusicEncodeFilter(loudnessStats, null, level.scalar),
         '-codec:a', 'libmp3lame',
         '-q:a', '3',
         output,
@@ -248,37 +256,28 @@ async function main() {
     }
   }
 
-  const hissWav = path.join(tempDir, 'hiss.wav');
-  const crackleWav = path.join(tempDir, 'crackle.wav');
-  await writeFile(hissWav, createHissWav());
-  await writeFile(crackleWav, createCrackleWav());
-
-  for (const level of HOLD_MUSIC_VOLUME_LEVELS) {
-    console.log(`processing ${path.relative(repoRoot, path.join(level.layerDir, 'hiss.mp3'))}`);
-    await ffmpeg([
-      '-y',
-      '-i', hissWav,
-      '-af', createLayerEncodeFilter(hissFilter, level.layerScalar),
-      '-codec:a', 'libmp3lame',
-      '-q:a', '5',
-      path.join(level.layerDir, 'hiss.mp3'),
-    ]);
-
-    console.log(`processing ${path.relative(repoRoot, path.join(level.layerDir, 'crackle.mp3'))}`);
-    await ffmpeg([
-      '-y',
-      '-i', crackleWav,
-      '-af', createLayerEncodeFilter(crackleFilter, level.layerScalar),
-      '-codec:a', 'libmp3lame',
-      '-q:a', '5',
-      path.join(level.layerDir, 'crackle.mp3'),
-    ]);
-  }
-
   await rm(tempDir, { recursive: true, force: true });
   console.log('hold music regenerated');
 }
 
+
+
+async function createProcessedMusicMix(input, hissWav, crackleWav, output) {
+  await ffmpeg([
+    '-y',
+    '-i', input,
+    // Loop the deterministic 30s beds for arbitrary source durations. amix uses
+    // duration=first so the finished baked bed exactly follows the music track.
+    '-stream_loop', '-1',
+    '-i', hissWav,
+    '-stream_loop', '-1',
+    '-i', crackleWav,
+    '-filter_complex', processedMusicMixFilter,
+    '-map', '[hold_mix]',
+    '-vn',
+    output,
+  ]);
+}
 
 async function removeStaleGeneratedTracks(outputDir, expectedTracks) {
   const expected = new Set(expectedTracks);

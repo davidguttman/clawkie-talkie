@@ -1,16 +1,11 @@
 import { loadMusicSettings, saveMusicSettings, type MusicSettings, type MusicVolumeLevel } from '../storage';
 import {
   getHoldMusicTracks,
-  holdMusicLayerUrl,
   holdMusicTrackUrl,
   originalHoldMusicTrackUrl,
   processedHoldMusicTrackUrl,
 } from './holdMusicCatalog';
 
-const HOLD_MUSIC_LAYER_TRACKS: readonly HoldMusicLayerSpec[] = [
-  { file: 'hiss.mp3' },
-  { file: 'crackle.mp3' },
-];
 const MUSIC_SATURATION_DRIVE = 0.35;
 const NOISE_BUFFER_SECONDS = 2;
 const CRACKLES_PER_SECOND = 5;
@@ -31,10 +26,6 @@ interface PreloadedHoldMusicTrack {
   originalAudio: HTMLAudioElement;
   track: string;
   volumeLevel: MusicVolumeLevel;
-}
-
-interface HoldMusicLayerSpec {
-  file: string;
 }
 
 interface HoldMusicAudioEntry {
@@ -155,7 +146,6 @@ interface HoldMusicSession {
   processedMain: HoldMusicAudioEntry;
   originalMain: HoldMusicAudioEntry;
   mainEntries: HoldMusicAudioEntry[];
-  layers: HoldMusicAudioEntry[];
   muteTarget: HoldMusicMuteTarget;
   analyserSession: HoldMusicAnalyserSession | null;
   started: boolean;
@@ -199,9 +189,8 @@ export class HoldMusicController {
         audio: preloaded.originalAudio,
         audible: false,
       };
-      const layers = createHoldMusicLayerEntries(musicSettings.volumeLevel);
       const mainEntries = [processedMain, originalMain];
-      const entries = [...mainEntries, ...layers];
+      const entries = mainEntries;
       const muteTarget: HoldMusicMuteTarget = { entries };
 
       const session: HoldMusicSession = {
@@ -209,7 +198,6 @@ export class HoldMusicController {
         processedMain,
         originalMain,
         mainEntries,
-        layers,
         muteTarget,
         analyserSession: null,
         started: false,
@@ -309,7 +297,6 @@ export class HoldMusicController {
       // best-effort cleanup
     }
     for (const entry of session.mainEntries) cleanupHoldMusicEntry(entry);
-    for (const layer of session.layers) cleanupHoldMusicEntry(layer);
 
     preloadNextHoldMusicTrack();
   }
@@ -342,16 +329,6 @@ export class HoldMusicController {
       });
     }
 
-    for (const layer of session.layers) {
-      try {
-        layer.audio.currentTime = 0;
-      } catch {
-        // best-effort layer alignment
-      }
-      void layer.audio.play().catch(() => {
-        // Static layers are decorative; main hold music should keep playing without them.
-      });
-    }
   }
 
   private restartSessionAnalyser(session: HoldMusicSession, startTime?: number): void {
@@ -472,9 +449,6 @@ function isTrackEnabled(track: string, settings: MusicSettings): boolean {
 function applyHoldMusicSessionVolumes(session: HoldMusicSession, settings: MusicSettings): void {
   session.processedMain.audible = settings.effects;
   session.originalMain.audible = !settings.effects;
-  for (const layer of session.layers) {
-    layer.audible = settings.effects;
-  }
   applyHoldMusicMute(session.muteTarget, getHoldMusicMuted());
 }
 
@@ -500,25 +474,6 @@ function stringSetsEqual(a: readonly string[], b: readonly string[]): boolean {
   return b.every((value) => set.has(value));
 }
 
-function createHoldMusicLayerEntries(volumeLevel: MusicVolumeLevel): HoldMusicAudioEntry[] {
-  if (typeof Audio === 'undefined') return [];
-  const entries: HoldMusicAudioEntry[] = [];
-  for (const layer of HOLD_MUSIC_LAYER_TRACKS) {
-    try {
-      const audio = new Audio(holdMusicLayerUrl(layer.file, volumeLevel));
-      audio.loop = true;
-      audio.preload = 'auto';
-      audio.load();
-      entries.push({
-        audio,
-        audible: false,
-      });
-    } catch {
-      // Static layers are nice-to-have; do not block the music track.
-    }
-  }
-  return entries;
-}
 
 preloadNextHoldMusicTrack();
 
