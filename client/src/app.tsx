@@ -331,8 +331,42 @@ export function App() {
     });
   }, [currentAssistantText, replayAvailabilityTick]);
 
+  const drivingSessionId = activeHandoff?.sessionId ?? initial.sessionId;
+  const shouldMountDrivingScreen =
+    (screen === 'driving' || screen === 'dashboard') && !!drivingSessionId;
   const screenContent = (
     <>
+      {shouldMountDrivingScreen && (
+        <div
+          key={drivingSessionId}
+          aria-hidden={screen === 'driving' ? undefined : true}
+          style={{
+            display: screen === 'driving' ? 'block' : 'none',
+            height: '100%',
+            minHeight: 0,
+          }}
+        >
+          <DrivingScreen
+            accent="amber"
+            fontMode="mono"
+            onReplay={
+              currentSessionId
+                ? replayLastReply
+                : undefined
+            }
+            canReplay={canReplayLastReply}
+            manualReplay={manualReplay ? { ...manualReplay, onSilence: stopManualReplay } : null}
+            restoredAssistantText={currentAssistantText}
+            onSessions={() => go('dashboard')}
+            onSettings={openSettings}
+            compact={compact}
+            sessionId={drivingSessionId}
+            hostPeerId={activeHostPeerId}
+            threadId={initial.threadId}
+            favoriteSession={currentSessionFavoriteCandidate}
+          />
+        </div>
+      )}
       {screen === 'dashboard' && (
         <DashboardScreen
           hostPeerId={activeHostPeerId}
@@ -340,27 +374,6 @@ export function App() {
           onHistory={openHistory}
           onSettings={openSettings}
           compact={compact}
-        />
-      )}
-      {screen === 'driving' && (
-        <DrivingScreen
-          accent="amber"
-          fontMode="mono"
-          onReplay={
-            currentSessionId
-              ? replayLastReply
-              : undefined
-          }
-          canReplay={canReplayLastReply}
-          manualReplay={manualReplay ? { ...manualReplay, onSilence: stopManualReplay } : null}
-          restoredAssistantText={currentAssistantText}
-          onSessions={() => go('dashboard')}
-          onSettings={openSettings}
-          compact={compact}
-          sessionId={activeHandoff?.sessionId ?? initial.sessionId}
-          hostPeerId={activeHostPeerId}
-          threadId={initial.threadId}
-          favoriteSession={currentSessionFavoriteCandidate}
         />
       )}
       {screen === 'transcript' && (
