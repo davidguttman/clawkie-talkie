@@ -174,6 +174,121 @@ describe('recent OpenClaw session parsing', () => {
     });
   });
 
+  it('enriches recent sessions with one batched sessions.preview Gateway call', async () => {
+    childProcessMocks.execFile.mockImplementation((
+      file: string,
+      args: string[],
+      _options: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      if (file !== 'openclaw') throw new Error(`unexpected command: ${file}`);
+      if (args[0] === 'sessions') {
+        callback(
+          null,
+          JSON.stringify({
+            sessions: [
+              {
+                key: 'agent:alpha:main',
+                sessionId: 'alpha-session',
+                updatedAt: '2026-05-05T19:26:00.000Z',
+              },
+              {
+                key: 'agent:beta:main',
+                sessionId: 'beta-session',
+                updatedAt: '2026-05-05T19:25:00.000Z',
+              },
+            ],
+          }),
+          '',
+        );
+        return {};
+      }
+      if (args[0] === 'gateway' && args[1] === 'call' && args[2] === 'sessions.preview') {
+        const params = JSON.parse(args[args.indexOf('--params') + 1] ?? '{}');
+        expect(params).toEqual({ keys: ['agent:alpha:main', 'agent:beta:main'] });
+        callback(
+          null,
+          JSON.stringify({
+            previews: [
+              {
+                key: 'agent:alpha:main',
+                status: 'ok',
+                items: [
+                  { role: 'user', text: 'Can you make the dashboard feel hydrated?' },
+                  { role: 'assistant', text: 'Added the hydrated session preview line.' },
+                ],
+              },
+              {
+                key: 'agent:beta:main',
+                status: 'ok',
+                items: [
+                  { role: 'user', text: 'Only the latest user note is available.' },
+                ],
+              },
+            ],
+          }),
+          '',
+        );
+        return {};
+      }
+      throw new Error(`unexpected args: ${args.join(' ')}`);
+    });
+
+    const snapshot = await getRecentSessionsWithOpenClaw();
+
+    expect(snapshot.sessions).toMatchObject([
+      {
+        sessionKey: 'agent:alpha:main',
+        lastMessageRole: 'assistant',
+        lastMessagePreview: 'Added the hydrated session preview line.',
+        lastAssistantPreview: 'Added the hydrated session preview line.',
+      },
+      {
+        sessionKey: 'agent:beta:main',
+        lastMessageRole: 'user',
+        lastMessagePreview: 'Only the latest user note is available.',
+      },
+    ]);
+    expect(childProcessMocks.execFile).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps recent sessions usable when sessions.preview lookup fails', async () => {
+    childProcessMocks.execFile.mockImplementation((
+      file: string,
+      args: string[],
+      _options: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      if (file !== 'openclaw') throw new Error(`unexpected command: ${file}`);
+      if (args[0] === 'sessions') {
+        callback(
+          null,
+          JSON.stringify({
+            sessions: [
+              {
+                key: 'agent:alpha:main',
+                sessionId: 'alpha-session',
+                updatedAt: '2026-05-05T19:26:00.000Z',
+              },
+            ],
+          }),
+          '',
+        );
+        return {};
+      }
+      if (args[0] === 'gateway' && args[1] === 'call' && args[2] === 'sessions.preview') {
+        callback(new Error('gateway unavailable'), '', '');
+        return {};
+      }
+      throw new Error(`unexpected args: ${args.join(' ')}`);
+    });
+
+    const snapshot = await getRecentSessionsWithOpenClaw();
+
+    expect(snapshot.sessions[0]).not.toHaveProperty('lastMessagePreview');
+    expect(snapshot.sessions[0]).not.toHaveProperty('lastAssistantPreview');
+  });
+
   it('runs OpenClaw session and Discord label lookups with argv, not shell strings', async () => {
     const dangerousTarget = 'channel:abc$(touch /tmp/clawkie-pwned)"; echo owned #';
     childProcessMocks.execFile.mockImplementation((
@@ -342,7 +457,7 @@ describe('recent OpenClaw session parsing', () => {
       'room one',
       'webchat',
     ]);
-    expect(childProcessMocks.execFile).toHaveBeenCalledTimes(2);
+    expect(childProcessMocks.execFile).toHaveBeenCalledTimes(3);
     expect(childProcessMocks.execFile).toHaveBeenNthCalledWith(
       2,
       'openclaw',
