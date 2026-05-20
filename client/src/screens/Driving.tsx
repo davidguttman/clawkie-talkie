@@ -103,9 +103,20 @@ export function DrivingScreen({
   const replayActive = !!manualReplay;
   const displayState: DrivingState = replayActive ? 'ai' : state;
   const displayTap = replayActive ? manualReplay.onSilence : tap;
+  const recentSessions = rtc.recentSessions;
+  const activeSession = recentSessions.find(
+    (session) => session.sessionId === sessionId || session.sessionKey === sessionId,
+  );
+  const favoriteSessionTarget = activeSession ?? favoriteSession;
+  const activeSessionFavorite = Boolean(activeSession?.favorite);
+  const headerLabel = buildHeaderLabel(activeSession);
+  const restoredAssistantPreview =
+    trimString(restoredAssistantText) ||
+    trimString(activeSession?.lastAssistantPreview) ||
+    trimString(favoriteSession?.lastAssistantPreview);
   const restoredLastTurn =
-    state === 'idle' && restoredAssistantText
-      ? { who: 'ai' as const, text: restoredAssistantText }
+    state === 'idle' && restoredAssistantPreview
+      ? { who: 'ai' as const, text: restoredAssistantPreview }
       : null;
   const displayIntensities = useReplayDisplayIntensities(
     replayActive,
@@ -171,13 +182,6 @@ export function DrivingScreen({
 
   const rowGap = compact ? 8 : 10;
   const replayEnabled = !!onReplay && canReplay;
-  const recentSessions = rtc.recentSessions;
-  const activeSession = recentSessions.find(
-    (session) => session.sessionId === sessionId || session.sessionKey === sessionId,
-  );
-  const favoriteSessionTarget = activeSession ?? favoriteSession;
-  const activeSessionFavorite = Boolean(activeSession?.favorite);
-  const headerLabel = buildHeaderLabel(activeSession);
   const pttButtonSize = compact
     ? 'clamp(164px, min(52vw, 29dvh), 208px)'
     : 'clamp(188px, min(42vw, 30dvh), 208px)';

@@ -1,8 +1,160 @@
+// @vitest-environment jsdom
+
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { act, createElement } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RecentSession } from '../client/src/voice/protocol';
+
+const mocks = vi.hoisted(() => ({
+  rtc: { current: undefined as unknown },
+  drivingLoop: { current: undefined as unknown },
+}));
+
+vi.mock('../client/src/rtc/RtcContext', () => ({
+  useRtc: () => mocks.rtc.current,
+}));
+
+vi.mock('../client/src/voice/drivingLoop', () => ({
+  useDrivingLoop: () => mocks.drivingLoop.current,
+}));
+
+import { DrivingScreen } from '../client/src/screens/Driving';
+
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const root = resolve(__dirname, '..');
+
+function baseRtc(overrides: Record<string, unknown> = {}) {
+  return {
+    status: 'open',
+    detail: '',
+    sendControl: vi.fn(),
+    sendBinary: vi.fn(),
+    addControlListener: vi.fn(() => vi.fn()),
+    addBinaryListener: vi.fn(() => vi.fn()),
+    addRemoteStreamListener: vi.fn(() => vi.fn()),
+    ttsCatalog: null,
+    requestTtsCatalog: vi.fn(),
+    sttCatalog: null,
+    requestSttCatalog: vi.fn(),
+    recentSessions: [],
+    recentSessionsGeneratedAt: undefined,
+    toggleRecentSessionFavorite: vi.fn(),
+    recentSessionsResponseSeq: 0,
+    recentSessionsSupportStatus: 'supported',
+    requestRecentSessions: vi.fn(),
+    retryConnection: vi.fn(),
+    canRetryConnection: false,
+    hasClient: true,
+    ...overrides,
+  };
+}
+
+function baseDrivingLoop(overrides: Record<string, unknown> = {}) {
+  return {
+    state: 'idle',
+    liveText: '',
+    isTranscribing: false,
+    lastTurn: null,
+    intensities: Array(28).fill(0.12),
+    error: null,
+    daemonConnected: true,
+    tap: vi.fn(),
+    silence: vi.fn(),
+    ...overrides,
+  };
+}
+
+async function renderDriving(props: Record<string, unknown> = {}) {
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root: Root = createRoot(container);
+  await act(async () => {
+    root.render(createElement(DrivingScreen, { sessionId: 'session-1', ...props }));
+  });
+  return {
+    container,
+    async cleanup() {
+      await act(async () => {
+        root.unmount();
+      });
+      container.remove();
+    },
+  };
+}
+
+beforeEach(() => {
+  mocks.rtc.current = baseRtc();
+  mocks.drivingLoop.current = baseDrivingLoop();
+});
+
+
+describe('DrivingScreen OpenClaw session preview restore', () => {
+  it('renders the active recent session assistant preview as the idle last AI caption', async () => {
+    mocks.rtc.current = baseRtc({
+      recentSessions: [
+        {
+          sessionId: 'session-1',
+          sessionKey: 'agent:alpha:main',
+          agent: 'alpha',
+          displayLabel: 'Alpha session',
+          lastMessageRole: 'user',
+          lastMessagePreview: 'User preview must not become an AI caption.',
+          lastAssistantPreview: 'OpenClaw assistant preview restored on open.',
+        },
+      ],
+    });
+
+    const rendered = await renderDriving();
+
+    expect(rendered.container.textContent).toContain('OpenClaw assistant preview restored on open.');
+    expect(rendered.container.textContent).not.toContain('User preview must not become an AI caption.');
+    expect(rendered.container.textContent).toContain('READY');
+    expect(rendered.container.textContent).toContain('TAP TO TALK');
+    expect(rendered.container.textContent).not.toContain('TAP TO SILENCE');
+
+    await rendered.cleanup();
+  });
+
+  it('keeps local restored assistant text ahead of the OpenClaw preview', async () => {
+    mocks.rtc.current = baseRtc({
+      recentSessions: [
+        {
+          sessionId: 'session-1',
+          sessionKey: 'agent:alpha:main',
+          agent: 'alpha',
+          displayLabel: 'Alpha session',
+          lastAssistantPreview: 'OpenClaw preview should stay hidden.',
+        },
+      ],
+    });
+
+    const rendered = await renderDriving({ restoredAssistantText: 'Local Clawkie transcript restore wins.' });
+
+    expect(rendered.container.textContent).toContain('Local Clawkie transcript restore wins.');
+    expect(rendered.container.textContent).not.toContain('OpenClaw preview should stay hidden.');
+
+    await rendered.cleanup();
+  });
+
+  it('uses a selected favorite session assistant preview when recent sessions have not hydrated it yet', async () => {
+    const favoriteSession: RecentSession = {
+      sessionId: 'session-1',
+      sessionKey: 'agent:alpha:main',
+      agent: 'alpha',
+      displayLabel: 'Favorite Alpha',
+      lastAssistantPreview: 'Favorite assistant preview restored.',
+    };
+
+    const rendered = await renderDriving({ favoriteSession });
+
+    expect(rendered.container.textContent).toContain('Favorite assistant preview restored.');
+
+    await rendered.cleanup();
+  });
+});
 
 describe('DrivingScreen waveform wiring', () => {
   it('passes driving loop intensities directly to LiveWave', () => {
@@ -92,13 +244,17 @@ describe('DrivingScreen replay control', () => {
     expect(source).toContain('onTap={displayTap}');
   });
 
-  it('uses restored assistant text as the idle last turn when the loop has no last turn yet', () => {
+  it('uses restored assistant text or an active session assistant preview as the idle last turn when the loop has no last turn yet', () => {
     const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
 
     expect(source).toContain('restoredAssistantText?: string | null;');
+    expect(source).toContain('const restoredAssistantPreview');
+    expect(source).toContain('trimString(restoredAssistantText) ||');
+    expect(source).toContain('trimString(activeSession?.lastAssistantPreview) ||');
+    expect(source).toContain('trimString(favoriteSession?.lastAssistantPreview)');
     expect(source).toContain('const restoredLastTurn');
-    expect(source).toContain("state === 'idle' && restoredAssistantText");
-    expect(source).toContain("{ who: 'ai' as const, text: restoredAssistantText }");
+    expect(source).toContain("state === 'idle' && restoredAssistantPreview");
+    expect(source).toContain("{ who: 'ai' as const, text: restoredAssistantPreview }");
     expect(source).toContain('lastTurn: replayActive ? null : (lastTurn ?? restoredLastTurn)');
   });
 
