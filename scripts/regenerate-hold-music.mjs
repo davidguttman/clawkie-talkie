@@ -59,12 +59,23 @@ const compressorThreshold = dbToLinear(MUSIC_COMPRESSOR_THRESHOLD_DB);
 // filter allows.
 const compressorKnee = dbToLinear(MUSIC_COMPRESSOR_KNEE_DB);
 
+function createFiniteSampleGuardExpression(channel) {
+  const sample = `val(${channel})`;
+  return `if(isnan(${sample})+isinf(${sample}),0,${sample})`;
+}
+
+const finiteStereoSampleGuardFilter = `aeval=exprs='${createFiniteSampleGuardExpression(0)}|${createFiniteSampleGuardExpression(1)}':channel_layout=stereo`;
+
 const musicEffectsFilter = [
   `highpass=f=${MUSIC_HIGHPASS_HZ}:t=q:w=${MUSIC_HIGHPASS_Q}`,
   // Original AudioWorklet quantized to 8 bits and held each sample until
   // phase += normFreq crossed 1.0. normFreq 0.4 therefore holds for roughly
   // 1 / 0.4 = 2.5 input samples. Use a fully-wet crusher; no soft blend.
   `acrusher=bits=${BITCRUSHER_BITS}:mode=lin:mix=1:aa=0:samples=${bitcrusherSampleHold}`,
+  // FFmpeg acrusher can emit rare non-finite samples for otherwise valid
+  // stereo input. Scrub those before the stateful lowpass so one bad sample
+  // cannot poison a channel for the rest of a baked track.
+  finiteStereoSampleGuardFilter,
   `lowpass=f=${MUSIC_LOWPASS_HZ}:t=q:w=${MUSIC_LOWPASS_Q}`,
   `equalizer=f=${MUSIC_MIDRANGE_HZ}:t=q:w=${MUSIC_MIDRANGE_Q}:g=${MUSIC_MIDRANGE_GAIN_DB}`,
   // Exact createAmifySaturationCurve(drive=0.35) transfer formula, expressed

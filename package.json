@@ -13,6 +13,7 @@
     "pwa:assets": "node scripts/generate-pwa-assets.mjs",
     "music:regen": "node scripts/regenerate-hold-music.mjs",
     "music:measure": "node scripts/measure-hold-music-loudness.mjs",
+    "music:qa": "node scripts/check-hold-music-quality.mjs",
     "typecheck": "tsc --noEmit -p client && tsc --noEmit -p daemon && tsc --noEmit -p signaling",
     "test": "vitest run",
     "test:watch": "vitest",
