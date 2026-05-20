@@ -49,7 +49,7 @@ The daemon uses `@roamhq/wrtc` for native WebRTC. Its package includes prebuilt 
 
 The currently supported install path is from this repo. There is no published npm package installer for the daemon yet.
 
-Download the latest source ZIP from GitHub into the installing agent's own OpenClaw workspace. Do **not** create a separate generic home-directory workspace and do **not** copy paths from this repo author's machine. Use the active OpenClaw workspace for the machine being installed; if you cannot determine it, stop and ask.
+Download the v1.0.0 source ZIP from GitHub into the installing agent's own OpenClaw workspace. Do **not** create a separate generic home-directory workspace and do **not** copy paths from this repo author's machine. Use the active OpenClaw workspace for the machine being installed; if you cannot determine it, stop and ask.
 
 ```bash
 OPENCLAW_WORKSPACE="/absolute/path/to/this-openclaw-workspace"
@@ -58,7 +58,7 @@ CLAWKIE_SOURCE_DIR="$OPENCLAW_WORKSPACE/external/clawkie-talkie"
 mkdir -p "$(dirname "$CLAWKIE_SOURCE_DIR")"
 cd "$(dirname "$CLAWKIE_SOURCE_DIR")"
 curl -L -o clawkie-talkie.zip \
-  https://github.com/davidguttman/clawkie-talkie/archive/HEAD.zip
+  https://github.com/davidguttman/clawkie-talkie/archive/refs/tags/v1.0.0.zip
 unzip -q clawkie-talkie.zip
 extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkie-talkie-*' | head -n 1)
 rm -rf "$CLAWKIE_SOURCE_DIR"
@@ -335,13 +335,13 @@ There is no inbound HTTP port for the daemon to expose. It reaches the signaling
 
 ## Update later
 
-If installed from a ZIP, download the latest ZIP and refresh the source folder. Preserve your `.env` (it lives in the repo root and is not in the ZIP, but make a backup if you keep it elsewhere):
+If installed from a ZIP, download the v1.0.0 ZIP and refresh the source folder. Preserve your `.env` (it lives in the repo root and is not in the ZIP, but make a backup if you keep it elsewhere):
 
 ```bash
 : "${CLAWKIE_SOURCE_DIR:?set this to the existing Clawkie Talkie source directory}"
 cd "$(dirname "$CLAWKIE_SOURCE_DIR")"
 curl -L -o clawkie-talkie.zip \
-  https://github.com/davidguttman/clawkie-talkie/archive/HEAD.zip
+  https://github.com/davidguttman/clawkie-talkie/archive/refs/tags/v1.0.0.zip
 cp "$CLAWKIE_SOURCE_DIR/.env" /tmp/clawkie-talkie.env.bak
 unzip -q -o clawkie-talkie.zip
 extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkie-talkie-*' | head -n 1)

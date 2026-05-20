@@ -92,7 +92,7 @@ fi
 workdir=$(mktemp -d)
 trap 'rm -rf "$workdir"' EXIT
 cd "$workdir"
-curl -L -o clawkie-talkie.zip https://github.com/davidguttman/clawkie-talkie/archive/HEAD.zip
+curl -L -o clawkie-talkie.zip https://github.com/davidguttman/clawkie-talkie/archive/refs/tags/v1.0.0.zip
 unzip -q clawkie-talkie.zip
 extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkie-talkie-*' | head -n 1)
 mkdir -p "$(dirname "$CLAWKIE_SOURCE_DIR")"

@@ -61,7 +61,7 @@ git fetch --prune
 git pull --ff-only
 ```
 
-If the source came from a ZIP or git state is unclear, download a fresh ZIP into a temporary directory and copy it over the existing source while preserving local runtime files:
+If the source came from a ZIP or git state is unclear, download a fresh v1.0.0 ZIP into a temporary directory and copy it over the existing source while preserving local runtime files:
 
 ```bash
 : "${CLAWKIE_SOURCE_DIR:?set to existing Clawkie Talkie source directory}"
@@ -69,7 +69,7 @@ workdir=$(mktemp -d)
 trap 'rm -rf "$workdir"' EXIT
 cd "$workdir"
 
-curl -L -o clawkie-talkie.zip https://github.com/davidguttman/clawkie-talkie/archive/HEAD.zip
+curl -L -o clawkie-talkie.zip https://github.com/davidguttman/clawkie-talkie/archive/refs/tags/v1.0.0.zip
 unzip -q clawkie-talkie.zip
 extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkie-talkie-*' | head -n 1)
 
