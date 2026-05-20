@@ -5,6 +5,8 @@ export const DEFAULT_RECENT_SESSIONS_TTL_MS = 60_000;
 export const DEFAULT_RECENT_SESSIONS_LIMIT = 10;
 const RECENT_SESSIONS_ACTIVE_MINUTES = 10_080;
 const RECENT_SESSIONS_FETCH_MULTIPLIER = 3;
+const RECENT_SESSION_PREVIEW_TIMEOUT_MS = 5_000;
+const RECENT_SESSION_PREVIEW_MAX_CHARS = 220;
 
 export interface RecentSessionsCacheOptions {
   loadSessions: () => Promise<RecentSessionsSnapshot>;
@@ -18,10 +20,18 @@ export interface RecentSessionsCache {
   refresh(): Promise<RecentSessionsSnapshot>;
 }
 
+export type RecentSessionPreviewFields = Pick<
+  RecentSession,
+  'lastMessagePreview' | 'lastMessageRole' | 'lastAssistantPreview'
+>;
+
+export type RecentSessionPreviewMap = Map<string, RecentSessionPreviewFields>;
+
 export interface BuildRecentSessionsOptions {
   limit?: number;
   generatedAt?: string;
   resolveDisplayLabel?: (session: RecentSession) => Promise<string | undefined>;
+  resolveSessionPreviews?: (sessions: RecentSession[]) => Promise<RecentSessionPreviewMap | undefined>;
 }
 
 interface OpenClawSessionsJson {
@@ -93,6 +103,7 @@ export async function getRecentSessionsWithOpenClaw(): Promise<RecentSessionsSna
   return buildRecentSessionsFromOpenClawJson(stdout, {
     limit: DEFAULT_RECENT_SESSIONS_LIMIT,
     resolveDisplayLabel: resolveOpenClawDisplayLabel,
+    resolveSessionPreviews: resolveOpenClawSessionPreviews,
   });
 }
 
@@ -125,17 +136,125 @@ export async function buildRecentSessionsFromRows(
     .sort((a, b) => compareLastActivityDesc(a.lastActivity, b.lastActivity))
     .slice(0, limit);
 
-  const sessions = await Promise.all(
+  const labeledSessions = await Promise.all(
     parsed.map(async (session) => {
       const displayLabel = (await options.resolveDisplayLabel?.(session))?.trim() || session.displayLabel;
       return { ...session, displayLabel };
     }),
   );
+  const sessions = await enrichRecentSessionsWithPreviews(labeledSessions, options.resolveSessionPreviews);
 
   return {
     generatedAt: options.generatedAt ?? new Date().toISOString(),
     sessions,
   };
+}
+
+async function enrichRecentSessionsWithPreviews(
+  sessions: RecentSession[],
+  resolveSessionPreviews?: (sessions: RecentSession[]) => Promise<RecentSessionPreviewMap | undefined>,
+): Promise<RecentSession[]> {
+  if (!resolveSessionPreviews || sessions.length === 0) return sessions;
+  let previews: RecentSessionPreviewMap | undefined;
+  try {
+    previews = await resolveSessionPreviews(sessions);
+  } catch {
+    return sessions;
+  }
+  if (!previews || previews.size === 0) return sessions;
+  return sessions.map((session) => {
+    const preview = previews.get(session.sessionKey) ?? previews.get(session.sessionId);
+    return preview ? { ...session, ...preview } : session;
+  });
+}
+
+async function resolveOpenClawSessionPreviews(sessions: RecentSession[]): Promise<RecentSessionPreviewMap> {
+  const keys = [...new Set(sessions.map((session) => session.sessionKey).filter(Boolean))];
+  if (keys.length === 0) return new Map();
+  const stdout = await execOpenClaw([
+    'gateway',
+    'call',
+    'sessions.preview',
+    '--json',
+    '--timeout',
+    String(RECENT_SESSION_PREVIEW_TIMEOUT_MS),
+    '--params',
+    JSON.stringify({ keys }),
+  ]);
+  return extractOpenClawSessionPreviews(stdout);
+}
+
+export function extractOpenClawSessionPreviews(stdout: string): RecentSessionPreviewMap {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return new Map();
+  }
+
+  const entries = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === 'object' && Array.isArray((parsed as { previews?: unknown[] }).previews)
+      ? (parsed as { previews: unknown[] }).previews
+      : [];
+
+  const previews: RecentSessionPreviewMap = new Map();
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const source = entry as Record<string, unknown>;
+    const key = readString(source.key) ?? readString(source.sessionKey) ?? readString(source.sessionId) ?? readString(source.id);
+    const items = Array.isArray(source.items) ? source.items : Array.isArray(source.messages) ? source.messages : [];
+    const fields = buildRecentSessionPreviewFields(items);
+    if (key && fields) previews.set(key, fields);
+  }
+  return previews;
+}
+
+function buildRecentSessionPreviewFields(items: unknown[]): RecentSessionPreviewFields | undefined {
+  const normalized = items
+    .map(normalizePreviewItem)
+    .filter((item): item is { role?: string; text: string } => !!item?.text);
+  if (normalized.length === 0) return undefined;
+
+  const latestMessage = findLast(normalized, (item) => isMessagePreviewRole(item.role) || !item.role);
+  const latestAssistant = findLast(normalized, (item) => item.role === 'assistant' || item.role === 'agent');
+  const fields: RecentSessionPreviewFields = {};
+  if (latestMessage) {
+    fields.lastMessagePreview = latestMessage.text;
+    if (latestMessage.role) fields.lastMessageRole = latestMessage.role === 'agent' ? 'assistant' : latestMessage.role;
+  }
+  if (latestAssistant) fields.lastAssistantPreview = latestAssistant.text;
+  return fields.lastMessagePreview || fields.lastAssistantPreview ? fields : undefined;
+}
+
+function normalizePreviewItem(item: unknown): { role?: string; text: string } | undefined {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined;
+  const source = item as Record<string, unknown>;
+  const text = normalizePreviewText(
+    readString(source.text) ?? readString(source.preview) ?? readString(source.content) ?? readString(source.message),
+  );
+  if (!text) return undefined;
+  const role = readString(source.role)?.toLowerCase();
+  return { ...(role ? { role } : {}), text };
+}
+
+function normalizePreviewText(text: string | undefined): string | undefined {
+  const normalized = text?.replace(/\s+/g, ' ').trim();
+  if (!normalized) return undefined;
+  if (normalized.length <= RECENT_SESSION_PREVIEW_MAX_CHARS) return normalized;
+  return `${normalized.slice(0, RECENT_SESSION_PREVIEW_MAX_CHARS - 1).trimEnd()}…`;
+}
+
+function isMessagePreviewRole(role: string | undefined): boolean {
+  return role === 'assistant' || role === 'agent' || role === 'user';
+}
+
+function findLast<T>(items: T[], predicate: (item: T) => boolean): T | undefined {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (predicate(item)) return item;
+  }
+  return undefined;
 }
 
 function parseOpenClawSessionsJson(stdout: string): unknown {

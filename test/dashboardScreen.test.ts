@@ -1,8 +1,24 @@
-import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
-import { formatRelativeActivity } from '../client/src/screens/Dashboard';
+// @vitest-environment jsdom
 
-const source = readFileSync(new URL('../client/src/screens/Dashboard.tsx', import.meta.url), 'utf8');
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { act, createElement } from 'react';
+import { createRoot } from 'react-dom/client';
+import { describe, expect, it, vi } from 'vitest';
+
+const rtcMock = vi.hoisted(() => ({
+  current: undefined as unknown,
+}));
+
+vi.mock('../client/src/rtc/RtcContext', () => ({
+  useRtc: () => rtcMock.current,
+}));
+
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+import { DashboardScreen, formatRelativeActivity } from '../client/src/screens/Dashboard';
+
+const source = readFileSync(resolve(process.cwd(), 'client/src/screens/Dashboard.tsx'), 'utf8');
 
 describe('Dashboard session discovery state guards', () => {
   it('does not render timeout or unsupported notices after any recent-session response exists', () => {
@@ -57,6 +73,84 @@ describe('Dashboard recent session row labels', () => {
     expect(channelIndex).toBeGreaterThan(agentIndex);
     expect(timeIndex).toBeGreaterThan(channelIndex);
     expect(source).not.toContain('formatActivity(session.lastActivity)');
+  });
+
+  it('renders a compact assistant preview line ahead of the latest user preview', async () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    rtcMock.current = {
+      status: 'open',
+      detail: '',
+      canRetryConnection: false,
+      retryConnection: vi.fn(),
+      recentSessionsGeneratedAt: '2026-05-05T19:30:00.000Z',
+      recentSessionsSupportStatus: 'supported',
+      recentSessionsResponseSeq: 1,
+      requestRecentSessions: vi.fn(),
+      recentSessions: [
+        {
+          sessionId: 'session-1',
+          sessionKey: 'agent:alpha:main',
+          agent: 'alpha',
+          channel: 'discord',
+          displayLabel: 'Hydrated session',
+          lastActivity: '2026-05-05T19:29:00.000Z',
+          lastMessageRole: 'user',
+          lastMessagePreview: 'User asked for a dashboard preview.',
+          lastAssistantPreview: 'Assistant hydrated reply.',
+        },
+      ],
+    };
+
+    await act(async () => {
+      root.render(createElement(DashboardScreen, { hostPeerId: 'host-1', onSelectSession: vi.fn() }));
+    });
+
+    expect(container.textContent).toContain('Agent: Assistant hydrated reply.');
+    expect(container.textContent).not.toContain('Latest user: User asked for a dashboard preview.');
+
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+  });
+
+  it('renders the latest message preview when no assistant preview is available', async () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    rtcMock.current = {
+      status: 'open',
+      detail: '',
+      canRetryConnection: false,
+      retryConnection: vi.fn(),
+      recentSessionsGeneratedAt: '2026-05-05T19:30:00.000Z',
+      recentSessionsSupportStatus: 'supported',
+      recentSessionsResponseSeq: 1,
+      requestRecentSessions: vi.fn(),
+      recentSessions: [
+        {
+          sessionId: 'session-2',
+          sessionKey: 'agent:beta:main',
+          agent: 'beta',
+          displayLabel: 'Latest-only session',
+          lastMessageRole: 'user',
+          lastMessagePreview: 'User-only preview line.',
+        },
+      ],
+    };
+
+    await act(async () => {
+      root.render(createElement(DashboardScreen, { hostPeerId: 'host-1', onSelectSession: vi.fn() }));
+    });
+
+    expect(container.textContent).toContain('Latest user: User-only preview line.');
+
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
   });
 
   it('formats row activity as short relative time only', () => {

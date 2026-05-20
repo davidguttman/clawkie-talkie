@@ -91,6 +91,9 @@ export interface RecentSession {
   accountId?: string;
   lastActivity?: string;
   displayLabel: string;
+  lastMessagePreview?: string;
+  lastMessageRole?: string;
+  lastAssistantPreview?: string;
 }
 
 export interface RecentSessionsSnapshot {

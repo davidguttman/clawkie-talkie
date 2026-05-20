@@ -511,6 +511,9 @@ export function normalizeFavoriteRecentSession(value: unknown): FavoriteRecentSe
   const target = normalizeOptionalString(source.target);
   const accountId = normalizeOptionalString(source.accountId);
   const lastActivity = normalizeOptionalString(source.lastActivity);
+  const lastMessagePreview = normalizeOptionalString(source.lastMessagePreview);
+  const lastMessageRole = normalizeOptionalString(source.lastMessageRole);
+  const lastAssistantPreview = normalizeOptionalString(source.lastAssistantPreview);
   return {
     sessionId,
     sessionKey,
@@ -520,6 +523,9 @@ export function normalizeFavoriteRecentSession(value: unknown): FavoriteRecentSe
     ...(target ? { target } : {}),
     ...(accountId ? { accountId } : {}),
     ...(lastActivity ? { lastActivity } : {}),
+    ...(lastMessagePreview ? { lastMessagePreview } : {}),
+    ...(lastMessageRole ? { lastMessageRole } : {}),
+    ...(lastAssistantPreview ? { lastAssistantPreview } : {}),
   };
 }
 

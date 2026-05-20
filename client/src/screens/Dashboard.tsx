@@ -293,6 +293,7 @@ function SessionButton({
   onSelect: (session: RecentSession) => void;
 }) {
   const favorite = session.favorite === true;
+  const preview = formatSessionPreview(session);
   return (
     <div
       style={{
@@ -357,9 +358,41 @@ function SessionButton({
           {session.lastActivity && <span>{formatRelativeActivity(session.lastActivity)}</span>}
           {session.persistedFavorite && <span>SAVED</span>}
         </span>
+        {preview && (
+          <span
+            style={{
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              color: HIFI.ink2,
+              fontSize: compact ? 11 : 12,
+              lineHeight: 1.35,
+            }}
+            title={preview.text}
+          >
+            <span style={{ color: preview.tone === 'assistant' ? HIFI.ai : HIFI.ink3, fontWeight: 800 }}>
+              {preview.label}:
+            </span>{' '}
+            {preview.text}
+          </span>
+        )}
       </button>
     </div>
   );
+}
+
+function formatSessionPreview(session: RecentSession): { label: string; text: string; tone: 'assistant' | 'latest' } | null {
+  const assistantPreview = session.lastAssistantPreview?.trim();
+  if (assistantPreview) return { label: 'Agent', text: assistantPreview, tone: 'assistant' };
+  const latestPreview = session.lastMessagePreview?.trim();
+  if (!latestPreview) return null;
+  const role = session.lastMessageRole?.trim().toLowerCase();
+  return {
+    label: role && role !== 'assistant' ? `Latest ${role}` : 'Latest',
+    text: latestPreview,
+    tone: 'latest',
+  };
 }
 
 function Notice({ children, tone }: { children: ReactNode; tone: 'warn' | 'error' }) {
