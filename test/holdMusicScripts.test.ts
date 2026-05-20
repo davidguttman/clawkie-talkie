@@ -52,6 +52,19 @@ describe('hold music asset scripts', () => {
     expect(script).not.toContain('music-layers');
   });
 
+  it('wires a decoded quality gate for processed hold music assets', () => {
+    const pkg = JSON.parse(readScript('package.json'));
+    const script = readScript('scripts/check-hold-music-quality.mjs');
+
+    expect(pkg.scripts['music:qa']).toBe('node scripts/check-hold-music-quality.mjs');
+    expect(script).toContain("label: 'processed effects+noise low /music-low'");
+    expect(script).toContain("label: 'processed effects+noise medium /music'");
+    expect(script).toContain("label: 'processed effects+noise high /music-high'");
+    expect(script).toContain('HOLD_MUSIC_MAX_STEREO_RMS_RATIO');
+    expect(script).toContain('invalidSamples');
+    expect(script).toContain('secondHalfRatio');
+  });
+
   it('does not leave runtime references to separate hold music layer assets', () => {
     const runtime = [
       readScript('client/src/voice/holdMusic.ts'),
