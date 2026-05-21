@@ -1,4 +1,7 @@
 import { execFile } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import type { RecentSession, RecentSessionsSnapshot } from './protocol.js';
 
 export const DEFAULT_RECENT_SESSIONS_TTL_MS = 60_000;
@@ -7,6 +10,7 @@ const RECENT_SESSIONS_ACTIVE_MINUTES = 10_080;
 const RECENT_SESSIONS_FETCH_MULTIPLIER = 3;
 const RECENT_SESSION_PREVIEW_TIMEOUT_MS = 5_000;
 const RECENT_SESSION_PREVIEW_MAX_CHARS = 220;
+const SESSION_KEY_PREFIX = 'agent:';
 
 export interface RecentSessionsCacheOptions {
   loadSessions: () => Promise<RecentSessionsSnapshot>;
@@ -32,6 +36,7 @@ export interface BuildRecentSessionsOptions {
   generatedAt?: string;
   resolveDisplayLabel?: (session: RecentSession) => Promise<string | undefined>;
   resolveSessionPreviews?: (sessions: RecentSession[]) => Promise<RecentSessionPreviewMap | undefined>;
+  resolveSessionAccountId?: (session: RecentSession) => Promise<string | undefined> | string | undefined;
 }
 
 interface OpenClawSessionsJson {
@@ -102,6 +107,7 @@ export async function getRecentSessionsWithOpenClaw(): Promise<RecentSessionsSna
   const stdout = await execOpenClaw(args);
   return buildRecentSessionsFromOpenClawJson(stdout, {
     limit: DEFAULT_RECENT_SESSIONS_LIMIT,
+    resolveSessionAccountId: resolveOpenClawSessionAccountId,
     resolveDisplayLabel: resolveOpenClawDisplayLabel,
     resolveSessionPreviews: resolveOpenClawSessionPreviews,
   });
@@ -136,8 +142,10 @@ export async function buildRecentSessionsFromRows(
     .sort((a, b) => compareLastActivityDesc(a.lastActivity, b.lastActivity))
     .slice(0, limit);
 
+  const routedSessions = await enrichRecentSessionsWithAccountIds(parsed, options.resolveSessionAccountId);
+
   const labeledSessions = await Promise.all(
-    parsed.map(async (session) => {
+    routedSessions.map(async (session) => {
       const displayLabel = (await options.resolveDisplayLabel?.(session))?.trim() || session.displayLabel;
       return { ...session, displayLabel };
     }),
@@ -148,6 +156,24 @@ export async function buildRecentSessionsFromRows(
     generatedAt: options.generatedAt ?? new Date().toISOString(),
     sessions,
   };
+}
+
+async function enrichRecentSessionsWithAccountIds(
+  sessions: RecentSession[],
+  resolveSessionAccountId?: (session: RecentSession) => Promise<string | undefined> | string | undefined,
+): Promise<RecentSession[]> {
+  if (!resolveSessionAccountId || sessions.length === 0) return sessions;
+  return Promise.all(
+    sessions.map(async (session) => {
+      if (session.accountId) return session;
+      try {
+        const accountId = (await resolveSessionAccountId(session))?.trim();
+        return accountId ? { ...session, accountId } : session;
+      } catch {
+        return session;
+      }
+    }),
+  );
 }
 
 async function enrichRecentSessionsWithPreviews(
@@ -257,6 +283,136 @@ function findLast<T>(items: T[], predicate: (item: T) => boolean): T | undefined
   return undefined;
 }
 
+export async function resolveOpenClawSessionAccountId(
+  session: Pick<RecentSession, 'sessionId' | 'sessionKey'>,
+): Promise<string | undefined> {
+  const sessionKey = session.sessionKey.trim();
+  if (!sessionKey.startsWith(SESSION_KEY_PREFIX)) return undefined;
+
+  try {
+    const record = await readOpenClawSessionRecord(sessionKey, session.sessionId);
+    return readSessionAccountId(record);
+  } catch {
+    return undefined;
+  }
+}
+
+async function readOpenClawSessionRecord(sessionKey: string, sessionId?: string): Promise<unknown> {
+  const agent = sessionKey.split(':')[1]?.trim();
+  if (!agent) return undefined;
+
+  const sessionsPath = join(getOpenClawStateDir(), 'agents', agent, 'sessions', 'sessions.json');
+  let raw: string;
+  try {
+    raw = await readFile(sessionsPath, 'utf8');
+  } catch (err) {
+    if (isMissingFileError(err)) return undefined;
+    throw err;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+
+  return findSessionRecord(parsed, sessionKey, sessionId);
+}
+
+function getOpenClawStateDir(): string {
+  const stateDir = normalizeEnvValue(process.env.OPENCLAW_STATE_DIR);
+  if (stateDir) return resolveUserPath(stateDir);
+
+  const configPath = normalizeEnvValue(process.env.OPENCLAW_CONFIG_PATH);
+  if (configPath) return dirname(resolveUserPath(configPath));
+
+  return join(getRequiredOpenClawHomeDir(), '.openclaw');
+}
+
+function resolveUserPath(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return trimmed;
+  if (trimmed.startsWith('~')) {
+    return resolve(trimmed.replace(/^~(?=$|[\\/])/, getRequiredOpenClawHomeDir()));
+  }
+  return resolve(trimmed);
+}
+
+function getRequiredOpenClawHomeDir(): string {
+  return getEffectiveOpenClawHomeDir() ?? resolve(process.cwd());
+}
+
+function getEffectiveOpenClawHomeDir(): string | undefined {
+  const explicitHome = normalizeEnvValue(process.env.OPENCLAW_HOME);
+  if (explicitHome) {
+    if (explicitHome === '~' || explicitHome.startsWith('~/') || explicitHome.startsWith('~\\')) {
+      const osHome = getEffectiveOsHomeDir();
+      return osHome ? resolve(explicitHome.replace(/^~(?=$|[\\/])/, osHome)) : undefined;
+    }
+    return resolve(explicitHome);
+  }
+  return getEffectiveOsHomeDir();
+}
+
+function getEffectiveOsHomeDir(): string | undefined {
+  const home = normalizeEnvValue(process.env.HOME) ?? normalizeEnvValue(process.env.USERPROFILE) ?? normalizeEnvValue(homedir());
+  return home ? resolve(home) : undefined;
+}
+
+function normalizeEnvValue(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed === 'undefined' || trimmed === 'null') return undefined;
+  return trimmed;
+}
+
+function findSessionRecord(store: unknown, sessionKey: string, sessionId?: string): unknown {
+  if (!store || typeof store !== 'object') return undefined;
+  const requestedSessionId = sessionId?.trim();
+  const matches = (entry: unknown) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
+    const source = entry as Record<string, unknown>;
+    if (readString(source.key) === sessionKey || readString(source.sessionKey) === sessionKey) return true;
+    if (!requestedSessionId) return false;
+    return readString(source.sessionId) === requestedSessionId || readString(source.id) === requestedSessionId;
+  };
+
+  if (Array.isArray(store)) return store.find(matches);
+
+  const direct = (store as Record<string, unknown>)[sessionKey];
+  if (direct) return direct;
+  return Object.values(store as Record<string, unknown>).find(matches);
+}
+
+function readSessionAccountId(record: unknown): string | undefined {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return undefined;
+  const source = record as Record<string, unknown>;
+  const origin = readObject(source.origin);
+  const deliveryContext = readObject(source.deliveryContext);
+  return (
+    readString(source.accountId)
+    ?? readString(source.account)
+    ?? readString(source.lastAccountId)
+    ?? readString(source.lastAccount)
+    ?? readString(origin?.accountId)
+    ?? readString(origin?.account)
+    ?? readString(origin?.lastAccountId)
+    ?? readString(origin?.lastAccount)
+    ?? readString(deliveryContext?.accountId)
+    ?? readString(deliveryContext?.account)
+    ?? readString(deliveryContext?.lastAccountId)
+    ?? readString(deliveryContext?.lastAccount)
+  );
+}
+
+function readObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function isMissingFileError(err: unknown): boolean {
+  return Boolean(err && typeof err === 'object' && (err as { code?: unknown }).code === 'ENOENT');
+}
+
 function parseOpenClawSessionsJson(stdout: string): unknown {
   try {
     return JSON.parse(stdout);
@@ -278,7 +434,10 @@ function parseOpenClawSessionRow(row: unknown): RecentSession | null {
     readTimestamp(source.updatedAt) ?? readTimestamp(source.lastActivity) ?? readTimestamp(source.lastActivityAt);
   const channel = readString(source.channel) ?? parsedKey.channel;
   const target = readString(source.target) ?? parsedKey.target;
-  const accountId = readString(source.accountId) ?? readString(source.account);
+  const accountId = readString(source.accountId)
+    ?? readString(source.account)
+    ?? readString(source.lastAccountId)
+    ?? readString(source.lastAccount);
 
   return {
     sessionId,

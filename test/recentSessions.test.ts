@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const childProcessMocks = vi.hoisted(() => ({
@@ -9,19 +12,55 @@ vi.mock('node:child_process', () => ({
 }));
 import {
   buildFallbackDisplayLabel,
+  buildRecentSessionsFromOpenClawJson,
   buildRecentSessionsFromRows,
   createRecentSessionsCache,
   extractDiscordChannelName,
   extractDiscordMemberName,
   getRecentSessionsWithOpenClaw,
   parseOpenClawSessionKey,
+  resolveOpenClawSessionAccountId,
   resolveDiscordChannelLabel,
   resolveDiscordDirectLabel,
 } from '../daemon/src/recentSessions';
 
+const originalOpenClawEnv = {
+  OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+  OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
+  OPENCLAW_HOME: process.env.OPENCLAW_HOME,
+};
+
 beforeEach(() => {
   childProcessMocks.execFile.mockReset();
+  restoreOpenClawEnv();
 });
+
+function restoreOpenClawEnv() {
+  for (const [key, value] of Object.entries(originalOpenClawEnv)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}
+
+async function withOpenClawSessionStore(
+  agent: string,
+  sessions: Record<string, unknown>,
+  fn: () => Promise<void>,
+) {
+  const root = await mkdtemp(join(tmpdir(), 'clawkie-recent-sessions-'));
+  try {
+    process.env.OPENCLAW_STATE_DIR = root;
+    delete process.env.OPENCLAW_CONFIG_PATH;
+    delete process.env.OPENCLAW_HOME;
+    const sessionsDir = join(root, 'agents', agent, 'sessions');
+    await mkdir(sessionsDir, { recursive: true });
+    await writeFile(join(sessionsDir, 'sessions.json'), JSON.stringify(sessions), 'utf8');
+    await fn();
+  } finally {
+    restoreOpenClawEnv();
+    await rm(root, { recursive: true, force: true });
+  }
+}
 
 describe('recent OpenClaw session parsing', () => {
   it('derives Discord routing metadata and labels from OpenClaw session keys', async () => {
@@ -637,6 +676,7 @@ describe('recent OpenClaw session parsing', () => {
   });
 
   it('preserves accountId from OpenClaw rows for reconnect routing', async () => {
+    const resolveSessionAccountId = vi.fn(async () => 'stored-account-2');
     const snapshot = await buildRecentSessionsFromRows(
       [
         {
@@ -646,10 +686,130 @@ describe('recent OpenClaw session parsing', () => {
           accountId: 'discord-account-1',
         },
       ],
-      { generatedAt: 'now' },
+      { generatedAt: 'now', resolveSessionAccountId },
     );
 
     expect(snapshot.sessions[0].accountId).toBe('discord-account-1');
+    expect(resolveSessionAccountId).not.toHaveBeenCalled();
+  });
+
+  it('preserves accountId from OpenClaw JSON rows for reconnect routing', async () => {
+    const resolveSessionAccountId = vi.fn(async () => 'stored-account-2');
+    const snapshot = await buildRecentSessionsFromOpenClawJson(
+      JSON.stringify({
+        sessions: [
+          {
+            key: 'agent:kamaji:discord:channel:1501301184101617886',
+            sessionId: 'uuid-1',
+            updatedAt: '2026-05-05T19:26:00.000Z',
+            account: 'discord-account-json',
+          },
+        ],
+      }),
+      { generatedAt: 'now', resolveSessionAccountId },
+    );
+
+    expect(snapshot.sessions[0].accountId).toBe('discord-account-json');
+    expect(resolveSessionAccountId).not.toHaveBeenCalled();
+  });
+
+  it('surfaces lastAccountId from OpenClaw JSON rows for reconnect routing', async () => {
+    const snapshot = await buildRecentSessionsFromOpenClawJson(
+      JSON.stringify({
+        sessions: [
+          {
+            key: 'agent:san:discord:channel:1501301184101617886',
+            sessionId: 'uuid-last-json-1',
+            updatedAt: '2026-05-05T19:26:00.000Z',
+            lastAccountId: 'san-discord-last-json',
+          },
+        ],
+      }),
+      { generatedAt: 'now' },
+    );
+
+    expect(snapshot.sessions[0]).toMatchObject({
+      sessionKey: 'agent:san:discord:channel:1501301184101617886',
+      accountId: 'san-discord-last-json',
+    });
+  });
+
+  it('surfaces lastAccountId from the OpenClaw session store for San Discord recent sessions', async () => {
+    const sessionKey = 'agent:san:discord:channel:1501301184101617886';
+    await withOpenClawSessionStore('san', {
+      [sessionKey]: {
+        sessionId: 'uuid-last-1',
+        lastAccountId: 'san-discord-last',
+      },
+    }, async () => {
+      const snapshot = await buildRecentSessionsFromRows(
+        [
+          {
+            key: sessionKey,
+            sessionId: 'uuid-last-1',
+            updatedAt: '2026-05-05T19:26:00.000Z',
+          },
+        ],
+        { generatedAt: 'now', resolveSessionAccountId: resolveOpenClawSessionAccountId },
+      );
+
+      expect(snapshot.sessions[0]).toMatchObject({
+        sessionKey,
+        accountId: 'san-discord-last',
+      });
+    });
+  });
+
+  it('surfaces nested origin accountId from the OpenClaw session store for San Discord recent sessions', async () => {
+    const sessionKey = 'agent:san:discord:channel:1501301184101617886';
+    await withOpenClawSessionStore('san', {
+      [sessionKey]: {
+        sessionId: 'uuid-origin-1',
+        origin: { accountId: 'san-discord-origin' },
+      },
+    }, async () => {
+      const snapshot = await buildRecentSessionsFromRows(
+        [
+          {
+            key: sessionKey,
+            sessionId: 'uuid-origin-1',
+            updatedAt: '2026-05-05T19:26:00.000Z',
+          },
+        ],
+        { generatedAt: 'now', resolveSessionAccountId: resolveOpenClawSessionAccountId },
+      );
+
+      expect(snapshot.sessions[0]).toMatchObject({
+        sessionKey,
+        accountId: 'san-discord-origin',
+      });
+    });
+  });
+
+  it('surfaces nested deliveryContext accountId from the OpenClaw session store for San Discord recent sessions', async () => {
+    const sessionKey = 'agent:san:discord:channel:1501301184101617887';
+    await withOpenClawSessionStore('san', {
+      [sessionKey]: {
+        sessionId: 'uuid-delivery-1',
+        deliveryContext: { account: 'san-discord-delivery' },
+      },
+    }, async () => {
+      const snapshot = await buildRecentSessionsFromRows(
+        [
+          {
+            key: sessionKey,
+            sessionId: 'uuid-delivery-1',
+            updatedAt: '2026-05-05T19:26:00.000Z',
+          },
+        ],
+        { generatedAt: 'now', resolveSessionAccountId: resolveOpenClawSessionAccountId },
+      );
+
+      expect(snapshot.sessions[0]).toMatchObject({
+        sessionKey,
+        accountId: 'san-discord-delivery',
+      });
+    });
   });
 
   it('preserves numeric updatedAt timestamps as ISO last activity', async () => {

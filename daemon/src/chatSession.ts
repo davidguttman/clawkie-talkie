@@ -82,29 +82,40 @@ async function sendTranscriptMessage(
   transcript: string,
   signal?: AbortSignal,
 ): Promise<void> {
-  if (opts.delivery) {
+  const delivery = await resolveDeliveryTargetAccountId(opts.delivery, opts);
+  if (delivery) {
     await sendGenericMessage(
-      opts.delivery,
+      delivery,
       quoteTranscript(transcript),
       signal,
       'openclaw_transcript_post_failed',
     );
     return;
   }
-  const explicitTarget = deriveMessageTargetFromHandoff(opts);
+  const explicitTarget = await resolveDeliveryTargetAccountId(deriveMessageTargetFromHandoff(opts), opts);
   if (explicitTarget) {
     await sendGenericMessage(explicitTarget, quoteTranscript(transcript), signal, 'openclaw_transcript_post_failed');
     return;
   }
 
-  const target = deriveDiscordDeliveryTarget({
+  const target = await resolveDeliveryTargetAccountId(deriveDiscordDeliveryTarget({
     threadId: opts.threadId,
     sessionId: opts.sessionKey || opts.sessionId,
-  });
+  }), opts);
   if (!target) {
-    const resolvedTarget = await resolveDiscordDeliveryTargetFromSessionLookup(opts.sessionId, signal);
-    if (!resolvedTarget) return;
-    await sendGenericMessage(resolvedTarget, quoteTranscript(transcript), signal, 'openclaw_transcript_post_failed');
+    const resolved = await resolveDiscordDeliveryTargetFromSessionLookup(opts.sessionId, signal);
+    if (!resolved) return;
+    const resolvedTargetWithAccount = await resolveDeliveryTargetAccountId(
+      resolved.delivery,
+      { ...opts, resolvedSessionKey: resolved.sessionKey },
+    );
+    if (!resolvedTargetWithAccount) return;
+    await sendGenericMessage(
+      resolvedTargetWithAccount,
+      quoteTranscript(transcript),
+      signal,
+      'openclaw_transcript_post_failed',
+    );
     return;
   }
   await sendGenericMessage(target, quoteTranscript(transcript), signal, 'openclaw_transcript_post_failed');
@@ -213,13 +224,14 @@ function deriveDiscordTargetFromSessionKey(sessionId: string): string | undefine
 async function resolveDiscordDeliveryTargetFromSessionLookup(
   sessionId: string,
   signal?: AbortSignal,
-): Promise<DeliveryTarget | undefined> {
+): Promise<{ delivery: DeliveryTarget; sessionKey: string } | undefined> {
   const requested = sessionId.trim();
   if (!isUuidLikeSessionId(requested)) return undefined;
 
   const key = await lookupOpenClawSessionKey(requested, signal);
   if (!key) return undefined;
-  return deriveDiscordDeliveryTarget({ sessionId: key });
+  const delivery = deriveDiscordDeliveryTarget({ sessionId: key });
+  return delivery ? { delivery, sessionKey: key } : undefined;
 }
 
 function isUuidLikeSessionId(sessionId: string): boolean {
@@ -427,22 +439,25 @@ async function resolveAgentReplyTarget(opts: {
   signal?: AbortSignal;
   requireLookup?: boolean;
 }): Promise<DeliveryTarget | undefined> {
-  const explicitDelivery = normalizeDeliveryTarget(opts.delivery);
+  const explicitDelivery = await resolveDeliveryTargetAccountId(opts.delivery, opts);
   if (explicitDelivery) return explicitDelivery;
 
-  const explicitTarget = deriveMessageTargetFromHandoff(opts);
+  const explicitTarget = await resolveDeliveryTargetAccountId(deriveMessageTargetFromHandoff(opts), opts);
   if (explicitTarget) return explicitTarget;
 
   const threadId = opts.threadId?.trim();
-  if (threadId) return { channel: 'discord', target: `channel:${threadId}` };
+  if (threadId) return resolveDeliveryTargetAccountId({ channel: 'discord', target: `channel:${threadId}` }, opts);
 
-  const fromKey = deriveReplyTargetFromSessionKey(opts.resolvedSessionKey || opts.sessionKey || opts.sessionId);
+  const fromKey = await resolveDeliveryTargetAccountId(
+    deriveReplyTargetFromSessionKey(opts.resolvedSessionKey || opts.sessionKey || opts.sessionId),
+    opts,
+  );
   if (fromKey) return fromKey;
 
   const resolvedKey = opts.resolvedSessionKey ?? (opts.requireLookup
     ? await lookupOpenClawSessionKeyRequired(opts.sessionId, opts.signal)
     : await lookupOpenClawSessionKey(opts.sessionId, opts.signal));
-  return deriveReplyTargetFromSessionKey(resolvedKey);
+  return resolveDeliveryTargetAccountId(deriveReplyTargetFromSessionKey(resolvedKey), { ...opts, resolvedSessionKey: resolvedKey });
 }
 
 function normalizeDeliveryTarget(delivery: DeliveryTarget | undefined): DeliveryTarget | undefined {
@@ -452,6 +467,56 @@ function normalizeDeliveryTarget(delivery: DeliveryTarget | undefined): Delivery
   if (!channel || !target) return undefined;
   const accountId = delivery.accountId?.trim();
   return { channel, target, ...(accountId ? { accountId } : {}) };
+}
+
+async function resolveDeliveryTargetAccountId(
+  delivery: DeliveryTarget | undefined,
+  opts: {
+    sessionId: string;
+    sessionKey?: string;
+    resolvedSessionKey?: string;
+    accountId?: string;
+    signal?: AbortSignal;
+  },
+): Promise<DeliveryTarget | undefined> {
+  const normalized = normalizeDeliveryTarget(delivery);
+  if (!normalized) return undefined;
+  if (normalized.accountId) return normalized;
+
+  const explicitAccountId = opts.accountId?.trim();
+  if (explicitAccountId) return { ...normalized, accountId: explicitAccountId };
+
+  const metadataAccountId = await resolveSessionAccountIdFromOpenClawStore({
+    sessionId: opts.sessionId,
+    sessionKey: opts.resolvedSessionKey || opts.sessionKey,
+    signal: opts.signal,
+  });
+  return metadataAccountId ? { ...normalized, accountId: metadataAccountId } : normalized;
+}
+
+async function resolveSessionAccountIdFromOpenClawStore(opts: {
+  sessionId: string;
+  sessionKey?: string;
+  signal?: AbortSignal;
+}): Promise<string | undefined> {
+  const requestedSessionId = opts.sessionId.trim();
+  const explicitSessionKey = opts.sessionKey?.trim();
+  const sessionKey = explicitSessionKey
+    || (requestedSessionId.startsWith(SESSION_KEY_PREFIX)
+      ? requestedSessionId
+      : isUuidLikeSessionId(requestedSessionId)
+        ? await lookupOpenClawSessionKey(requestedSessionId, opts.signal)
+        : undefined);
+  if (!sessionKey?.startsWith(SESSION_KEY_PREFIX)) return undefined;
+
+  try {
+    const record = await readOpenClawSessionRecord(sessionKey, requestedSessionId);
+    return readSessionAccountId(record);
+  } catch {
+    // Account metadata is an optional routing guard. If the local session
+    // store is unavailable or malformed, preserve the previous behavior.
+    return undefined;
+  }
 }
 
 function deriveReplyTargetFromSessionKey(sessionKey: string | undefined): DeliveryTarget | undefined {
@@ -492,6 +557,16 @@ function isSafeOpenClawSessionId(sessionId: string): boolean {
 }
 
 async function resolveSessionKeyFromOpenClawStore(sessionKey: string): Promise<string | undefined> {
+  const record = await readOpenClawSessionRecord(sessionKey);
+  const storedSessionId = readStoredSessionId(record);
+  if (!storedSessionId) return undefined;
+  if (!isSafeOpenClawSessionId(storedSessionId)) {
+    throw new ChatError('openclaw_sessions_store_invalid', 'openclaw_sessions_store_invalid');
+  }
+  return storedSessionId;
+}
+
+async function readOpenClawSessionRecord(sessionKey: string, sessionId?: string): Promise<unknown> {
   const agent = sessionKey.split(':')[1]?.trim();
   if (!agent) return undefined;
 
@@ -511,13 +586,7 @@ async function resolveSessionKeyFromOpenClawStore(sessionKey: string): Promise<s
     throw new ChatError('openclaw_sessions_store_invalid', 'openclaw_sessions_store_invalid');
   }
 
-  const record = findSessionRecord(parsed, sessionKey);
-  const storedSessionId = readStoredSessionId(record);
-  if (!storedSessionId) return undefined;
-  if (!isSafeOpenClawSessionId(storedSessionId)) {
-    throw new ChatError('openclaw_sessions_store_invalid', 'openclaw_sessions_store_invalid');
-  }
-  return storedSessionId;
+  return findSessionRecord(parsed, sessionKey, sessionId);
 }
 
 function getOpenClawStateDir(): string {
@@ -566,18 +635,50 @@ function normalizeEnvValue(value: string | undefined): string | undefined {
   return trimmed;
 }
 
-function findSessionRecord(store: unknown, sessionKey: string): unknown {
+function findSessionRecord(store: unknown, sessionKey: string, sessionId?: string): unknown {
   if (!store || typeof store !== 'object') return undefined;
-  if (Array.isArray(store)) {
-    return store.find((entry) => readStringProperty(entry, 'key') === sessionKey || readStringProperty(entry, 'sessionKey') === sessionKey);
-  }
-  return (store as Record<string, unknown>)[sessionKey];
+  const requestedSessionId = sessionId?.trim();
+  const matches = (entry: unknown) => {
+    if (!entry || typeof entry !== 'object') return false;
+    if (readStringProperty(entry, 'key') === sessionKey || readStringProperty(entry, 'sessionKey') === sessionKey) return true;
+    if (!requestedSessionId) return false;
+    return readStringProperty(entry, 'sessionId') === requestedSessionId || readStringProperty(entry, 'id') === requestedSessionId;
+  };
+
+  if (Array.isArray(store)) return store.find(matches);
+
+  const direct = (store as Record<string, unknown>)[sessionKey];
+  if (direct) return direct;
+  return Object.values(store as Record<string, unknown>).find(matches);
 }
 
 function readStoredSessionId(record: unknown): string | undefined {
   const value = readStringProperty(record, 'sessionId') ?? readStringProperty(record, 'id');
   const trimmed = value?.trim();
   return trimmed || undefined;
+}
+
+function readSessionAccountId(record: unknown): string | undefined {
+  const value = readStringProperty(record, 'accountId')
+    ?? readStringProperty(record, 'account')
+    ?? readStringProperty(record, 'lastAccountId')
+    ?? readStringProperty(record, 'lastAccount')
+    ?? readStringProperty(readObjectProperty(record, 'origin'), 'accountId')
+    ?? readStringProperty(readObjectProperty(record, 'origin'), 'account')
+    ?? readStringProperty(readObjectProperty(record, 'origin'), 'lastAccountId')
+    ?? readStringProperty(readObjectProperty(record, 'origin'), 'lastAccount')
+    ?? readStringProperty(readObjectProperty(record, 'deliveryContext'), 'accountId')
+    ?? readStringProperty(readObjectProperty(record, 'deliveryContext'), 'account')
+    ?? readStringProperty(readObjectProperty(record, 'deliveryContext'), 'lastAccountId')
+    ?? readStringProperty(readObjectProperty(record, 'deliveryContext'), 'lastAccount');
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
+function readObjectProperty(value: unknown, key: string): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const property = (value as Record<string, unknown>)[key];
+  return property && typeof property === 'object' && !Array.isArray(property) ? property as Record<string, unknown> : undefined;
 }
 
 function readStringProperty(value: unknown, key: string): string | undefined {
@@ -677,6 +778,12 @@ export async function runChat(userText: string, opts: ChatOptionsWithSession): P
   const trimmed = userText.trim();
   if (!trimmed) throw new ChatError('empty_transcript', 'empty_transcript');
 
+  const accountId = opts.accountId?.trim() || await resolveSessionAccountIdFromOpenClawStore({
+    sessionId: opts.sessionId,
+    sessionKey: opts.sessionKey,
+    signal: opts.signal,
+  });
+
   observeTranscriptPost(
     sendTranscriptMessage(
       {
@@ -685,7 +792,7 @@ export async function runChat(userText: string, opts: ChatOptionsWithSession): P
         sessionKey: opts.sessionKey,
         channel: opts.channel,
         target: opts.target,
-        accountId: opts.accountId,
+        accountId,
         delivery: opts.delivery,
       },
       trimmed,
@@ -701,7 +808,7 @@ export async function runChat(userText: string, opts: ChatOptionsWithSession): P
       sessionKey: opts.sessionKey,
       channel: opts.channel,
       target: opts.target,
-      accountId: opts.accountId,
+      accountId,
       delivery: opts.delivery,
       deliver: opts.deliver,
       signal: opts.signal,

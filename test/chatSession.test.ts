@@ -42,10 +42,20 @@ function jsonAgentStdout(text: string, mediaUrls: string[] = []): string {
 const OPENCLAW_ENV_KEYS = ['OPENCLAW_HOME', 'OPENCLAW_STATE_DIR', 'OPENCLAW_CONFIG_PATH', 'HOME', 'USERPROFILE'] as const;
 const ORIGINAL_OPENCLAW_ENV = Object.fromEntries(OPENCLAW_ENV_KEYS.map((key) => [key, process.env[key]]));
 
+type OpenClawSessionTestRecord = {
+  sessionId: string;
+  accountId?: string;
+  account?: string;
+  lastAccountId?: string;
+  lastAccount?: string;
+  origin?: { accountId?: string; account?: string; lastAccountId?: string; lastAccount?: string };
+  deliveryContext?: { accountId?: string; account?: string; lastAccountId?: string; lastAccount?: string };
+};
+
 async function writeOpenClawSessionStore(
   stateDir: string,
   agent: string,
-  sessions: Record<string, { sessionId: string }>,
+  sessions: Record<string, OpenClawSessionTestRecord>,
 ) {
   const sessionsDir = join(stateDir, 'agents', agent, 'sessions');
   await mkdir(sessionsDir, { recursive: true });
@@ -54,7 +64,7 @@ async function writeOpenClawSessionStore(
 
 async function withOpenClawSessionStore(
   agent: string,
-  sessions: Record<string, { sessionId: string }>,
+  sessions: Record<string, OpenClawSessionTestRecord>,
   fn: () => Promise<void>,
 ) {
   const root = await mkdtemp(join(tmpdir(), 'clawkie-openclaw-state-'));
@@ -340,6 +350,178 @@ describe('runChat OpenClaw CLI integration', () => {
     expect(agentCall.args).not.toContain('last');
   });
 
+  it('resolves missing handoff accountId from stored session metadata for transcript and reply delivery', async () => {
+    const sessionId = 'c44d9502-ce71-46b1-9b15-5d548004544a';
+    const sessionKey = 'agent:san:discord:channel:1501983803436961932';
+
+    await withOpenClawSessionStore('san', {
+      [sessionKey]: { sessionId, accountId: 'san' },
+    }, async () => {
+      execMock.mockImplementation((cmd) => {
+        const command = String(cmd);
+        if (command.includes('openclaw "message" "send"')) {
+          return Promise.resolve({ stdout: 'transcript posted\n', stderr: '' });
+        }
+        if (command.includes('openclaw "agent"')) {
+          return Promise.resolve({ stdout: jsonAgentStdout('reply'), stderr: '' });
+        }
+        return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+      });
+
+      await runChat('from san handoff', {
+        sessionId,
+        sessionKey,
+        channel: 'discord',
+        target: 'channel:1501983803436961932',
+        deliver: true,
+      });
+
+      await vi.waitFor(() => {
+        const transcriptCall = findOpenClawExecFileInvocation('message', 'send');
+        expect(transcriptCall.args).toEqual(expect.arrayContaining(['--account', 'san']));
+      });
+
+      const agentCall = findOpenClawExecFileInvocation('agent');
+      expect(agentCall.args).toEqual(expect.arrayContaining([
+        '--agent', 'san',
+        '--reply-channel', 'discord',
+        '--reply-to', 'channel:1501983803436961932',
+        '--reply-account', 'san',
+      ]));
+    });
+  });
+
+  it('resolves missing handoff accountId from stored lastAccountId for transcript and reply delivery', async () => {
+    const sessionId = 'c44d9502-ce71-46b1-9b15-5d548004544a';
+    const sessionKey = 'agent:san:discord:channel:1501983803436961932';
+
+    await withOpenClawSessionStore('san', {
+      [sessionKey]: { sessionId, lastAccountId: 'san-last' },
+    }, async () => {
+      execMock.mockImplementation((cmd) => {
+        const command = String(cmd);
+        if (command.includes('openclaw "message" "send"')) {
+          return Promise.resolve({ stdout: 'transcript posted\n', stderr: '' });
+        }
+        if (command.includes('openclaw "agent"')) {
+          return Promise.resolve({ stdout: jsonAgentStdout('reply'), stderr: '' });
+        }
+        return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+      });
+
+      await runChat('from san lastAccountId handoff', {
+        sessionId,
+        sessionKey,
+        channel: 'discord',
+        target: 'channel:1501983803436961932',
+        deliver: true,
+      });
+
+      await vi.waitFor(() => {
+        const transcriptCall = findOpenClawExecFileInvocation('message', 'send');
+        expect(transcriptCall.args).toEqual(expect.arrayContaining(['--account', 'san-last']));
+      });
+
+      const agentCall = findOpenClawExecFileInvocation('agent');
+      expect(agentCall.args).toEqual(expect.arrayContaining([
+        '--agent', 'san',
+        '--reply-channel', 'discord',
+        '--reply-to', 'channel:1501983803436961932',
+        '--reply-account', 'san-last',
+      ]));
+    });
+  });
+
+  it('preserves explicit handoff accountId over stored session metadata', async () => {
+    const sessionId = 'c44d9502-ce71-46b1-9b15-5d548004544a';
+    const sessionKey = 'agent:san:discord:channel:1501983803436961932';
+
+    await withOpenClawSessionStore('san', {
+      [sessionKey]: { sessionId, accountId: 'stored-san' },
+    }, async () => {
+      execMock.mockImplementation((cmd) => {
+        const command = String(cmd);
+        if (command.includes('openclaw "message" "send"')) {
+          return Promise.resolve({ stdout: 'transcript posted\n', stderr: '' });
+        }
+        if (command.includes('openclaw "agent"')) {
+          return Promise.resolve({ stdout: jsonAgentStdout('reply'), stderr: '' });
+        }
+        return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+      });
+
+      await runChat('from explicit account handoff', {
+        sessionId,
+        sessionKey,
+        channel: 'discord',
+        target: 'channel:1501983803436961932',
+        accountId: 'explicit-san',
+        deliver: true,
+      });
+
+      await vi.waitFor(() => {
+        const transcriptCall = findOpenClawExecFileInvocation('message', 'send');
+        expect(transcriptCall.args).toEqual(expect.arrayContaining(['--account', 'explicit-san']));
+        expect(transcriptCall.args).not.toContain('stored-san');
+      });
+
+      const agentCall = findOpenClawExecFileInvocation('agent');
+      expect(agentCall.args).toEqual(expect.arrayContaining(['--reply-account', 'explicit-san']));
+      expect(agentCall.args).not.toContain('stored-san');
+    });
+  });
+
+  it('resolves missing handoff accountId from nested session origin or delivery context metadata', async () => {
+    const sessionId = 'c44d9502-ce71-46b1-9b15-5d548004544a';
+    const originSessionKey = 'agent:san:discord:channel:origin-thread';
+    const deliverySessionKey = 'agent:san:discord:channel:delivery-thread';
+
+    await withOpenClawSessionStore('san', {
+      [originSessionKey]: { sessionId, origin: { accountId: 'origin-san' } },
+      [deliverySessionKey]: { sessionId: '019e0000-0000-7000-8000-000000000010', deliveryContext: { accountId: 'delivery-san' } },
+    }, async () => {
+      execMock.mockImplementation((cmd) => {
+        const command = String(cmd);
+        if (command.includes('openclaw "message" "send"')) {
+          return Promise.resolve({ stdout: 'transcript posted\n', stderr: '' });
+        }
+        if (command.includes('openclaw "agent"')) {
+          return Promise.resolve({ stdout: jsonAgentStdout('reply'), stderr: '' });
+        }
+        return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+      });
+
+      await runChat('from nested account metadata', {
+        sessionId,
+        sessionKey: originSessionKey,
+        channel: 'discord',
+        target: 'channel:origin-thread',
+        deliver: true,
+      });
+
+      const firstTranscriptCall = findOpenClawExecFileInvocation('message', 'send');
+      expect(firstTranscriptCall.args).toEqual(expect.arrayContaining(['--account', 'origin-san']));
+      const firstAgentCall = findOpenClawExecFileInvocation('agent');
+      expect(firstAgentCall.args).toEqual(expect.arrayContaining(['--reply-account', 'origin-san']));
+
+      execFileInvocations.length = 0;
+      execMock.mockClear();
+
+      await runChat('from delivery context account metadata', {
+        sessionId: '019e0000-0000-7000-8000-000000000010',
+        sessionKey: deliverySessionKey,
+        channel: 'discord',
+        target: 'channel:delivery-thread',
+        deliver: true,
+      });
+
+      const secondTranscriptCall = findOpenClawExecFileInvocation('message', 'send');
+      expect(secondTranscriptCall.args).toEqual(expect.arrayContaining(['--account', 'delivery-san']));
+      const secondAgentCall = findOpenClawExecFileInvocation('agent');
+      expect(secondAgentCall.args).toEqual(expect.arrayContaining(['--reply-account', 'delivery-san']));
+    });
+  });
+
   it('delivers voice replies with the agent from sessionKey and nested delivery metadata', async () => {
     const sessionId = 'c44d9502-ce71-46b1-9b15-5d548004544a';
     execMock.mockImplementation((cmd) => {
@@ -480,6 +662,204 @@ describe('runChat OpenClaw CLI integration', () => {
     expect(agentCommand).toContain('"--reply-channel" "discord"');
     expect(agentCommand).toContain('"--reply-to" "channel:thread-from-session-list"');
     expect(agentCommand).not.toContain('"--channel" "last"');
+  });
+
+
+  it('adds the stored San account to UUID-only transcript mirroring after reverse-resolving the session key', async () => {
+    const sessionId = 'c44d9502-ce71-46b1-9b15-5d548004544a';
+    const sessionKey = 'agent:san:discord:channel:1501983803436961932';
+
+    await withOpenClawSessionStore('san', {
+      [sessionKey]: { sessionId, accountId: 'san' },
+    }, async () => {
+      execMock.mockImplementation((cmd) => {
+        const command = String(cmd);
+        if (command.includes('openclaw "sessions"')) {
+          return Promise.resolve({
+            stdout: JSON.stringify({ sessions: [{ sessionId, key: sessionKey }] }),
+            stderr: '',
+          });
+        }
+        if (command.includes('openclaw "message" "send"')) {
+          return Promise.resolve({ stdout: 'transcript posted\n', stderr: '' });
+        }
+        if (command.includes('openclaw "agent"')) {
+          return Promise.resolve({ stdout: jsonAgentStdout('reply'), stderr: '' });
+        }
+        return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+      });
+
+      await runChat('from uuid-only san route', {
+        sessionId,
+        deliver: true,
+      });
+
+      await vi.waitFor(() => {
+        const transcriptCall = findOpenClawExecFileInvocation('message', 'send');
+        expect(transcriptCall.args).toEqual(expect.arrayContaining([
+          '--channel', 'discord',
+          '--target', 'channel:1501983803436961932',
+          '--account', 'san',
+        ]));
+      });
+
+      const agentCall = findOpenClawExecFileInvocation('agent');
+      expect(agentCall.args).toEqual(expect.arrayContaining([
+        '--agent', 'san',
+        '--reply-channel', 'discord',
+        '--reply-to', 'channel:1501983803436961932',
+        '--reply-account', 'san',
+      ]));
+    });
+  });
+
+
+  it('adds the stored San account to UUID-only transcript mirroring with an explicit channel target', async () => {
+    const sessionId = 'c44d9502-ce71-46b1-9b15-5d548004544a';
+    const sessionKey = 'agent:san:discord:channel:1501983803436961932';
+
+    await withOpenClawSessionStore('san', {
+      [sessionKey]: { sessionId, accountId: 'san' },
+    }, async () => {
+      execMock.mockImplementation((cmd) => {
+        const command = String(cmd);
+        if (command.includes('openclaw "sessions"')) {
+          return Promise.resolve({
+            stdout: JSON.stringify({ sessions: [{ sessionId, key: sessionKey }] }),
+            stderr: '',
+          });
+        }
+        if (command.includes('openclaw "message" "send"')) {
+          return Promise.resolve({ stdout: 'transcript posted\n', stderr: '' });
+        }
+        if (command.includes('openclaw "agent"')) {
+          return Promise.resolve({ stdout: jsonAgentStdout('reply'), stderr: '' });
+        }
+        return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+      });
+
+      await runChat('from uuid-only explicit san route', {
+        sessionId,
+        channel: 'discord',
+        target: 'channel:explicit-thread',
+        deliver: true,
+      });
+
+      await vi.waitFor(() => {
+        const transcriptCall = findOpenClawMessageSendInvocationWithMessage('> from uuid-only explicit san route');
+        expect(transcriptCall.args).toEqual(expect.arrayContaining([
+          '--channel', 'discord',
+          '--target', 'channel:explicit-thread',
+          '--account', 'san',
+        ]));
+      });
+
+      const agentCall = findOpenClawExecFileInvocation('agent');
+      expect(agentCall.args).toEqual(expect.arrayContaining([
+        '--agent', 'san',
+        '--reply-channel', 'discord',
+        '--reply-to', 'channel:explicit-thread',
+        '--reply-account', 'san',
+      ]));
+    });
+  });
+
+  it('adds the stored San account to UUID-only transcript mirroring with a delivery object', async () => {
+    const sessionId = 'c44d9502-ce71-46b1-9b15-5d548004544a';
+    const sessionKey = 'agent:san:discord:channel:1501983803436961932';
+
+    await withOpenClawSessionStore('san', {
+      [sessionKey]: { sessionId, accountId: 'san' },
+    }, async () => {
+      execMock.mockImplementation((cmd) => {
+        const command = String(cmd);
+        if (command.includes('openclaw "sessions"')) {
+          return Promise.resolve({
+            stdout: JSON.stringify({ sessions: [{ sessionId, key: sessionKey }] }),
+            stderr: '',
+          });
+        }
+        if (command.includes('openclaw "message" "send"')) {
+          return Promise.resolve({ stdout: 'transcript posted\n', stderr: '' });
+        }
+        if (command.includes('openclaw "agent"')) {
+          return Promise.resolve({ stdout: jsonAgentStdout('reply'), stderr: '' });
+        }
+        return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+      });
+
+      await runChat('from uuid-only delivery san route', {
+        sessionId,
+        delivery: { channel: 'discord', target: 'channel:delivery-thread' },
+        deliver: true,
+      });
+
+      await vi.waitFor(() => {
+        const transcriptCall = findOpenClawMessageSendInvocationWithMessage('> from uuid-only delivery san route');
+        expect(transcriptCall.args).toEqual(expect.arrayContaining([
+          '--channel', 'discord',
+          '--target', 'channel:delivery-thread',
+          '--account', 'san',
+        ]));
+      });
+
+      const agentCall = findOpenClawExecFileInvocation('agent');
+      expect(agentCall.args).toEqual(expect.arrayContaining([
+        '--agent', 'san',
+        '--reply-channel', 'discord',
+        '--reply-to', 'channel:delivery-thread',
+        '--reply-account', 'san',
+      ]));
+    });
+  });
+
+  it('adds the stored San account to UUID-only transcript mirroring with a threadId delivery target', async () => {
+    const sessionId = 'c44d9502-ce71-46b1-9b15-5d548004544a';
+    const sessionKey = 'agent:san:discord:channel:1501983803436961932';
+
+    await withOpenClawSessionStore('san', {
+      [sessionKey]: { sessionId, accountId: 'san' },
+    }, async () => {
+      execMock.mockImplementation((cmd) => {
+        const command = String(cmd);
+        if (command.includes('openclaw "sessions"')) {
+          return Promise.resolve({
+            stdout: JSON.stringify({ sessions: [{ sessionId, key: sessionKey }] }),
+            stderr: '',
+          });
+        }
+        if (command.includes('openclaw "message" "send"')) {
+          return Promise.resolve({ stdout: 'transcript posted\n', stderr: '' });
+        }
+        if (command.includes('openclaw "agent"')) {
+          return Promise.resolve({ stdout: jsonAgentStdout('reply'), stderr: '' });
+        }
+        return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+      });
+
+      await runChat('from uuid-only thread san route', {
+        sessionId,
+        threadId: 'thread-from-opt',
+        deliver: true,
+      });
+
+      await vi.waitFor(() => {
+        const transcriptCall = findOpenClawMessageSendInvocationWithMessage('> from uuid-only thread san route');
+        expect(transcriptCall.args).toEqual(expect.arrayContaining([
+          '--channel', 'discord',
+          '--target', 'channel:thread-from-opt',
+          '--account', 'san',
+        ]));
+      });
+
+      const agentCall = findOpenClawExecFileInvocation('agent');
+      expect(agentCall.args).toEqual(expect.arrayContaining([
+        '--agent', 'san',
+        '--reply-channel', 'discord',
+        '--reply-to', 'channel:thread-from-opt',
+        '--reply-account', 'san',
+      ]));
+    });
   });
 
   it('uses the agent from a reverse-resolved UUID session key for mandatory reply delivery', async () => {
@@ -1289,5 +1669,17 @@ function findOpenClawExecFileInvocation(...prefix: string[]): { file: string; ar
     invocation.file === 'openclaw' && prefix.every((part, index) => invocation.args[index] === part),
   );
   if (!call) throw new ChatError(`missing openclaw execFile invocation: ${prefix.join(' ')}`, 'test_failure');
+  return call;
+}
+
+
+function findOpenClawMessageSendInvocationWithMessage(message: string): { file: string; args: string[]; opts?: unknown } {
+  const call = execFileInvocations.find((invocation) => {
+    if (invocation.file !== 'openclaw') return false;
+    if (invocation.args[0] !== 'message' || invocation.args[1] !== 'send') return false;
+    const messageIndex = invocation.args.indexOf('--message');
+    return messageIndex >= 0 && invocation.args[messageIndex + 1] === message;
+  });
+  if (!call) throw new ChatError(`missing openclaw message send invocation with message: ${message}`, 'test_failure');
   return call;
 }
