@@ -43,6 +43,7 @@ export function SettingsScreen({
   onBack,
   settings,
   setSettings,
+  hostPeerId,
   ttsCatalog,
   onRefreshTtsCatalog,
   sttCatalog,
@@ -52,6 +53,7 @@ export function SettingsScreen({
   onBack: () => void;
   settings: Settings;
   setSettings: Dispatch<SetStateAction<Settings>>;
+  hostPeerId?: string | null;
   ttsCatalog: TtsCatalog | null;
   onRefreshTtsCatalog?: () => void;
   sttCatalog: SttCatalog | null;
@@ -330,6 +332,10 @@ export function SettingsScreen({
             <StatusRow text="No hold music tracks available" />
           )}
         </SettingsSection>
+
+        <SettingsSection title="TECHNICAL">
+          <TechnicalRow label="Host ID" value={formatSettingsHostId(hostPeerId)} />
+        </SettingsSection>
       </ScrollBody>
 
       <div
@@ -355,6 +361,10 @@ export function SettingsScreen({
       </div>
     </div>
   );
+}
+
+function formatSettingsHostId(hostPeerId?: string | null): string {
+  return hostPeerId?.trim() || 'Unavailable';
 }
 
 export function configuredTtsProviders(catalog: TtsCatalog | null): TtsProviderOption[] {
@@ -710,6 +720,46 @@ function SettingsSection({ title, children }: { title: string; children: ReactNo
         }}
       >
         {children}
+      </div>
+    </div>
+  );
+}
+
+function TechnicalRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        padding: '10px 14px',
+        borderBottom: `1px solid ${HIFI.stroke}`,
+        display: 'grid',
+        gap: 4,
+      }}
+    >
+      <div
+        style={{
+          fontFamily: HIFI.fonts.mono,
+          fontSize: 10,
+          letterSpacing: 1,
+          color: HIFI.ink3,
+          textTransform: 'uppercase',
+        }}
+      >
+        {label}
+      </div>
+      <div
+        style={{
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          fontFamily: HIFI.fonts.mono,
+          fontSize: 10,
+          color: HIFI.ink4,
+          letterSpacing: 0.2,
+        }}
+        title={value === 'Unavailable' ? undefined : value}
+      >
+        {value}
       </div>
     </div>
   );

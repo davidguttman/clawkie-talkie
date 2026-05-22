@@ -203,9 +203,8 @@ export function DashboardScreen({
             fontSize: 10,
             letterSpacing: 0.2,
           }}
-          title={hostPeerId || undefined}
         >
-          host {hostPeerId || 'missing'}{updatedLabel ? ` · ${updatedLabel}` : ''}
+          daemon connection{updatedLabel ? ` · ${updatedLabel}` : ''}
         </div>
         {showError && <Notice tone="error">{daemonRendezvousDetail}</Notice>}
         {showTimedOut && <Notice tone="warn">No recent-session response yet. The daemon may still be starting.</Notice>}

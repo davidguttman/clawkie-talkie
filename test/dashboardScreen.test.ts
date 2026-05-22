@@ -60,6 +60,38 @@ describe('Dashboard session discovery state guards', () => {
     expect(source).toMatch(/\{rtc\.canRetryConnection\s*\?\s*'RECONNECT'\s*:\s*waiting\s*\?\s*'REFRESHING…'\s*:\s*'REFRESH'\}/);
     expect(source).toMatch(/disabled=\{\s*!rtc\.canRetryConnection && \(waiting \|\| rtc\.status !== 'open'\)\s*\}/);
   });
+
+  it('keeps the host id off the dashboard while still showing daemon status', async () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    rtcMock.current = {
+      status: 'open',
+      detail: '',
+      canRetryConnection: false,
+      retryConnection: vi.fn(),
+      recentSessionsGeneratedAt: new Date().toISOString(),
+      recentSessionsSupportStatus: 'supported',
+      recentSessionsResponseSeq: 1,
+      requestRecentSessions: vi.fn(),
+      recentSessions: [],
+    };
+
+    await act(async () => {
+      root.render(createElement(DashboardScreen, { hostPeerId: 'secret-host-id', onSelectSession: vi.fn() }));
+    });
+
+    expect(container.textContent).toContain('CONNECTED');
+    expect(container.textContent).toContain('daemon connection');
+    expect(container.textContent).toContain('updated just now');
+    expect(container.textContent).not.toContain('secret-host-id');
+    expect(container.querySelector('[title="secret-host-id"]')).toBeNull();
+
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+  });
 });
 
 
