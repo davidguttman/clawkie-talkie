@@ -92,6 +92,16 @@ beforeEach(() => {
 
 
 describe('DrivingScreen OpenClaw session preview restore', () => {
+  it('does not render the host id on the driving surface', async () => {
+    const rendered = await renderDriving({ hostPeerId: 'secret-host-id' });
+
+    expect(rendered.container.textContent).toContain('VOICE SESSION');
+    expect(rendered.container.textContent).not.toContain('secret-host-id');
+    expect(rendered.container.innerHTML).not.toContain('secret-host-id');
+
+    await rendered.cleanup();
+  });
+
   it('renders the active recent session assistant preview as the idle last AI caption', async () => {
     mocks.rtc.current = baseRtc({
       recentSessions: [

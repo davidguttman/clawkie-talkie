@@ -122,9 +122,16 @@ vi.mock('../client/src/screens/Dashboard', () => ({
 }));
 
 vi.mock('../client/src/screens/Settings', () => ({
-  SettingsScreen: ({ onBack }: { onBack: () => void }) => createElement(
+  SettingsScreen: ({
+    onBack,
+    hostPeerId,
+  }: {
+    onBack: () => void;
+    hostPeerId?: string | null;
+  }) => createElement(
     'section',
     { 'data-testid': 'settings-screen' },
+    createElement('span', { 'data-testid': 'settings-host-id' }, hostPeerId ?? ''),
     createElement('button', { type: 'button', onClick: onBack }, 'Back'),
   ),
 }));
@@ -223,6 +230,16 @@ describe('App Settings overlay behavior', () => {
       tts: { providerId: 'openai', model: 'gpt-4o-mini-tts', voice: 'nova' },
       stt: { providerId: 'xai', model: 'grok-stt' },
     });
+  });
+
+  it('passes the current host id into the Settings overlay', async () => {
+    const view = await renderApp('#host=secret-host-id&session=session-1');
+
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('[aria-label="Settings"]')?.click();
+    });
+
+    expect(view.querySelector('[data-testid="settings-host-id"]')?.textContent).toBe('secret-host-id');
   });
 
   it('opens Settings as a dialog overlay while keeping the Driving screen mounted behind it', async () => {

@@ -436,6 +436,7 @@ export function App() {
           setSettingsOpen={setSettingsOpen}
           settings={settings}
           setSettings={setSettingsState}
+          hostPeerId={activeHostPeerId}
           compact={compact}
         />
       )}
@@ -526,11 +527,13 @@ function SettingsOverlay({
   setSettingsOpen,
   settings,
   setSettings,
+  hostPeerId,
   compact,
 }: {
   setSettingsOpen: (open: boolean) => void;
   settings: Settings;
   setSettings: Dispatch<SetStateAction<Settings>>;
+  hostPeerId?: string | null;
   compact: boolean;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -590,6 +593,7 @@ function SettingsOverlay({
           onBack={() => setSettingsOpen(false)}
           settings={settings}
           setSettings={setSettings}
+          hostPeerId={hostPeerId}
           ttsCatalog={ttsCatalog}
           onRefreshTtsCatalog={requestTtsCatalog}
           sttCatalog={sttCatalog}

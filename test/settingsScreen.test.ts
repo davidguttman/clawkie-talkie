@@ -101,6 +101,49 @@ function catalog(overrides: Partial<TtsCatalog> = {}): TtsCatalog {
 
 
 describe('SettingsScreen toggle accessibility', () => {
+  it('exposes the host id only as a low-prominence technical settings row', async () => {
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const settings: Settings = {
+      voice: '',
+      tts: {},
+      stt: {},
+      format: 'md',
+      timestamps: true,
+      music: { muted: false, effects: true, volumeLevel: 'medium', disabledTracks: [] },
+    };
+
+    try {
+      await act(async () => {
+        root.render(createElement(SettingsScreen, {
+          onBack: () => undefined,
+          settings,
+          setSettings: vi.fn(),
+          hostPeerId: 'secret-host-id',
+          ttsCatalog: null,
+          sttCatalog: null,
+          compact: true,
+        }));
+      });
+
+      expect(container.textContent).toContain('TECHNICAL');
+      expect(container.textContent).toContain('Host ID');
+      expect(container.textContent).toContain('secret-host-id');
+      const hostIdRow = Array.from(container.querySelectorAll<HTMLElement>('div'))
+        .find((element) => element.textContent === 'secret-host-id');
+      expect(hostIdRow?.style.fontSize).toBe('10px');
+      expect(hostIdRow?.style.color).toBe('rgb(92, 92, 98)');
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('renders export and music toggles as named switches with touch-friendly hit targets', async () => {
     vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
     const container = document.createElement('div');
