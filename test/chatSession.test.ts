@@ -1466,6 +1466,52 @@ describe('runChat with explicit delivery target', () => {
     expect(transcriptCommand).toContain(`"--message" ${JSON.stringify('> hello')}`);
   });
 
+  it('uses explicit Telegram handoff routing for transcript mirroring and mandatory reply delivery', async () => {
+    const sessionId = 'c44d9502-ce71-46b1-9b15-5d548004544a';
+    execMock.mockImplementation((cmd) => {
+      const command = String(cmd);
+      if (command.includes('openclaw "message" "send"')) {
+        return Promise.resolve({ stdout: 'transcript posted\n', stderr: '' });
+      }
+      if (command.includes('openclaw "agent"')) {
+        return Promise.resolve({ stdout: jsonAgentStdout('telegram reply'), stderr: '' });
+      }
+      return Promise.resolve({ stdout: 'unexpected\n', stderr: '' });
+    });
+
+    const result = await runChat('from telegram voice', {
+      sessionId,
+      sessionKey: 'agent:kamaji:telegram:chat:tg-42',
+      channel: 'telegram',
+      target: 'chat:tg-42',
+      accountId: 'telegram-acct',
+      deliver: true,
+    });
+
+    expect(result).toEqual({ text: 'telegram reply', source: 'openclaw' });
+    expect(execMock.mock.calls.some(([cmd]) => String(cmd).includes('openclaw "sessions"'))).toBe(false);
+
+    const transcriptCall = findOpenClawMessageSendInvocationWithMessage('> from telegram voice');
+    expect(transcriptCall.args).toEqual(expect.arrayContaining([
+      '--channel', 'telegram',
+      '--target', 'chat:tg-42',
+      '--account', 'telegram-acct',
+    ]));
+    expect(transcriptCall.args).not.toContain('discord');
+
+    const agentCall = findOpenClawExecFileInvocation('agent');
+    expect(agentCall.args).toEqual(expect.arrayContaining([
+      '--agent', 'kamaji',
+      '--session-id', sessionId,
+      '--deliver',
+      '--reply-channel', 'telegram',
+      '--reply-to', 'chat:tg-42',
+      '--reply-account', 'telegram-acct',
+    ]));
+    expect(agentCall.args).not.toContain('discord');
+    expect(agentCall.args).not.toContain('agent:main:main');
+  });
+
   it('does not mirror the assistant reply through message send because agent delivery handles it', async () => {
     execMock
       .mockResolvedValueOnce({ stdout: 'transcript posted\n', stderr: '' })
