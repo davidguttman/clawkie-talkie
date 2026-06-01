@@ -58,6 +58,19 @@ describe('parseHandoffUrl', () => {
     });
   });
 
+  it('preserves Telegram direct-chat routing metadata from handoff hash args', () => {
+    expect(
+      parseHandoffUrl('/voice#host=host-1&session=session-uuid&sessionKey=agent%3Akamaji%3Atelegram%3Achat%3Atg-42&channel=telegram&target=chat%3Atg-42&accountId=telegram-acct'),
+    ).toEqual({
+      hostPeerId: 'host-1',
+      sessionId: 'session-uuid',
+      sessionKey: 'agent:kamaji:telegram:chat:tg-42',
+      channel: 'telegram',
+      target: 'chat:tg-42',
+      accountId: 'telegram-acct',
+    });
+  });
+
   it('preserves explicit channel and target handoff args when present', () => {
     expect(
       parseHandoffUrl('/voice#host=host-1&session=session-1&channel=discord&target=channel%3Athread-1'),
@@ -276,6 +289,25 @@ describe('session picker handoff selection', () => {
       channel: 'discord',
       target: 'channel:t1',
       accountId: 'acct-1',
+    });
+  });
+
+  it('maps Telegram handoff routing to rendezvous props without falling back to main web chat', () => {
+    expect(
+      handoffToRendezvous({
+        hostPeerId: 'host-1',
+        sessionId: 'session-uuid',
+        sessionKey: 'agent:kamaji:telegram:chat:tg-42',
+        channel: 'telegram',
+        target: 'chat:tg-42',
+        accountId: 'telegram-acct',
+      }),
+    ).toEqual({
+      sessionId: 'session-uuid',
+      sessionKey: 'agent:kamaji:telegram:chat:tg-42',
+      channel: 'telegram',
+      target: 'chat:tg-42',
+      accountId: 'telegram-acct',
     });
   });
 });

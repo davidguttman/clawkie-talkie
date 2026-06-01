@@ -30,6 +30,8 @@ I can’t create the voice link: Clawkie Talkie is not installed/configured for 
 - Do **not** create or reference handoff IDs, opaque tokens, registries, TTLs, claims, revocations, or lookup tables.
 - Do **not** guess the current session id/key.
 - Do **not** guess routing fields. Include `channel`, `target`, and `accountId` only when they are visible in trusted runtime/session context.
+- Trusted explicit delivery routing is not Discord-only. Preserve non-Discord surfaces exactly as exposed by runtime/session context, including direct-chat providers such as Telegram. If trusted context exposes `channel=telegram`, a Telegram chat/user `target`, and `accountId`, the generated hash must include `channel=telegram&target=<target>&accountId=<accountId>`.
+- Do **not** fall back to `agent:main:main` for Telegram/direct-chat or other external surfaces. If no exact current `session` value is visible for that surface, stop and report the missing `session` field instead of generating a web-chat URL.
 - Use the configured `CLAWKIE_DAEMON_HOST_ID` exactly as installed.
 - If a required field is unavailable, say exactly which field is missing.
 
@@ -41,7 +43,7 @@ Generate only this public handoff URL shape:
 https://clawkietalkie.app/voice#host=<host>&session=<sessionId>&sessionKey=<sessionKey>&channel=<channel>&target=<target>&accountId=<accountId>
 ```
 
-`sessionKey`, `channel`, `target`, and `accountId` are optional only when those values are not visible. Include them whenever they are visible in trusted runtime/session context. `session` remains the session identity passed to `openclaw agent --session-id`; `sessionKey` selects the OpenClaw agent and can derive Discord reply/transcript routing; `channel` + `target` are the explicit originating reply route and are also used for best-effort transcript mirroring. If only a session key is visible, put that key in `session` and omit `sessionKey`. For OpenClaw web chat, `session=agent:main:main` is valid only as that fallback. If `target` is included, include `channel` too.
+`sessionKey`, `channel`, `target`, and `accountId` are optional only when those values are not visible. Include them whenever they are visible in trusted runtime/session context. `session` remains the session identity passed to `openclaw agent --session-id`; `sessionKey` selects the OpenClaw agent and can derive Discord reply/transcript routing; `channel` + `target` are the explicit originating reply route and are also used for best-effort transcript mirroring. This explicit route is provider-agnostic: for Telegram/direct-chat contexts, preserve the trusted Telegram `channel`, `target`/chat id, and `accountId` in the hash so the daemon can call OpenClaw with `--reply-channel telegram --reply-to <target> --reply-account <accountId>` and transcript mirroring can use `openclaw message send --channel telegram --target <target> --account <accountId>`. If only a session key is visible, put that key in `session` and omit `sessionKey`. For OpenClaw web chat, `session=agent:main:main` is valid only as that fallback. If `target` is included, include `channel` too.
 
 Use hash args so `sessionId`, session keys, and UUID-like values are not sent to web servers. Query params are compatibility-only; do not generate them unless explicitly requested.
 
@@ -83,7 +85,7 @@ For internal web chat, the canonical main-session key is:
 agent:main:main
 ```
 
-Use `agent:main:main` only when the trusted runtime context is actually the OpenClaw web chat / internal main session and no actual sessionId is visible. Do not use it as a fallback for Discord, Slack, WhatsApp, Telegram, ACP, subagent, custom, direct-message, or bound sessions.
+Use `agent:main:main` only when the trusted runtime context is actually the OpenClaw web chat / internal main session and no actual sessionId is visible. Do not use it as a fallback for Discord, Slack, WhatsApp, Telegram, ACP, subagent, custom, direct-message, or bound sessions. For Telegram/direct-chat surfaces with visible routing but no visible exact session id/key, report `missing session`; do not generate a main web-chat handoff.
 
 If no exact current session id/key is visible, do not invent one. For ordinary main group/channel sessions only, deriving a session-key fallback from OpenClaw’s session-key convention is acceptable when all parts are certain:
 
@@ -116,6 +118,8 @@ if (channel && target) {
 if (accountId) params.set('accountId', accountId);
 const url = `https://clawkietalkie.app/voice#${params.toString()}`;
 ```
+
+For Telegram direct-chat context with trusted values like `session=<uuid>`, `channel=telegram`, `target=chat:<id>` (or the exact target shape exposed by OpenClaw), and `accountId=<account>`, the resulting hash must include all three routing fields alongside `host` and `session`; never replace the session with `agent:main:main`.
 
 ## Response format
 

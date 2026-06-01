@@ -125,6 +125,34 @@ describe('phone → daemon factories', () => {
     );
   });
 
+  it('includes Telegram direct-chat routing metadata in rendezvous join without changing session identity', () => {
+    const join = phoneClient.rendezvousJoin({
+      sessionId: 'session-uuid',
+      sessionKey: 'agent:kamaji:telegram:chat:tg-42',
+      channel: 'telegram',
+      target: 'chat:tg-42',
+      accountId: 'telegram-acct',
+    });
+
+    expect(join).toEqual({
+      t: 'rendezvous.join',
+      sessionId: 'session-uuid',
+      sessionKey: 'agent:kamaji:telegram:chat:tg-42',
+      channel: 'telegram',
+      target: 'chat:tg-42',
+      accountId: 'telegram-acct',
+    });
+    expect(join).toEqual(
+      phoneDaemon.rendezvousJoin({
+        sessionId: 'session-uuid',
+        sessionKey: 'agent:kamaji:telegram:chat:tg-42',
+        channel: 'telegram',
+        target: 'chat:tg-42',
+        accountId: 'telegram-acct',
+      }),
+    );
+  });
+
   it('includes voice settings in rendezvous join when provided', () => {
     expect(
       phoneClient.rendezvousJoin({
