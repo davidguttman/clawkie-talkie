@@ -105,7 +105,8 @@ export function decidePhoneConnection(input: {
 
 // --- runtime ---------------------------------------------------------
 
-const CONNECT_TIMEOUT_MS = 12_000;
+// Mobile connections can need a longer second-stage WebRTC handshake.
+const CONNECT_TIMEOUT_MS = 30_000;
 const REPLACED_REMOTE_IGNORE_TTL_MS = 30_000;
 const STT_SAMPLE_RATE = 16000;
 const TTS_CATALOG_LOAD_TIMEOUT_MS = 1_500;

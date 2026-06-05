@@ -39,6 +39,7 @@ const DEFAULT_SIGNAL_SERVER =
 const HOSTED_DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'turn:api.rambly.app:3478', username: 'rambly', credential: 'rambly' },
+  { urls: 'turn:api.rambly.app:3478?transport=tcp', username: 'rambly', credential: 'rambly' },
 ];
 
 export const DEFAULT_ICE_SERVERS: RTCIceServer[] =

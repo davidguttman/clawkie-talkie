@@ -41,7 +41,10 @@ const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'turn:api.rambly.app:3478', username: 'rambly', credential: 'rambly' },
 ];
 
-const RENDEZVOUS_TIMEOUT_MS = 12_000;
+// Mobile browsers can take noticeably longer to complete the initial
+// answer/ICE exchange, so keep the rendezvous peer alive a bit longer
+// before giving up on the join.
+const RENDEZVOUS_TIMEOUT_MS = 30_000;
 const RECENT_SESSIONS_SUBSCRIPTION_INTERVAL_MS = 60_000;
 // Conservative resource guard for simultaneous WebRTC/STT/TTS lanes;
 // not a mathematically derived capacity limit.
