@@ -100,16 +100,18 @@ beforeEach(() => {
   });
 });
 
-type TestMediaSessionHandlers = Partial<Record<MediaSessionAction, MediaSessionActionHandler | null>>;
+type ExtendedTestMediaSessionAction = MediaSessionAction | 'togglemicrophone';
+type TestMediaSessionHandlers = Partial<Record<ExtendedTestMediaSessionAction, MediaSessionActionHandler | null>>;
 
-function installTestMediaSession() {
+function installTestMediaSession(overrides: { setMicrophoneActive?: (active: boolean) => void | Promise<void> } = {}) {
   const handlers: TestMediaSessionHandlers = {};
   const mediaSession = {
     metadata: null as MediaMetadata | null,
     playbackState: 'none' as MediaSessionPlaybackState,
-    setActionHandler: vi.fn((action: MediaSessionAction, handler: MediaSessionActionHandler | null) => {
+    setActionHandler: vi.fn((action: ExtendedTestMediaSessionAction, handler: MediaSessionActionHandler | null) => {
       handlers[action] = handler;
     }),
+    ...overrides,
   };
   Object.defineProperty(navigator, 'mediaSession', {
     configurable: true,
@@ -330,20 +332,22 @@ describe('DrivingScreen replay control', () => {
 });
 
 describe('DrivingScreen media-session headset control', () => {
-  it('does not throw when MediaSession is unavailable', async () => {
+  it('does not throw while recording when MediaSession is unavailable', async () => {
+    mocks.drivingLoop.current = baseDrivingLoop({ state: 'recording' });
     const rendered = await renderDriving();
 
-    expect(rendered.container.textContent).toContain('TAP TO TALK');
+    expect(rendered.container.textContent).toContain('TAP TO STOP');
 
     await rendered.cleanup();
   });
 
-  it('maps play/pause media actions to the active PTT behavior', async () => {
+  it('maps play/pause/stop media actions to the active PTT behavior', async () => {
     const { handlers, mediaSession } = installTestMediaSession();
     const rendered = await renderDriving();
 
     expect(mediaSession.setActionHandler).toHaveBeenCalledWith('play', expect.any(Function));
     expect(mediaSession.setActionHandler).toHaveBeenCalledWith('pause', expect.any(Function));
+    expect(mediaSession.setActionHandler).toHaveBeenCalledWith('stop', expect.any(Function));
 
     act(() => {
       handlers.play?.({ action: 'play' });
@@ -351,9 +355,64 @@ describe('DrivingScreen media-session headset control', () => {
     act(() => {
       handlers.pause?.({ action: 'pause' });
     });
+    act(() => {
+      handlers.stop?.({ action: 'stop' });
+    });
 
-    expect(mocks.drivingLoop.current.tap).toHaveBeenCalledTimes(2);
+    expect(mocks.drivingLoop.current.tap).toHaveBeenCalledTimes(3);
 
+    await rendered.cleanup();
+  });
+
+  it('registers the microphone toggle action best-effort while recording and stops recording', async () => {
+    const { handlers, mediaSession } = installTestMediaSession();
+    mocks.drivingLoop.current = baseDrivingLoop({ state: 'recording' });
+    const rendered = await renderDriving();
+
+    expect(mediaSession.setActionHandler).toHaveBeenCalledWith('togglemicrophone', expect.any(Function));
+
+    act(() => {
+      handlers.togglemicrophone?.({ action: 'togglemicrophone' as MediaSessionAction });
+    });
+
+    expect(mocks.drivingLoop.current.tap).toHaveBeenCalledTimes(1);
+
+    await rendered.cleanup();
+  });
+
+  it('announces microphone activity while recording and clears it on cleanup', async () => {
+    const setMicrophoneActive = vi.fn(() => Promise.resolve());
+    installTestMediaSession({ setMicrophoneActive });
+    mocks.drivingLoop.current = baseDrivingLoop({ state: 'recording' });
+    const rendered = await renderDriving();
+
+    expect(setMicrophoneActive).toHaveBeenCalledWith(true);
+
+    await rendered.cleanup();
+
+    expect(setMicrophoneActive).toHaveBeenCalledWith(false);
+  });
+
+  it('uses document media-key fallback during recording and ignores text inputs', async () => {
+    mocks.drivingLoop.current = baseDrivingLoop({ state: 'recording' });
+    const rendered = await renderDriving();
+
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+
+    const inputEvent = new KeyboardEvent('keydown', { code: 'MediaPlayPause', bubbles: true, cancelable: true });
+    input.dispatchEvent(inputEvent);
+
+    expect(mocks.drivingLoop.current.tap).not.toHaveBeenCalled();
+    expect(inputEvent.defaultPrevented).toBe(false);
+
+    const mediaEvent = new KeyboardEvent('keydown', { code: 'MediaPlayPause', bubbles: true, cancelable: true });
+    document.dispatchEvent(mediaEvent);
+
+    expect(mediaEvent.defaultPrevented).toBe(true);
+    expect(mocks.drivingLoop.current.tap).toHaveBeenCalledTimes(1);
+
+    input.remove();
     await rendered.cleanup();
   });
 
@@ -445,24 +504,29 @@ describe('DrivingScreen media-session headset control', () => {
   it('documents the Chrome/Android first-idle-press caveat without hidden audio hacks', () => {
     const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
 
-    expect(source).toContain('The first idle headset press may still depend on Chrome having an active');
+    expect(source).toContain('headset delivery still depends on Chrome/Android routing');
     expect(source).toContain('do not add hidden/silent audio');
-    expect(source).toContain("const MEDIA_SESSION_PTT_ACTIONS: MediaSessionAction[] = ['play', 'pause'];");
+    expect(source).toContain("const MEDIA_SESSION_PTT_ACTIONS: readonly MediaSessionAction[] = ['play', 'pause', 'stop'];");
+    expect(source).toContain("const MEDIA_SESSION_MIC_ACTIONS: readonly ExtendedMediaSessionAction[] = ['togglemicrophone'];");
   });
 
-  it('clears play/pause handlers on unmount', async () => {
+  it('clears media action handlers and microphone activity on unmount', async () => {
     const { handlers, mediaSession } = installTestMediaSession();
     const rendered = await renderDriving();
 
     expect(typeof handlers.play).toBe('function');
     expect(typeof handlers.pause).toBe('function');
+    expect(typeof handlers.stop).toBe('function');
 
     await rendered.cleanup();
 
     expect(mediaSession.setActionHandler).toHaveBeenCalledWith('play', null);
     expect(mediaSession.setActionHandler).toHaveBeenCalledWith('pause', null);
+    expect(mediaSession.setActionHandler).toHaveBeenCalledWith('stop', null);
+    expect(mediaSession.setActionHandler).toHaveBeenCalledWith('togglemicrophone', null);
     expect(handlers.play).toBeNull();
     expect(handlers.pause).toBeNull();
+    expect(handlers.stop).toBeNull();
   });
 });
 

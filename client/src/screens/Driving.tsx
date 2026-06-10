@@ -499,17 +499,26 @@ const REPLAY_FALLBACK_INTENSITIES = [
   0.24, 0.34, 0.5, 0.62, 0.44, 0.28, 0.18,
 ];
 
-const MEDIA_SESSION_PTT_ACTIONS: MediaSessionAction[] = ['play', 'pause'];
+type ExtendedMediaSessionAction = MediaSessionAction | 'togglemicrophone';
+
+type MicrophoneAwareMediaSession = MediaSession & {
+  setMicrophoneActive?: (active: boolean) => void | Promise<void>;
+};
+
+const MEDIA_SESSION_PTT_ACTIONS: readonly MediaSessionAction[] = ['play', 'pause', 'stop'];
+const MEDIA_SESSION_MIC_ACTIONS: readonly ExtendedMediaSessionAction[] = ['togglemicrophone'];
+const DOCUMENT_MEDIA_KEY_CODES = new Set(['MediaPlayPause', 'MediaStop', 'AudioVolumeMute']);
 
 const MEDIA_SESSION_ARTWORK: MediaImage[] = [
   { src: '/icons/icon-192x192.png', sizes: '192x192', type: 'image/png' },
   { src: '/icons/icon-512x512.png', sizes: '512x512', type: 'image/png' },
 ];
 
-// Chrome/Android caveat: metadata and playbackState are standards-based hints.
-// The first idle headset press may still depend on Chrome having an active
-// media session from real capture/playback; do not add hidden/silent audio
-// keepalives to fake that state.
+// Chrome/Android caveat: metadata, playbackState, microphone-active state, and
+// media-key fallbacks are standards-based hints. First/headset delivery still depends on Chrome/Android routing;
+// do not add hidden/silent audio keepalives to fake that state. Recording now
+// advertises microphone activity and supports mic-toggle, stop, and media-key
+// routes when the browser delivers them.
 
 interface MediaSessionPttConfig {
   onTrigger: () => void;
@@ -526,30 +535,67 @@ function useMediaSessionPttTrigger({
 }: MediaSessionPttConfig): void {
   useEffect(() => {
     const mediaSession = navigator.mediaSession;
-    if (!mediaSession || typeof mediaSession.setActionHandler !== 'function') return;
+    if (!mediaSession) return;
 
     writeMediaSessionMetadata(mediaSession, sessionLabel);
     writeMediaSessionPlaybackState(mediaSession, mediaSessionPlaybackStateForDriving(state, holdMusicMuted));
+    writeMediaSessionMicrophoneActive(mediaSession, state === 'recording');
+
+    if (typeof mediaSession.setActionHandler !== 'function') {
+      return () => {
+        writeMediaSessionPlaybackState(mediaSession, 'none');
+        writeMediaSessionMicrophoneActive(mediaSession, false);
+      };
+    }
 
     for (const action of MEDIA_SESSION_PTT_ACTIONS) {
-      try {
-        mediaSession.setActionHandler(action, onTrigger);
-      } catch {
-        // Browsers may expose MediaSession while rejecting individual actions.
+      setMediaSessionActionHandler(mediaSession, action, onTrigger);
+    }
+
+    if (state === 'recording') {
+      for (const action of MEDIA_SESSION_MIC_ACTIONS) {
+        setMediaSessionActionHandler(mediaSession, action, onTrigger);
       }
     }
 
     return () => {
       for (const action of MEDIA_SESSION_PTT_ACTIONS) {
-        try {
-          mediaSession.setActionHandler(action, null);
-        } catch {
-          // Best-effort cleanup only; unsupported actions are already inert.
-        }
+        setMediaSessionActionHandler(mediaSession, action, null);
+      }
+      for (const action of MEDIA_SESSION_MIC_ACTIONS) {
+        setMediaSessionActionHandler(mediaSession, action, null);
       }
       writeMediaSessionPlaybackState(mediaSession, 'none');
+      writeMediaSessionMicrophoneActive(mediaSession, false);
     };
   }, [holdMusicMuted, onTrigger, sessionLabel, state]);
+
+  useEffect(() => {
+    if (state !== 'recording') return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isEditableKeyboardTarget(event.target)) return;
+      if (!isDocumentMediaKey(event)) return;
+
+      event.preventDefault();
+      onTrigger();
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onTrigger, state]);
+}
+
+function setMediaSessionActionHandler(
+  mediaSession: MediaSession,
+  action: ExtendedMediaSessionAction,
+  handler: MediaSessionActionHandler | null,
+): void {
+  try {
+    mediaSession.setActionHandler(action as MediaSessionAction, handler);
+  } catch {
+    // Browsers may expose MediaSession while rejecting individual actions.
+  }
 }
 
 function writeMediaSessionMetadata(mediaSession: MediaSession, sessionLabel: string): void {
@@ -585,6 +631,31 @@ function writeMediaSessionPlaybackState(
   } catch {
     // Playback state is advisory and not supported consistently across browsers.
   }
+}
+
+function writeMediaSessionMicrophoneActive(mediaSession: MediaSession, active: boolean): void {
+  const setMicrophoneActive = (mediaSession as MicrophoneAwareMediaSession).setMicrophoneActive;
+  if (typeof setMicrophoneActive !== 'function') return;
+
+  try {
+    void Promise.resolve(setMicrophoneActive.call(mediaSession, active)).catch(() => {
+      // setMicrophoneActive is best-effort and may reject on unsupported platforms.
+    });
+  } catch {
+    // Best-effort only; unsupported microphone state must not break recording.
+  }
+}
+
+function isDocumentMediaKey(event: KeyboardEvent): boolean {
+  return DOCUMENT_MEDIA_KEY_CODES.has(event.code) || DOCUMENT_MEDIA_KEY_CODES.has(event.key);
+}
+
+function isEditableKeyboardTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  if (target instanceof HTMLElement && target.isContentEditable) return true;
+  return Boolean(
+    target.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"], [role="textbox"]'),
+  );
 }
 
 function useReplayDisplayIntensities(
