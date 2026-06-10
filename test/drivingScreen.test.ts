@@ -21,6 +21,7 @@ vi.mock('../client/src/voice/drivingLoop', () => ({
 }));
 
 import { DrivingScreen } from '../client/src/screens/Driving';
+import { getHoldMusicMuted, setHoldMusicMuted } from '../client/src/voice/holdMusic';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -88,7 +89,55 @@ async function renderDriving(props: Record<string, unknown> = {}) {
 beforeEach(() => {
   mocks.rtc.current = baseRtc();
   mocks.drivingLoop.current = baseDrivingLoop();
+  setHoldMusicMuted(false);
+  Object.defineProperty(navigator, 'mediaSession', {
+    configurable: true,
+    value: undefined,
+  });
+  Object.defineProperty(window, 'MediaMetadata', {
+    configurable: true,
+    value: undefined,
+  });
 });
+
+type TestMediaSessionHandlers = Partial<Record<MediaSessionAction, MediaSessionActionHandler | null>>;
+
+function installTestMediaSession() {
+  const handlers: TestMediaSessionHandlers = {};
+  const mediaSession = {
+    metadata: null as MediaMetadata | null,
+    playbackState: 'none' as MediaSessionPlaybackState,
+    setActionHandler: vi.fn((action: MediaSessionAction, handler: MediaSessionActionHandler | null) => {
+      handlers[action] = handler;
+    }),
+  };
+  Object.defineProperty(navigator, 'mediaSession', {
+    configurable: true,
+    value: mediaSession,
+  });
+  return { handlers, mediaSession };
+}
+
+function installTestMediaMetadata() {
+  class TestMediaMetadata {
+    title: string;
+    artist: string;
+    album: string;
+    artwork: readonly MediaImage[];
+
+    constructor(init: MediaMetadataInit = {}) {
+      this.title = init.title ?? '';
+      this.artist = init.artist ?? '';
+      this.album = init.album ?? '';
+      this.artwork = init.artwork ?? [];
+    }
+  }
+
+  Object.defineProperty(window, 'MediaMetadata', {
+    configurable: true,
+    value: TestMediaMetadata,
+  });
+}
 
 
 describe('DrivingScreen OpenClaw session preview restore', () => {
@@ -251,7 +300,9 @@ describe('DrivingScreen replay control', () => {
     expect(source).toContain('const displayTap = replayActive ? manualReplay.onSilence : tap;');
     expect(source).toContain('liveText: manualReplay?.text ?? liveText');
     expect(source).toContain('state={displayState}');
-    expect(source).toContain('onTap={displayTap}');
+    expect(source).toContain('const triggerPrimaryVoiceAction = useCallback');
+    expect(source).toContain('displayTap();');
+    expect(source).toContain('onTap={triggerPrimaryVoiceAction}');
   });
 
   it('uses restored assistant text or an active session assistant preview as the idle last turn when the loop has no last turn yet', () => {
@@ -275,6 +326,143 @@ describe('DrivingScreen replay control', () => {
     expect(source).toContain('onReplay && canReplay');
     expect(source).not.toContain('ReplayNotice');
     expect(source).not.toContain('replayNotice');
+  });
+});
+
+describe('DrivingScreen media-session headset control', () => {
+  it('does not throw when MediaSession is unavailable', async () => {
+    const rendered = await renderDriving();
+
+    expect(rendered.container.textContent).toContain('TAP TO TALK');
+
+    await rendered.cleanup();
+  });
+
+  it('maps play/pause media actions to the active PTT behavior', async () => {
+    const { handlers, mediaSession } = installTestMediaSession();
+    const rendered = await renderDriving();
+
+    expect(mediaSession.setActionHandler).toHaveBeenCalledWith('play', expect.any(Function));
+    expect(mediaSession.setActionHandler).toHaveBeenCalledWith('pause', expect.any(Function));
+
+    act(() => {
+      handlers.play?.({ action: 'play' });
+    });
+    act(() => {
+      handlers.pause?.({ action: 'pause' });
+    });
+
+    expect(mocks.drivingLoop.current.tap).toHaveBeenCalledTimes(2);
+
+    await rendered.cleanup();
+  });
+
+  it('publishes standards-based metadata and playback state for Chrome/Android controls', async () => {
+    installTestMediaMetadata();
+    const { mediaSession } = installTestMediaSession();
+    mocks.rtc.current = baseRtc({
+      recentSessions: [
+        {
+          sessionId: 'session-1',
+          sessionKey: 'agent:alpha:main',
+          agent: 'alpha',
+          displayLabel: 'Alpha session',
+        },
+      ],
+    });
+
+    const idle = await renderDriving();
+
+    expect(mediaSession.metadata?.title).toBe('Clawkie Talkie');
+    expect(mediaSession.metadata?.artist).toBe('alpha - Alpha session');
+    expect(mediaSession.metadata?.artwork).toEqual([
+      { src: '/icons/icon-192x192.png', sizes: '192x192', type: 'image/png' },
+      { src: '/icons/icon-512x512.png', sizes: '512x512', type: 'image/png' },
+    ]);
+    expect(mediaSession.playbackState).toBe('paused');
+
+    await idle.cleanup();
+
+    mocks.drivingLoop.current = baseDrivingLoop({ state: 'ai' });
+    const ai = await renderDriving();
+
+    expect(mediaSession.playbackState).toBe('playing');
+
+    await ai.cleanup();
+  });
+
+  it('uses real playback states for thinking hold music without fake keepalive audio', async () => {
+    const { mediaSession } = installTestMediaSession();
+    mocks.drivingLoop.current = baseDrivingLoop({ state: 'thinking' });
+
+    const audibleThinking = await renderDriving();
+
+    expect(mediaSession.playbackState).toBe('playing');
+
+    await audibleThinking.cleanup();
+
+    setHoldMusicMuted(true);
+    const mutedMedia = installTestMediaSession();
+    mocks.drivingLoop.current = baseDrivingLoop({ state: 'thinking' });
+    const mutedThinking = await renderDriving();
+
+    expect(mutedMedia.mediaSession.playbackState).toBe('paused');
+
+    await mutedThinking.cleanup();
+  });
+
+  it('uses the replay silence and thinking mute paths like the on-screen PTT button', async () => {
+    const { handlers } = installTestMediaSession();
+    const onSilence = vi.fn();
+    const replay = await renderDriving({
+      manualReplay: { text: 'Replay response', mode: 'audio', analyser: null, onSilence },
+    });
+
+    act(() => {
+      handlers.play?.({ action: 'play' });
+    });
+
+    expect(onSilence).toHaveBeenCalledTimes(1);
+    expect(mocks.drivingLoop.current.tap).not.toHaveBeenCalled();
+
+    await replay.cleanup();
+
+    const thinkingMedia = installTestMediaSession();
+    mocks.drivingLoop.current = baseDrivingLoop({ state: 'thinking' });
+    const thinking = await renderDriving();
+
+    expect(getHoldMusicMuted()).toBe(false);
+    act(() => {
+      thinkingMedia.handlers.pause?.({ action: 'pause' });
+    });
+
+    expect(getHoldMusicMuted()).toBe(true);
+    expect(mocks.drivingLoop.current.tap).not.toHaveBeenCalled();
+
+    await thinking.cleanup();
+  });
+
+  it('documents the Chrome/Android first-idle-press caveat without hidden audio hacks', () => {
+    const source = readFileSync(resolve(root, 'client/src/screens/Driving.tsx'), 'utf8');
+
+    expect(source).toContain('The first idle headset press may still depend on Chrome having an active');
+    expect(source).toContain('do not add hidden/silent audio');
+    expect(source).toContain("const MEDIA_SESSION_PTT_ACTIONS: MediaSessionAction[] = ['play', 'pause'];");
+  });
+
+  it('clears play/pause handlers on unmount', async () => {
+    const { handlers, mediaSession } = installTestMediaSession();
+    const rendered = await renderDriving();
+
+    expect(typeof handlers.play).toBe('function');
+    expect(typeof handlers.pause).toBe('function');
+
+    await rendered.cleanup();
+
+    expect(mediaSession.setActionHandler).toHaveBeenCalledWith('play', null);
+    expect(mediaSession.setActionHandler).toHaveBeenCalledWith('pause', null);
+    expect(handlers.play).toBeNull();
+    expect(handlers.pause).toBeNull();
   });
 });
 

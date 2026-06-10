@@ -180,6 +180,21 @@ export function DrivingScreen({
   const showHoldMusicTrack = displayState === 'thinking' && holdMusicTrack;
   const trackLabel = showHoldMusicTrack ? holdMusicTrackLabel(holdMusicTrack) : null;
 
+  const triggerPrimaryVoiceAction = useCallback(() => {
+    if (displayState === 'thinking') {
+      setHoldMusicMuted(!getHoldMusicMuted());
+      return;
+    }
+    displayTap();
+  }, [displayState, displayTap]);
+
+  useMediaSessionPttTrigger({
+    onTrigger: triggerPrimaryVoiceAction,
+    state: displayState,
+    holdMusicMuted,
+    sessionLabel: headerLabel,
+  });
+
   const rowGap = compact ? 8 : 10;
   const replayEnabled = !!onReplay && canReplay;
   const pttButtonSize = compact
@@ -412,8 +427,8 @@ export function DrivingScreen({
         }}
       >
         <PTTButton
-          onTap={displayTap}
-          onToggleHoldMusicMuted={() => setHoldMusicMuted(!getHoldMusicMuted())}
+          onTap={triggerPrimaryVoiceAction}
+          onToggleHoldMusicMuted={triggerPrimaryVoiceAction}
           holdMusicMuted={holdMusicMuted}
           state={displayState}
           stateColor={stateColor}
@@ -483,6 +498,94 @@ const REPLAY_FALLBACK_INTENSITIES = [
   0.26, 0.36, 0.52, 0.66, 0.48, 0.3, 0.2,
   0.24, 0.34, 0.5, 0.62, 0.44, 0.28, 0.18,
 ];
+
+const MEDIA_SESSION_PTT_ACTIONS: MediaSessionAction[] = ['play', 'pause'];
+
+const MEDIA_SESSION_ARTWORK: MediaImage[] = [
+  { src: '/icons/icon-192x192.png', sizes: '192x192', type: 'image/png' },
+  { src: '/icons/icon-512x512.png', sizes: '512x512', type: 'image/png' },
+];
+
+// Chrome/Android caveat: metadata and playbackState are standards-based hints.
+// The first idle headset press may still depend on Chrome having an active
+// media session from real capture/playback; do not add hidden/silent audio
+// keepalives to fake that state.
+
+interface MediaSessionPttConfig {
+  onTrigger: () => void;
+  state: DrivingState;
+  holdMusicMuted: boolean;
+  sessionLabel: string;
+}
+
+function useMediaSessionPttTrigger({
+  onTrigger,
+  state,
+  holdMusicMuted,
+  sessionLabel,
+}: MediaSessionPttConfig): void {
+  useEffect(() => {
+    const mediaSession = navigator.mediaSession;
+    if (!mediaSession || typeof mediaSession.setActionHandler !== 'function') return;
+
+    writeMediaSessionMetadata(mediaSession, sessionLabel);
+    writeMediaSessionPlaybackState(mediaSession, mediaSessionPlaybackStateForDriving(state, holdMusicMuted));
+
+    for (const action of MEDIA_SESSION_PTT_ACTIONS) {
+      try {
+        mediaSession.setActionHandler(action, onTrigger);
+      } catch {
+        // Browsers may expose MediaSession while rejecting individual actions.
+      }
+    }
+
+    return () => {
+      for (const action of MEDIA_SESSION_PTT_ACTIONS) {
+        try {
+          mediaSession.setActionHandler(action, null);
+        } catch {
+          // Best-effort cleanup only; unsupported actions are already inert.
+        }
+      }
+      writeMediaSessionPlaybackState(mediaSession, 'none');
+    };
+  }, [holdMusicMuted, onTrigger, sessionLabel, state]);
+}
+
+function writeMediaSessionMetadata(mediaSession: MediaSession, sessionLabel: string): void {
+  if (typeof window.MediaMetadata !== 'function') return;
+
+  try {
+    mediaSession.metadata = new window.MediaMetadata({
+      title: 'Clawkie Talkie',
+      artist: trimString(sessionLabel) || 'Voice session',
+      album: 'OpenClaw voice session',
+      artwork: MEDIA_SESSION_ARTWORK,
+    });
+  } catch {
+    // Metadata is optional; keep headset controls alive if a browser rejects it.
+  }
+}
+
+function mediaSessionPlaybackStateForDriving(
+  state: DrivingState,
+  holdMusicMuted: boolean,
+): MediaSessionPlaybackState {
+  if (state === 'ai') return 'playing';
+  if (state === 'thinking' && !holdMusicMuted) return 'playing';
+  return 'paused';
+}
+
+function writeMediaSessionPlaybackState(
+  mediaSession: MediaSession,
+  playbackState: MediaSessionPlaybackState,
+): void {
+  try {
+    mediaSession.playbackState = playbackState;
+  } catch {
+    // Playback state is advisory and not supported consistently across browsers.
+  }
+}
 
 function useReplayDisplayIntensities(
   replayActive: boolean,
