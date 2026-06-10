@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <uses-feature android:name="android.hardware.microphone" android:required="true" />
+
+    <application
+        android:name=".ClawkieApp"
+        android:label="Clawkie Talkie"
+        android:icon="@mipmap/ic_launcher"
+        android:theme="@style/Theme.Clawkie"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Voice handoff + host dashboard links. Mirrors the web routes
+                 /voice#host=...&session=... and /dashboard#host=... -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="clawkietalkie.app" android:path="/voice" />
+                <data android:scheme="https" android:host="clawkietalkie.app" android:pathPrefix="/voice/" />
+                <data android:scheme="https" android:host="clawkietalkie.app" android:path="/dashboard" />
+                <data android:scheme="https" android:host="clawkietalkie.app" android:pathPrefix="/dashboard/" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
