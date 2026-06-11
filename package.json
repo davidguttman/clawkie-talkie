@@ -11,6 +11,7 @@
     "print-dev-cache": "node scripts/print-vite-cache-dir.mjs",
     "dev:daemon": "nodemon --watch daemon/src --ext ts,mjs,js --exec tsx -- --env-file-if-exists=.env daemon/src/index.ts --session-id dev-local --client-origin http://localhost:5173",
     "build": "tsc --noEmit -p client && vite build client",
+    "version:check": "node scripts/check-version-sync.mjs",
     "pwa:assets": "node scripts/generate-pwa-assets.mjs",
     "music:regen": "node scripts/regenerate-hold-music.mjs",
     "music:measure": "node scripts/measure-hold-music-loudness.mjs",

@@ -1,0 +1,81 @@
+{
+  "description": "Cross-platform Driving reducer no-drift fixture. Each platform applies the same event sequence and verifies the same next context and side effects.",
+  "scenarios": [
+    {
+      "name": "happy path hides reply until TTS starts",
+      "initial": {
+        "state": "idle",
+        "lastUserText": "",
+        "lastReplyText": "",
+        "pendingReplyText": "",
+        "liveReplyText": "",
+        "error": null
+      },
+      "events": [
+        { "type": "tap" },
+        { "type": "tap" },
+        { "type": "stt.done", "text": "Can you hear me?" },
+        { "type": "reply.done", "text": "Loud and clear." },
+        { "type": "tts.start" },
+        { "type": "tts.done" }
+      ],
+      "expected": {
+        "state": "idle",
+        "lastUserText": "Can you hear me?",
+        "lastReplyText": "Loud and clear.",
+        "pendingReplyText": "",
+        "liveReplyText": "Loud and clear.",
+        "error": null
+      },
+      "sideEffects": ["startMic", "stopMic", "armTts"]
+    },
+    {
+      "name": "tap while STT is finalizing does not cancel current turn",
+      "initial": {
+        "state": "thinking",
+        "lastUserText": "partial words",
+        "lastReplyText": "",
+        "pendingReplyText": "",
+        "liveReplyText": "",
+        "error": null
+      },
+      "events": [
+        { "type": "tap", "currentTurnTranscribing": true },
+        { "type": "stt.done", "text": "final words" }
+      ],
+      "expected": {
+        "state": "thinking",
+        "lastUserText": "final words",
+        "lastReplyText": "",
+        "pendingReplyText": "",
+        "liveReplyText": "",
+        "error": null
+      },
+      "sideEffects": []
+    },
+    {
+      "name": "TTS error after reply preserves readable answer",
+      "initial": {
+        "state": "thinking",
+        "lastUserText": "Question",
+        "lastReplyText": "",
+        "pendingReplyText": "",
+        "liveReplyText": "",
+        "error": null
+      },
+      "events": [
+        { "type": "reply.done", "text": "Answer text" },
+        { "type": "tts.error", "reason": "audio_failed" }
+      ],
+      "expected": {
+        "state": "idle",
+        "lastUserText": "Question",
+        "lastReplyText": "Answer text",
+        "pendingReplyText": "",
+        "liveReplyText": "",
+        "error": "audio_failed"
+      },
+      "sideEffects": ["armTts"]
+    }
+  ]
+}

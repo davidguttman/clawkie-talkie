@@ -196,10 +196,15 @@ The script requires `ffmpeg` on `PATH` and applies the AM-radio hold chain in `s
 Common checks:
 
 ```bash
+npm run version:check
 npm test
 npm run typecheck
 npm run build
 ```
+
+Android/web release automation is documented in [Android/web release process](./docs/release-android.md).
+The shared cross-platform no-drift fixtures live in `shared/contract/` and are
+read by both web Vitest and Android JUnit tests.
 
 Run only the daemon:
 

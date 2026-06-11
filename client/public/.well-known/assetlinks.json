@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "app.clawkietalkie",
+      "sha256_cert_fingerprints": [
+        "CA:6A:97:1E:66:51:3A:90:FE:8D:8C:D6:12:64:1E:14:F0:D9:C3:05:37:6E:EB:27:AE:F3:B8:30:20:06:03:DF"
+      ]
+    }
+  }
+]

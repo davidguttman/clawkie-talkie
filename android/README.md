@@ -120,8 +120,16 @@ bed (and visualizer) alive.
 ```bash
 cd android
 ./gradlew :app:assembleDebug      # APK at app/build/outputs/apk/debug/
-./gradlew :app:testDebugUnitTest  # reducer/protocol/routing/fixture tests
+./gradlew :app:testDebugUnitTest  # reducer/protocol/routing/shared-fixture tests
 ```
+
+Before release prep, run `npm run version:check` from the repo root. The web
+`package.json` version, Android `versionName`, and semver-packed Android
+`versionCode` must stay in sync. The release process, signing secret names, and
+tester/download flow are documented in `docs/release-android.md`.
+
+Shared no-drift fixtures live in `shared/contract/`; Android JUnit and web
+Vitest both read the same protocol and Driving reducer JSON.
 
 Gradle 8.13 needs a JVM 17–23. `gradlew` handles this itself: if the active
 JVM is outside that range (e.g. a system Java 26), it falls back to the

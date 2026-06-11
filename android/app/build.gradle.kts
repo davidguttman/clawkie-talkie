@@ -13,7 +13,7 @@ android {
         applicationId = "app.clawkietalkie"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
+        versionCode = 1000001
         versionName = "1.0.0"
 
         // Transport defaults mirror the web client's Vite env fallbacks
@@ -28,6 +28,12 @@ android {
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
+
+    sourceSets {
+        getByName("test") {
+            resources.srcDir(project.file("../../shared/contract"))
         }
     }
 

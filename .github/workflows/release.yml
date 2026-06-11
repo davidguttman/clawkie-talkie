@@ -1,0 +1,162 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Existing release tag to publish, for example v1.0.0'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Web + Android release train
+    runs-on: ubuntu-latest
+    env:
+      TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install web dependencies
+        run: npm ci
+
+      - name: Check web Android version sync
+        run: npm run version:check
+
+      - name: Verify release tag matches checked versions and commit
+        run: |
+          set -euo pipefail
+          EXPECTED_TAG="v$(node -p "require('./package.json').version")"
+          if [ "$TAG_NAME" != "$EXPECTED_TAG" ]; then
+            echo "::error::Release tag $TAG_NAME must match package.json/Android version $EXPECTED_TAG."
+            exit 1
+          fi
+
+          git fetch --force --tags origin "refs/tags/$TAG_NAME:refs/tags/$TAG_NAME"
+          TAG_COMMIT="$(git rev-list -n 1 "$TAG_NAME")"
+          HEAD_COMMIT="$(git rev-parse HEAD)"
+          if [ "$TAG_COMMIT" != "$HEAD_COMMIT" ]; then
+            echo "::error::Release tag $TAG_NAME points to $TAG_COMMIT but the checked commit is $HEAD_COMMIT."
+            exit 1
+          fi
+
+      - name: Run web tests
+        run: npm test
+
+      - name: Typecheck web daemon signaling
+        run: npm run typecheck
+
+      - name: Build web client
+        run: npm run build
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+
+      - name: Run Android unit tests
+        working-directory: android
+        run: ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Assemble Android APKs
+        working-directory: android
+        run: ./gradlew assembleDebug assembleRelease --stacktrace
+
+      - name: Verify Android signing secrets
+        env:
+          ANDROID_SIGNING_KEYSTORE_BASE64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 }}
+          ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
+          ANDROID_SIGNING_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEYSTORE_PASSWORD }}
+          ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "$ANDROID_SIGNING_KEYSTORE_BASE64" ] || missing+=(ANDROID_SIGNING_KEYSTORE_BASE64)
+          [ -n "$ANDROID_SIGNING_KEY_ALIAS" ] || missing+=(ANDROID_SIGNING_KEY_ALIAS)
+          [ -n "$ANDROID_SIGNING_KEYSTORE_PASSWORD" ] || missing+=(ANDROID_SIGNING_KEYSTORE_PASSWORD)
+          [ -n "$ANDROID_SIGNING_KEY_PASSWORD" ] || missing+=(ANDROID_SIGNING_KEY_PASSWORD)
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Android release signing is required for GitHub Release assets. Missing secrets: ${missing[*]}. Debug APKs are uploaded only by CI artifacts, not Release assets."
+            exit 1
+          fi
+
+      - name: Sign Android release APK
+        env:
+          ANDROID_SIGNING_KEYSTORE_BASE64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 }}
+          ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
+          ANDROID_SIGNING_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEYSTORE_PASSWORD }}
+          ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mkdir -p android/build/release-signing
+          printf '%s' "$ANDROID_SIGNING_KEYSTORE_BASE64" | base64 --decode > android/build/release-signing/release.keystore
+          BUILD_TOOLS="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)"
+          UNSIGNED="android/app/build/outputs/apk/release/app-release-unsigned.apk"
+          ALIGNED="android/app/build/outputs/apk/release/clawkie-talkie-release-aligned.apk"
+          SIGNED="android/app/build/outputs/apk/release/clawkie-talkie-release-signed.apk"
+          "$BUILD_TOOLS/zipalign" -f -p 4 "$UNSIGNED" "$ALIGNED"
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks android/build/release-signing/release.keystore \
+            --ks-key-alias "$ANDROID_SIGNING_KEY_ALIAS" \
+            --ks-pass "pass:$ANDROID_SIGNING_KEYSTORE_PASSWORD" \
+            --key-pass "pass:$ANDROID_SIGNING_KEY_PASSWORD" \
+            --out "$SIGNED" \
+            "$ALIGNED"
+          "$BUILD_TOOLS/apksigner" verify --verbose "$SIGNED"
+
+      - name: Collect release artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifacts
+          SAFE_TAG="${TAG_NAME//\//-}"
+          SIGNED="android/app/build/outputs/apk/release/clawkie-talkie-release-signed.apk"
+          if [ ! -f "$SIGNED" ]; then
+            echo "::error::Signed release APK was not produced; refusing to publish debug-only Release assets."
+            exit 1
+          fi
+          cp "$SIGNED" "release-artifacts/clawkie-talkie-${SAFE_TAG}-release-signed.apk"
+          sha256sum release-artifacts/*.apk > release-artifacts/SHA256SUMS.txt
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: clawkie-talkie-release-artifacts
+          path: release-artifacts/*
+          if-no-files-found: error
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            SAFE_TAG="${TAG_NAME//\//-}"
+            gh release delete-asset "$TAG_NAME" "clawkie-talkie-${SAFE_TAG}-debug.apk" --yes >/dev/null 2>&1 || true
+            gh release upload "$TAG_NAME" release-artifacts/* --clobber
+          else
+            gh release create "$TAG_NAME" release-artifacts/* --verify-tag --title "Clawkie Talkie $TAG_NAME" --generate-notes
+          fi

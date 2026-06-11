@@ -1,0 +1,64 @@
+{
+  "description": "Cross-platform Clawkie Talkie control protocol fixture. Web and Android tests must build these exact message shapes.",
+  "messages": {
+    "clientHello": {
+      "t": "client.hello",
+      "protocol": 1,
+      "wants": [
+        "tts.catalog",
+        "stt.catalog",
+        "sessions.list",
+        "sessions.catalog",
+        "sessions.destinations",
+        "sessions.create"
+      ]
+    },
+    "rendezvousJoin": {
+      "t": "rendezvous.join",
+      "sessionId": "session-fixture-123",
+      "sessionKey": "agent:fixture:discord:channel:fixture-channel",
+      "channel": "discord",
+      "target": "channel:fixture-channel",
+      "accountId": "fixture-account",
+      "settings": {
+        "voice": "nova",
+        "tts": {
+          "providerId": "openai",
+          "model": "gpt-4o-mini-tts",
+          "voice": "nova"
+        },
+        "stt": {
+          "providerId": "openai",
+          "model": "gpt-4o-mini-transcribe"
+        }
+      }
+    },
+    "sessionsCreateRequest": {
+      "t": "sessions.create.request",
+      "requestId": "req-fixture-android-web-1",
+      "providerId": "discord",
+      "agent": "kamaji",
+      "target": "channel:fixture-channel",
+      "accountId": "fixture-account"
+    },
+    "daemonHello": {
+      "t": "daemon.hello",
+      "protocol": 1,
+      "features": [
+        "tts.catalog",
+        "stt.catalog",
+        "sessions.list",
+        "sessions.catalog",
+        "sessions.destinations",
+        "sessions.create"
+      ]
+    },
+    "ttsStartBuffered": {
+      "t": "tts.start",
+      "sample_rate": 24000,
+      "buffered": true,
+      "turnId": 42,
+      "text": "Sure — I'm on it."
+    }
+  }
+}
