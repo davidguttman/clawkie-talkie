@@ -8,6 +8,7 @@
     "predev": "npm install",
     "dev": "node scripts/dev.mjs --port 5173",
     "dev:client": "vite client --force",
+    "print-dev-cache": "node scripts/print-vite-cache-dir.mjs",
     "dev:daemon": "nodemon --watch daemon/src --ext ts,mjs,js --exec tsx -- --env-file-if-exists=.env daemon/src/index.ts --session-id dev-local --client-origin http://localhost:5173",
     "build": "tsc --noEmit -p client && vite build client",
     "pwa:assets": "node scripts/generate-pwa-assets.mjs",
