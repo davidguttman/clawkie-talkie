@@ -115,6 +115,15 @@ only one audible, shuffled deck with no immediate repeats, random start
 offset, instant effects toggle, per-track disable, and mute that keeps the
 bed (and visualizer) alive.
 
+
+## Launcher icons
+
+The app keeps plain density-specific `@mipmap/ic_launcher.png` and
+`@mipmap/ic_launcher_round.png` fallbacks alongside the adaptive icon XML.
+Firebase App Distribution invite emails and other legacy APK icon extractors
+can miss adaptive-only resources and show a generic letter fallback; these PNGs
+give those extractors a conventional launcher bitmap at every standard density.
+
 ## Build
 
 ```bash

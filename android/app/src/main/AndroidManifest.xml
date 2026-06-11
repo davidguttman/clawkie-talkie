@@ -13,6 +13,7 @@
         android:name=".ClawkieApp"
         android:label="Clawkie Talkie"
         android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/Theme.Clawkie"
         android:supportsRtl="true"
         android:usesCleartextTraffic="false">
