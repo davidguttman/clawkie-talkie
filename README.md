@@ -179,6 +179,8 @@ npm run dev
 
 That starts the daemon and the Vite client.
 
+Vite's dev dependency cache is configured outside the repo/worktree by default so Docker or root-owned dev runs do not leave `client/.vite` behind and block worktree cleanup. Set `CT_VITE_CACHE_DIR` to override the cache directory, or run `npm run print-dev-cache` to see the current path. Do not rely on `postdev` cleanup for this: killed containers do not reliably run npm lifecycle cleanup hooks.
+
 ### Regenerate baked hold music
 
 The browser plays hold music from plain media elements so it can survive mobile PWA backgrounding better than a WebAudio-only effects graph. Raw/master MP3s live outside Vite's public directory in `assets/hold-music-raw`; processed tracks with stable public filenames are generated into baked Low/Medium/High directories (`client/public/music-low`, `client/public/music`, `client/public/music-high`) with the AM-radio effects, hiss, and crackle already mixed into each processed file. Matching original directories (`music-original*`) stay no-effects/no-noise, also with baked Low/Medium/High levels. The runtime picks a discrete level by URL instead of changing media-element or WebAudio gain volume.
