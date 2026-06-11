@@ -13,9 +13,9 @@
 
 import wrtc from '@roamhq/wrtc';
 import SimplePeer from 'simple-peer';
-import { runChat, ChatError, type DeliveryTarget as ChatDeliveryTarget } from './chatSession.js';
+import { runChat, ChatError, shouldDeliverReplyForChatTarget, type DeliveryTarget as ChatDeliveryTarget } from './chatSession.js';
 import { OpenClawInferTtsSession, TTS_SAMPLE_RATE, type TtsSessionCallbacks, type TtsSessionOptions } from './ttsSession.js';
-import { daemonHandshakeResponse, daemonToPhone, type ControlEventRecord, type DaemonToPhone, type DaemonToPhoneEvent, type PhoneToDaemon, type RecentSessionsSnapshot, type SttCatalog, type SttSelection, type TtsCatalog, type TtsSelection, type VoiceSettings, type VoiceTurnSnapshot } from './protocol.js';
+import { daemonHandshakeResponse, daemonToPhone, type ControlEventRecord, type DaemonToPhone, type DaemonToPhoneEvent, type NewSessionDestinationOption, type NewSessionDestinationsCatalog, type PhoneToDaemon, type RecentSessionsSnapshot, type SttCatalog, type SttSelection, type TtsCatalog, type TtsSelection, type VoiceSettings, type VoiceTurnSnapshot } from './protocol.js';
 import { OpenClawInferSttSession, type OpenClawInferSttSessionOptions } from './inferSttSession.js';
 import type { SttSessionCallbacks } from './sttTypes.js';
 import { createWasmVad, type SpeechDetector, type WasmVadOptions } from './vad.js';
@@ -24,6 +24,12 @@ import { classifySignal, decideForwardToLivePeer, decideIncomingSignal } from '.
 import { createEmptyTtsCatalog, defaultTtsCatalogCache } from './ttsCatalog.js';
 import { createEmptySttCatalog, defaultSttCatalogCache } from './sttCatalog.js';
 import { createEmptyRecentSessionsSnapshot, defaultRecentSessionsCache } from './recentSessions.js';
+import {
+  buildNewSessionCreateResponse,
+  createWebchatOnlyNewSessionDestinationsCatalog,
+  getNewSessionDestinationsWithOpenClaw,
+  type NewSessionCreateRequestLike,
+} from './newSession.js';
 
 import {
   FRAME_10MS,
@@ -208,6 +214,10 @@ export interface VoiceSessionRuntimeOptions {
   ttsCatalogProvider?: () => Promise<TtsCatalog>;
   sttCatalogProvider?: () => Promise<SttCatalog>;
   recentSessionsProvider?: () => Promise<RecentSessionsSnapshot>;
+  newSessionDestinationsProvider?: () => Promise<NewSessionDestinationsCatalog>;
+  newSessionDiscordDestinationsProvider?: () => Promise<NewSessionDestinationOption[]>;
+  newSessionSlackDestinationsProvider?: () => Promise<NewSessionDestinationOption[]>;
+  newSessionCreateResponder?: (msg: NewSessionCreateRequestLike) => Promise<DaemonToPhone>;
   onClose: (roomId: string) => void;
 }
 
@@ -770,6 +780,14 @@ export class VoiceSession {
       this.stopRecentSessionsSubscription();
       return;
     }
+    if (msg.t === 'sessions.destinations.request') {
+      void this.sendNewSessionDestinations();
+      return;
+    }
+    if (msg.t === 'sessions.create.request') {
+      void this.sendNewSessionCreateResponse(msg);
+      return;
+    }
     if (msg.t === 'stt.start') {
       this.resetTurn('stt_restart');
       // Routing is room-bound — ignore any payload on stt.start.
@@ -837,6 +855,40 @@ export class VoiceSession {
       this.send(toMessage(await loadSessions()));
     } catch {
       this.send(toMessage(createEmptyRecentSessionsSnapshot()));
+    }
+  }
+
+  private async sendNewSessionDestinations(): Promise<void> {
+    const immediateCatalog = createWebchatOnlyNewSessionDestinationsCatalog();
+    this.send(daemonToPhone.sessionsDestinations(immediateCatalog));
+    try {
+      const loadCatalog = this.opts.newSessionDestinationsProvider
+        ?? (() => getNewSessionDestinationsWithOpenClaw({
+          ...(this.opts.newSessionDiscordDestinationsProvider
+            ? { loadDiscordDestinations: this.opts.newSessionDiscordDestinationsProvider }
+            : {}),
+          ...(this.opts.newSessionSlackDestinationsProvider
+            ? { loadSlackDestinations: this.opts.newSessionSlackDestinationsProvider }
+            : {}),
+        }));
+      const catalog = await loadCatalog();
+      if (!sameNewSessionDestinationProviders(immediateCatalog, catalog)) {
+        this.send(daemonToPhone.sessionsDestinations(catalog));
+      }
+    } catch {
+      // The immediate webchat catalog has already kept local sessions usable.
+    }
+  }
+
+  private async sendNewSessionCreateResponse(msg: NewSessionCreateRequestLike): Promise<void> {
+    const respond = this.opts.newSessionCreateResponder ?? buildNewSessionCreateResponse;
+    try {
+      this.send(await respond(msg));
+    } catch {
+      this.send(daemonToPhone.sessionsCreateError(
+        typeof msg.requestId === 'string' ? msg.requestId : '',
+        'new_session_create_failed',
+      ));
     }
   }
 
@@ -946,7 +998,7 @@ export class VoiceSession {
         ...(target.target ? { target: target.target } : {}),
         ...(target.accountId ? { accountId: target.accountId } : {}),
         delivery: target.delivery,
-        deliver: true,
+        deliver: shouldDeliverReplyForChatTarget(target),
       });
       if (!this.isTurnActive(token)) return;
       replyText = result.text;
@@ -1429,6 +1481,14 @@ function shouldForwardTtsVoice(input: { providerId?: string; model?: string; voi
   }
   if (providerId === OPENAI_PROVIDER_ID && LEGACY_CLAWKIE_TTS_VOICE_IDS.has(input.voice.toLowerCase())) return false;
   return true;
+}
+
+
+function sameNewSessionDestinationProviders(
+  left: NewSessionDestinationsCatalog,
+  right: NewSessionDestinationsCatalog,
+): boolean {
+  return JSON.stringify(left.providers) === JSON.stringify(right.providers);
 }
 
 function loadCatalogWithTimeout<T>(loadCatalog: () => Promise<T>, timeoutMs: number): Promise<T | null> {

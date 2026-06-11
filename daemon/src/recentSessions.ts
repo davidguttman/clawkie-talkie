@@ -320,6 +320,12 @@ async function readOpenClawSessionRecord(sessionKey: string, sessionId?: string)
   return findSessionRecord(parsed, sessionKey, sessionId);
 }
 
+export function getOpenClawConfigPath(): string {
+  const configPath = normalizeEnvValue(process.env.OPENCLAW_CONFIG_PATH);
+  if (configPath) return resolveUserPath(configPath);
+  return join(getOpenClawStateDir(), 'openclaw.json');
+}
+
 function getOpenClawStateDir(): string {
   const stateDir = normalizeEnvValue(process.env.OPENCLAW_STATE_DIR);
   if (stateDir) return resolveUserPath(stateDir);

@@ -316,6 +316,7 @@ fun ClawkieAppRoot(
                 rtc = rtcSession,
                 onSwitchHost = { hostEntryOpen = true },
                 onSelectSession = ::selectRecentSession,
+                onNewSessionCreated = ::selectRecentSession,
                 onHistory = {
                     settingsOpen = false
                     historyOpen = true

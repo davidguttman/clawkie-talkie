@@ -1,8 +1,10 @@
 package app.clawkietalkie
 
 import app.clawkietalkie.protocol.ControlMessage
+import app.clawkietalkie.protocol.NewSessionCreateInput
 import app.clawkietalkie.protocol.PhoneToDaemon
 import app.clawkietalkie.protocol.RendezvousJoinInput
+import app.clawkietalkie.protocol.decodeNewSessionDestinationsCatalog
 import app.clawkietalkie.protocol.TtsSelection
 import app.clawkietalkie.protocol.VoiceSettings
 import app.clawkietalkie.rtc.ForwardDecision
@@ -37,9 +39,62 @@ class ProtocolAndRoutingTest {
         assertEquals(1, msg["protocol"]!!.jsonPrimitive.content.toInt())
         val wants = msg["wants"]!!.jsonArray.map { it.jsonPrimitive.content }
         assertEquals(
-            listOf("tts.catalog", "stt.catalog", "sessions.list", "sessions.catalog"),
+            listOf(
+                "tts.catalog",
+                "stt.catalog",
+                "sessions.list",
+                "sessions.catalog",
+                "sessions.destinations",
+                "sessions.create",
+            ),
             wants,
         )
+    }
+
+
+    @Test
+    fun `new session destination and create protocol mirrors web shape`() {
+        val destinations = json.parseToJsonElement(PhoneToDaemon.sessionsDestinationsRequest().encode()).jsonObject
+        assertEquals("sessions.destinations.request", destinations["t"]!!.jsonPrimitive.content)
+
+        val create = json.parseToJsonElement(
+            PhoneToDaemon.sessionsCreateRequest(
+                NewSessionCreateInput(
+                    requestId = "req-1",
+                    providerId = "discord",
+                    target = "channel:100",
+                    accountId = "acct-a",
+                ),
+            ).encode(),
+        ).jsonObject
+        assertEquals("sessions.create.request", create["t"]!!.jsonPrimitive.content)
+        assertEquals("req-1", create["requestId"]!!.jsonPrimitive.content)
+        assertEquals("discord", create["providerId"]!!.jsonPrimitive.content)
+        assertEquals("channel:100", create["target"]!!.jsonPrimitive.content)
+        assertEquals("acct-a", create["accountId"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `new session destination catalog decoder keeps web local option and real channel destinations`() {
+        val catalog = decodeNewSessionDestinationsCatalog(
+            json.parseToJsonElement(
+                """{
+                  "generatedAt":"2026-06-10T00:00:00.000Z",
+                  "providers":[
+                    {"id":"webchat","label":"Web only (no chat channel)","kind":"local","status":"available","destinations":[]},
+                    {"id":"discord","label":"Discord","kind":"channel","status":"available","destinations":[
+                      {"id":"discord:channel:100","target":"channel:100","label":"#general","group":"Claw HQ","accountId":"acct-a"}
+                    ]}
+                  ]
+                }""".trimIndent(),
+            ).jsonObject,
+        )
+        assertEquals("2026-06-10T00:00:00.000Z", catalog.generatedAt)
+        assertEquals(listOf("webchat", "discord"), catalog.providers.map { it.id })
+        assertEquals("local", catalog.providers[0].kind)
+        assertEquals("#general", catalog.providers[1].destinations[0].label)
+        assertEquals("Claw HQ", catalog.providers[1].destinations[0].group)
+        assertEquals("acct-a", catalog.providers[1].destinations[0].accountId)
     }
 
     @Test

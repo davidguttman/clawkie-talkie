@@ -14,6 +14,10 @@
 //      reply generation does not depend on the transcript post completing.
 //      OpenClaw delivery posts the assistant reply; the daemon captures stdout
 //      for TTS and does not mirror the assistant text with `openclaw message send`.
+//      Exception: thread-addressed Slack targets (session keys like
+//      `agent:<a>:slack:channel:<C>:thread:<ts>`) cannot ride
+//      `--reply-to`, so the daemon posts both transcript and reply into
+//      the thread via `openclaw message send --thread-id <ts>`.
 //
 // The daemon never calls xAI directly. Debug activity notifications
 // are sent before/after key events (STT start/stop, TTS start/stop,
@@ -82,10 +86,11 @@ async function sendTranscriptMessage(
   transcript: string,
   signal?: AbortSignal,
 ): Promise<void> {
+  const sessionKeyForThread = opts.sessionKey || opts.sessionId;
   const delivery = await resolveDeliveryTargetAccountId(opts.delivery, opts);
   if (delivery) {
     await sendGenericMessage(
-      delivery,
+      withSlackSessionKeyThread(delivery, sessionKeyForThread),
       quoteTranscript(transcript),
       signal,
       'openclaw_transcript_post_failed',
@@ -94,7 +99,12 @@ async function sendTranscriptMessage(
   }
   const explicitTarget = await resolveDeliveryTargetAccountId(deriveMessageTargetFromHandoff(opts), opts);
   if (explicitTarget) {
-    await sendGenericMessage(explicitTarget, quoteTranscript(transcript), signal, 'openclaw_transcript_post_failed');
+    await sendGenericMessage(
+      withSlackSessionKeyThread(explicitTarget, sessionKeyForThread),
+      quoteTranscript(transcript),
+      signal,
+      'openclaw_transcript_post_failed',
+    );
     return;
   }
 
@@ -132,6 +142,7 @@ async function sendGenericMessage(
     '--channel', delivery.channel,
     '--target', delivery.target,
     ...(delivery.accountId ? ['--account', delivery.accountId] : []),
+    ...(delivery.threadId ? ['--thread-id', delivery.threadId] : []),
     '--message', message,
   ];
   try {
@@ -181,6 +192,19 @@ function deriveChannelFromSessionKey(sessionKey: string | undefined): string | u
   return parts[2];
 }
 
+// Internal OpenClaw surfaces with no external chat channel. Voice turns
+// for these run without `--deliver`: the reply only goes back over TTS.
+const NON_DELIVERED_CHANNELS = new Set(['webchat', 'main']);
+
+export function shouldDeliverReplyForChatTarget(opts: {
+  sessionId: string;
+  sessionKey?: string;
+  channel?: string;
+}): boolean {
+  const channel = opts.channel?.trim() || deriveChannelFromSessionKey(opts.sessionKey || opts.sessionId);
+  return !channel || !NON_DELIVERED_CHANNELS.has(channel);
+}
+
 export function deriveDiscordMessageTarget(opts: {
   threadId?: string;
   sessionId: string;
@@ -219,6 +243,51 @@ function deriveDiscordTargetFromSessionKey(sessionId: string): string | undefine
     .filter((part) => !['channel', 'thread', 'message', 'guild'].includes(part));
   const legacyId = legacyIds.at(-1);
   return legacyId ? `channel:${legacyId}` : undefined;
+}
+
+// Slack threads hang off a parent-channel message: the route is the
+// parent channel target plus the anchor message ts as the thread id.
+// OpenClaw keys such sessions `agent:<a>:slack:channel:<C>:thread:<ts>`
+// (plain channel sessions stop at `channel:<C>`).
+const SAFE_SLACK_CHANNEL_ID = /^[A-Za-z0-9_-]+$/;
+const SLACK_THREAD_TS = /^\d+\.\d+$/;
+
+export function deriveSlackDeliveryFromSessionKey(
+  sessionKey: string | undefined,
+): DeliveryTarget | undefined {
+  const parts = (sessionKey ?? '')
+    .split(':')
+    .map((part) => part.trim());
+  if (parts.length < 5 || parts[0] !== 'agent' || parts[2] !== 'slack' || parts[3] !== 'channel') {
+    return undefined;
+  }
+  const channelId = parts[4];
+  if (!channelId || !SAFE_SLACK_CHANNEL_ID.test(channelId)) return undefined;
+  const delivery: DeliveryTarget = { channel: 'slack', target: `channel:${channelId}` };
+  if (parts[5] === 'thread') {
+    const threadTs = parts.slice(6).join(':');
+    if (!SLACK_THREAD_TS.test(threadTs)) return undefined;
+    delivery.threadId = threadTs;
+  } else if (parts.length > 5) {
+    // Unrecognized session-key suffix: don't guess a route from it.
+    return undefined;
+  }
+  return delivery;
+}
+
+// Explicit handoff/delivery targets carry the parent channel but not
+// the thread ts (it only lives in the session key). When the explicit
+// slack target matches the session key's parent channel, attach the
+// thread id so transcript + reply land in the thread instead of the
+// channel. Mismatched explicit routes are preserved untouched.
+function withSlackSessionKeyThread<T extends DeliveryTarget>(
+  delivery: T,
+  sessionKey: string | undefined,
+): T {
+  if (delivery.channel !== 'slack' || delivery.threadId) return delivery;
+  const derived = deriveSlackDeliveryFromSessionKey(sessionKey);
+  if (!derived?.threadId || derived.target !== delivery.target) return delivery;
+  return { ...delivery, threadId: derived.threadId };
 }
 
 async function resolveDiscordDeliveryTargetFromSessionLookup(
@@ -317,11 +386,17 @@ async function runOpenClawTurn(opts: {
   if (shouldDeliver && !replyTarget) {
     throw new ChatError('openclaw_delivery_unresolved', 'openclaw_delivery_unresolved');
   }
+  // Thread-addressed targets (Slack thread ts) cannot ride the agent
+  // CLI's `--reply-to <target>` route — the thread id is not a target —
+  // so the daemon posts the reply itself with `message send
+  // --thread-id` after the turn. Reply delivery stays mandatory: a
+  // failed post fails the turn like a failed `--deliver` would.
+  const daemonPostsReply = Boolean(replyTarget?.threadId);
   const args = [
     'agent',
     '--agent', agentId,
     '--session-id', sessionId,
-    ...(shouldDeliver && replyTarget
+    ...(shouldDeliver && replyTarget && !daemonPostsReply
       ? [
           '--deliver',
           '--reply-channel', replyTarget.channel,
@@ -342,6 +417,9 @@ async function runOpenClawTurn(opts: {
     }
     if (!text) {
       throw new ChatError('openclaw_reply_empty', 'openclaw_reply_empty');
+    }
+    if (shouldDeliver && replyTarget && daemonPostsReply) {
+      await sendGenericMessage(replyTarget, text, opts.signal, 'openclaw_reply_post_failed');
     }
     return text;
   } catch (err: unknown) {
@@ -439,11 +517,12 @@ async function resolveAgentReplyTarget(opts: {
   signal?: AbortSignal;
   requireLookup?: boolean;
 }): Promise<DeliveryTarget | undefined> {
+  const sessionKeyForThread = opts.resolvedSessionKey || opts.sessionKey || opts.sessionId;
   const explicitDelivery = await resolveDeliveryTargetAccountId(opts.delivery, opts);
-  if (explicitDelivery) return explicitDelivery;
+  if (explicitDelivery) return withSlackSessionKeyThread(explicitDelivery, sessionKeyForThread);
 
   const explicitTarget = await resolveDeliveryTargetAccountId(deriveMessageTargetFromHandoff(opts), opts);
-  if (explicitTarget) return explicitTarget;
+  if (explicitTarget) return withSlackSessionKeyThread(explicitTarget, sessionKeyForThread);
 
   const threadId = opts.threadId?.trim();
   if (threadId) return resolveDeliveryTargetAccountId({ channel: 'discord', target: `channel:${threadId}` }, opts);
@@ -525,6 +604,10 @@ function deriveReplyTargetFromSessionKey(sessionKey: string | undefined): Delive
 
   if (channel === 'discord' && sessionKey) {
     return deriveDiscordDeliveryTarget({ sessionId: sessionKey });
+  }
+
+  if (channel === 'slack' && sessionKey) {
+    return deriveSlackDeliveryFromSessionKey(sessionKey);
   }
 
   return undefined;
@@ -762,6 +845,10 @@ export interface DeliveryTarget {
   channel: string;
   target: string;
   accountId?: string;
+  // Provider thread id for targets whose threads are not standalone
+  // channels (Slack thread ts). Forwarded as `--thread-id` on
+  // `openclaw message send`.
+  threadId?: string;
 }
 
 export interface ChatOptionsWithSession extends ChatOptions {

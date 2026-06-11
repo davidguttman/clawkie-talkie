@@ -19,6 +19,9 @@ import {
   daemonHandshakeResponse,
   daemonToPhone,
   validateRendezvousDelivery,
+  type DaemonToPhone,
+  type NewSessionDestinationOption,
+  type NewSessionDestinationsCatalog,
   type PhoneToDaemon,
   type RecentSessionsSnapshot,
   type TtsCatalog,
@@ -28,6 +31,12 @@ import { SignalClient, type SignalData } from './signal.js';
 import { classifySignal, decideForwardToLivePeer, decideIncomingSignal } from './signalKind.js';
 
 import { createEmptyRecentSessionsSnapshot, defaultRecentSessionsCache } from './recentSessions.js';
+import {
+  buildNewSessionCreateResponse,
+  createWebchatOnlyNewSessionDestinationsCatalog,
+  getNewSessionDestinationsWithOpenClaw,
+  type NewSessionCreateRequestLike,
+} from './newSession.js';
 import { createEmptyTtsCatalog, defaultTtsCatalogCache } from './ttsCatalog.js';
 import { createEmptySttCatalog, defaultSttCatalogCache } from './sttCatalog.js';
 import { DEFAULT_SIGNAL_SERVER } from './signalServer.js';
@@ -61,6 +70,10 @@ export interface DaemonPeerOptions {
   recentSessionsProvider?: () => Promise<RecentSessionsSnapshot>;
   ttsCatalogProvider?: () => Promise<TtsCatalog>;
   sttCatalogProvider?: () => Promise<SttCatalog>;
+  newSessionDestinationsProvider?: () => Promise<NewSessionDestinationsCatalog>;
+  newSessionDiscordDestinationsProvider?: () => Promise<NewSessionDestinationOption[]>;
+  newSessionSlackDestinationsProvider?: () => Promise<NewSessionDestinationOption[]>;
+  newSessionCreateResponder?: (msg: NewSessionCreateRequestLike) => Promise<DaemonToPhone>;
   onReady: (peerId: string) => void;
   onFatalError?: (err: Error) => void;
 }
@@ -328,6 +341,16 @@ export class DaemonPeer {
       void this.sendRendezvousSttCatalog(rp);
       return;
     }
+    if (msg.t === 'sessions.destinations.request') {
+      this.keepRendezvousOpenForDashboard(rp);
+      void this.sendRendezvousNewSessionDestinations(rp);
+      return;
+    }
+    if (msg.t === 'sessions.create.request') {
+      this.keepRendezvousOpenForDashboard(rp);
+      void this.sendRendezvousNewSessionCreateResponse(rp, msg);
+      return;
+    }
     if (msg.t !== 'rendezvous.join') {
       // The rendezvous lane accepts host-scoped recent-session discovery
       // plus a single join. Any other control message is a sign the
@@ -376,6 +399,18 @@ export class DaemonPeer {
         ...(this.opts.recentSessionsProvider ? { recentSessionsProvider: this.opts.recentSessionsProvider } : {}),
         ...(this.opts.ttsCatalogProvider ? { ttsCatalogProvider: this.opts.ttsCatalogProvider } : {}),
         ...(this.opts.sttCatalogProvider ? { sttCatalogProvider: this.opts.sttCatalogProvider } : {}),
+        ...(this.opts.newSessionDestinationsProvider
+          ? { newSessionDestinationsProvider: this.opts.newSessionDestinationsProvider }
+          : {}),
+        ...(this.opts.newSessionDiscordDestinationsProvider
+          ? { newSessionDiscordDestinationsProvider: this.opts.newSessionDiscordDestinationsProvider }
+          : {}),
+        ...(this.opts.newSessionSlackDestinationsProvider
+          ? { newSessionSlackDestinationsProvider: this.opts.newSessionSlackDestinationsProvider }
+          : {}),
+        ...(this.opts.newSessionCreateResponder
+          ? { newSessionCreateResponder: this.opts.newSessionCreateResponder }
+          : {}),
         onClose: (id) => {
           this.voiceSessions.delete(id);
         },
@@ -468,6 +503,43 @@ export class DaemonPeer {
     }
   }
 
+  private async sendRendezvousNewSessionDestinations(rp: RendezvousPeer): Promise<void> {
+    const immediateCatalog = createWebchatOnlyNewSessionDestinationsCatalog();
+    this.sendRendezvous(rp, daemonToPhone.sessionsDestinations(immediateCatalog));
+    try {
+      const loadCatalog = this.opts.newSessionDestinationsProvider
+        ?? (() => getNewSessionDestinationsWithOpenClaw({
+          ...(this.opts.newSessionDiscordDestinationsProvider
+            ? { loadDiscordDestinations: this.opts.newSessionDiscordDestinationsProvider }
+            : {}),
+          ...(this.opts.newSessionSlackDestinationsProvider
+            ? { loadSlackDestinations: this.opts.newSessionSlackDestinationsProvider }
+            : {}),
+        }));
+      const catalog = await loadCatalog();
+      if (!sameNewSessionDestinationProviders(immediateCatalog, catalog)) {
+        this.sendRendezvous(rp, daemonToPhone.sessionsDestinations(catalog));
+      }
+    } catch {
+      // The immediate webchat catalog has already kept local sessions usable.
+    }
+  }
+
+  private async sendRendezvousNewSessionCreateResponse(
+    rp: RendezvousPeer,
+    msg: NewSessionCreateRequestLike,
+  ): Promise<void> {
+    const respond = this.opts.newSessionCreateResponder ?? buildNewSessionCreateResponse;
+    try {
+      this.sendRendezvous(rp, await respond(msg));
+    } catch {
+      this.sendRendezvous(rp, daemonToPhone.sessionsCreateError(
+        typeof msg.requestId === 'string' ? msg.requestId : '',
+        'new_session_create_failed',
+      ));
+    }
+  }
+
   private sendRendezvous(rp: RendezvousPeer, msg: unknown): void {
     if (rp.peer.destroyed) return;
     try {
@@ -481,6 +553,14 @@ export class DaemonPeer {
   get activeRoomIds(): string[] {
     return Array.from(this.voiceSessions.keys());
   }
+}
+
+
+function sameNewSessionDestinationProviders(
+  left: NewSessionDestinationsCatalog,
+  right: NewSessionDestinationsCatalog,
+): boolean {
+  return JSON.stringify(left.providers) === JSON.stringify(right.providers);
 }
 
 function decodeJsonText(data: unknown): string | null {

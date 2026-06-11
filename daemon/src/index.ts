@@ -9,7 +9,7 @@
 // The daemon subscribes to the hosted rambly-style signaling broker
 // under a UUID token generated each session (or overridden via
 // DAEMON_PEER_ID env). The phone discovers the daemon via
-// `/dashboard#host=<uuid>` for the host dashboard or `/voice#host=...&session=...`
+// `/dashboard/#host=<uuid>` for the host dashboard or `/voice#host=...&session=...`
 // for a selected voice session. simple-peer + @roamhq/wrtc
 // drive the WebRTC DataChannel; the daemon owns the full turn:
 // OpenClaw infer transcription on inbound mic PCM, the configured

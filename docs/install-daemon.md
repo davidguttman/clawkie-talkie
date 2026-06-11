@@ -147,7 +147,7 @@ A healthy startup prints lines like:
 [peer] subscribed to rendezvous room as <your-daemon-peer-id>
 Session:  dev-local
 Peer ID:  <your-daemon-peer-id>
-Join URL: https://clawkietalkie.app/dashboard#host=<your-daemon-peer-id>
+Join URL: https://clawkietalkie.app/dashboard/#host=<your-daemon-peer-id>
 Waiting for phone…
 ```
 
@@ -407,7 +407,7 @@ This is usually a path or working-directory problem.
 
 ### The browser shows a bad-session error
 
-The link is missing required handoff fields. A real voice handoff URL needs `host` and `session`. A host-only URL should route to the dashboard instead; use `/dashboard#host=<daemon-peer-id>` for the canonical dashboard entrypoint.
+The link is missing required handoff fields. A real voice handoff URL needs `host` and `session`. A host-only URL should route to the dashboard instead; use `/dashboard/#host=<daemon-peer-id>` for the canonical dashboard entrypoint.
 
 ### Signaling or WebRTC never connects
 

@@ -209,7 +209,7 @@ A healthy daemon prints something like:
 
 ```text
 Peer ID:  <daemon-peer-id>
-Join URL: https://clawkietalkie.app/dashboard#host=<daemon-peer-id>
+Join URL: https://clawkietalkie.app/dashboard/#host=<daemon-peer-id>
 Waiting for phone…
 ```
 

@@ -23,6 +23,8 @@ object ProtocolFeatures {
     const val STT_CATALOG = "stt.catalog"
     const val SESSIONS_LIST = "sessions.list"
     const val SESSIONS_CATALOG = "sessions.catalog"
+    const val SESSIONS_DESTINATIONS = "sessions.destinations"
+    const val SESSIONS_CREATE = "sessions.create"
 }
 
 val CLIENT_WANTED_PROTOCOL_FEATURES = listOf(
@@ -30,6 +32,8 @@ val CLIENT_WANTED_PROTOCOL_FEATURES = listOf(
     ProtocolFeatures.STT_CATALOG,
     ProtocolFeatures.SESSIONS_LIST,
     ProtocolFeatures.SESSIONS_CATALOG,
+    ProtocolFeatures.SESSIONS_DESTINATIONS,
+    ProtocolFeatures.SESSIONS_CREATE,
 )
 
 fun isDaemonSupportedProtocol(protocol: Int?): Boolean = protocol == PROTOCOL_VERSION
@@ -167,6 +171,49 @@ data class RecentSessionsSnapshot(
     val sessions: List<RecentSession>,
 )
 
+data class NewSessionDestinationOption(
+    val id: String,
+    val target: String,
+    val label: String,
+    val accountId: String? = null,
+    val group: String? = null,
+)
+
+data class NewSessionDestinationProvider(
+    val id: String,
+    val label: String,
+    val kind: String,
+    val status: String,
+    val statusDetail: String? = null,
+    val destinations: List<NewSessionDestinationOption>,
+)
+
+data class NewSessionDestinationsCatalog(
+    val generatedAt: String,
+    val providers: List<NewSessionDestinationProvider>,
+)
+
+data class NewSessionCreateInput(
+    val requestId: String,
+    val providerId: String,
+    val agent: String? = null,
+    val target: String? = null,
+    val accountId: String? = null,
+)
+
+fun webOnlyNewSessionDestinationsCatalog(): NewSessionDestinationsCatalog = NewSessionDestinationsCatalog(
+    generatedAt = "",
+    providers = listOf(
+        NewSessionDestinationProvider(
+            id = "webchat",
+            label = "Web only (no chat channel)",
+            kind = "local",
+            status = "available",
+            destinations = emptyList(),
+        ),
+    ),
+)
+
 // ---------------------------------------------------------------------------
 // Phone → daemon message builders (mirror of `phoneToDaemon` in protocol.ts)
 // ---------------------------------------------------------------------------
@@ -208,6 +255,15 @@ object PhoneToDaemon {
     fun sessionsCatalogRequest(): ControlMessage = simple("sessions.catalog.request")
     fun sessionsListSubscribe(): ControlMessage = simple("sessions.list.subscribe")
     fun sessionsListUnsubscribe(): ControlMessage = simple("sessions.list.unsubscribe")
+    fun sessionsDestinationsRequest(): ControlMessage = simple("sessions.destinations.request")
+    fun sessionsCreateRequest(input: NewSessionCreateInput): ControlMessage = ControlMessage.of {
+        put("t", "sessions.create.request")
+        put("requestId", input.requestId)
+        put("providerId", input.providerId)
+        input.agent?.let { put("agent", it) }
+        input.target?.let { put("target", it) }
+        input.accountId?.let { put("accountId", it) }
+    }
     fun sttStart(): ControlMessage = simple("stt.start")
     fun sttAudioDone(): ControlMessage = simple("stt.audio.done")
     fun sttCancel(): ControlMessage = simple("stt.cancel")
@@ -286,6 +342,39 @@ fun decodeSttCatalog(catalog: JsonObject): SttCatalog {
     } ?: emptyList()
     return SttCatalog(
         activeProvider = catalog["activeProvider"].stringOrNull(),
+        generatedAt = catalog["generatedAt"].stringOrNull() ?: "",
+        providers = providers,
+    )
+}
+
+fun decodeNewSessionDestinationsCatalog(catalog: JsonObject): NewSessionDestinationsCatalog {
+    val providers = (catalog["providers"] as? JsonArray)?.mapNotNull { entry ->
+        val source = entry as? JsonObject ?: return@mapNotNull null
+        val id = source["id"].stringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+        val destinations = (source["destinations"] as? JsonArray)?.mapNotNull { destinationEntry ->
+            val destination = destinationEntry as? JsonObject ?: return@mapNotNull null
+            val destinationId = destination["id"].stringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+                ?: return@mapNotNull null
+            val target = destination["target"].stringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+                ?: return@mapNotNull null
+            NewSessionDestinationOption(
+                id = destinationId,
+                target = target,
+                label = destination["label"].stringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: target,
+                accountId = destination["accountId"].stringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+                group = destination["group"].stringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+            )
+        } ?: emptyList()
+        NewSessionDestinationProvider(
+            id = id,
+            label = source["label"].stringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: id,
+            kind = source["kind"].stringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: "channel",
+            status = source["status"].stringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: "unavailable",
+            statusDetail = source["statusDetail"].stringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+            destinations = destinations,
+        )
+    } ?: emptyList()
+    return NewSessionDestinationsCatalog(
         generatedAt = catalog["generatedAt"].stringOrNull() ?: "",
         providers = providers,
     )
