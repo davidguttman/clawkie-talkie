@@ -103,6 +103,59 @@ provider preferences. If OpenClaw reports a provider but does not expose a
 model id that can be passed to `--model`, the settings UI should hide or
 disable that provider instead of falling back to global provider mutation.
 
+## New-session destinations
+
+The host dashboard can start a brand-new OpenClaw session through the daemon.
+The browser never holds OpenClaw/Discord/Slack credentials; the daemon exposes
+a safe destination catalog and performs the creation:
+
+- `sessions.destinations.request` → daemon replies `sessions.destinations`
+  with a catalog of destination providers. The local `webchat` provider
+  (voice-only, no chat channel) is always present and `available`. Discord
+  and Slack destinations come from the real channel catalogs: the daemon
+  runs `openclaw message channel list --channel discord|slack --json` and
+  keeps only postable parent channels — for Discord, thread-capable parent
+  channels (text/announcement/forum/media); for Slack, public/private
+  channels — labeled with their human `#channel` names and grouped by
+  guild/workspace. DMs, existing threads, voice/stage channels, categories,
+  and archived Slack conversations are excluded, and recent session rows are
+  never used as destinations (they are threads/DMs/stale targets). If the
+  bare Discord listing yields nothing, the daemon retries per guild with
+  guild ids inferred from the OpenClaw config (`guildId`-style keys or
+  `guilds` maps under the discord channel config) — guild ids are never
+  hard-coded. A provider whose channel catalog is empty or failing (not
+  configured, CLI error) is omitted from the catalog entirely — the
+  dashboard never shows disabled provider cards, "unsupported" placeholders,
+  or fake destinations.
+- `sessions.create.request { requestId, providerId, agent?, target?,
+  accountId? }` → daemon replies `sessions.created { requestId, session }` or
+  `sessions.create.error { requestId, message }`. For `webchat` the daemon
+  mints a fresh UUID sessionId; the OpenClaw session materializes on the
+  first `openclaw agent --session-id <uuid>` voice turn. For `discord` the
+  daemon creates a real thread under the selected destination via
+  `openclaw message thread create --channel discord --target <target>
+  --thread-name <name> --message <starter> --json [--account <id>]` and
+  returns a session bound to `channel:<threadId>`, so voice turns deliver
+  transcript + reply into the new thread. For `slack` the daemon starts a
+  thread by posting a starter message to the selected parent channel via
+  `openclaw message send --channel slack --target channel:<C> --message
+  <starter> --json [--account <id>]`, reads the Slack message `ts` back as
+  the thread id, and returns a session keyed
+  `agent:<agent>:slack:channel:<C>:thread:<ts>` (OpenClaw's own Slack thread
+  session-key shape) targeting `channel:<C>`; voice turns post transcript +
+  reply into that thread via `openclaw message send --thread-id <ts>`
+  because a Slack thread ts is not a standalone `--reply-to` target. The
+  browser then sends a normal `rendezvous.join` with the returned session,
+  so creation never opens a voice room by itself.
+- Both messages are feature-gated (`sessions.destinations` and
+  `sessions.create` in the hello handshake). The dashboard hides the New
+  Session entry point for daemons that do not advertise both features,
+  including legacy daemons that never send `daemon.hello`.
+
+Webchat/no-chat sessions (explicit `channel=webchat`, or webchat/`main`
+session keys) run their voice turns without `--deliver`: the assistant reply
+comes back over TTS only instead of failing on an unresolvable reply target.
+
 ## URL contract
 
 - `/` — marketing landing page placeholder.
@@ -110,7 +163,7 @@ disable that provider instead of falling back to global provider mutation.
   serve this from `/voice/index.html`.
 - `/voice` — clean public handoff URL used in generated links; static hosts
   resolve it to `/voice/`.
-- `/dashboard#host=H` — canonical host-scoped dashboard URL for daemon output
+- `/dashboard/#host=H` — canonical host-scoped dashboard URL for daemon output
   and home-screen install. Users should add this page to the home screen; the
   manifest intentionally omits a static `start_url` so installed launches
   preserve the chosen dashboard URL/hash. It connects to the daemon rendezvous

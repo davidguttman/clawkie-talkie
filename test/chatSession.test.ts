@@ -23,6 +23,7 @@ import {
   ChatError,
   classifyOpenClawError,
   deriveDiscordMessageTarget,
+  deriveSlackDeliveryFromSessionKey,
   quoteTranscript,
   resolveOpenClawAgentSessionId,
   runChat,
@@ -1581,6 +1582,140 @@ describe('runChat with explicit delivery target', () => {
         delivery: { channel: 'discord', target: 'channel:thread-1' },
       }),
     ).rejects.toMatchObject({ code: 'openclaw_gateway_unavailable' });
+  });
+});
+
+describe('runChat Slack thread routing', () => {
+  const SESSION_ID = 'c44d9502-ce71-46b1-9b15-5d548004544a';
+  const THREAD_SESSION_KEY = 'agent:main:slack:channel:C123:thread:1710000000.000100';
+
+  beforeEach(() => {
+    execMock.mockReset();
+  });
+
+  it('posts transcript and reply into the Slack thread via --thread-id instead of agent --deliver', async () => {
+    // A Slack thread is not a standalone target the agent CLI can
+    // address with --reply-to; the daemon posts both turn messages
+    // itself with the thread ts from the session key.
+    mockExecRoutingAgentTo(jsonAgentStdout('slack reply'));
+
+    const result = await runChat('hello slack', {
+      sessionId: SESSION_ID,
+      sessionKey: THREAD_SESSION_KEY,
+      channel: 'slack',
+      target: 'channel:C123',
+      accountId: 'slack-acct',
+      deliver: true,
+    });
+
+    expect(result).toEqual({ text: 'slack reply', source: 'openclaw' });
+
+    const transcriptCall = findOpenClawMessageSendInvocationWithMessage('> hello slack');
+    expect(transcriptCall.args).toEqual(expect.arrayContaining([
+      '--channel', 'slack',
+      '--target', 'channel:C123',
+      '--account', 'slack-acct',
+      '--thread-id', '1710000000.000100',
+    ]));
+
+    const agentCall = findOpenClawExecFileInvocation('agent');
+    expect(agentCall.args).toEqual(expect.arrayContaining([
+      '--agent', 'main',
+      '--session-id', SESSION_ID,
+    ]));
+    expect(agentCall.args).not.toContain('--deliver');
+    expect(agentCall.args).not.toContain('--reply-channel');
+
+    const replyCall = findOpenClawMessageSendInvocationWithMessage('slack reply');
+    expect(replyCall.args).toEqual(expect.arrayContaining([
+      '--channel', 'slack',
+      '--target', 'channel:C123',
+      '--account', 'slack-acct',
+      '--thread-id', '1710000000.000100',
+    ]));
+  });
+
+  it('keeps reply delivery mandatory: a failed thread post fails the turn', async () => {
+    execMock.mockImplementation((cmd) => {
+      const command = String(cmd);
+      if (command.includes('openclaw "agent"')) {
+        return Promise.resolve({ stdout: jsonAgentStdout('slack reply'), stderr: '' });
+      }
+      if (command.includes(JSON.stringify('> hello slack'))) {
+        return Promise.resolve({ stdout: 'transcript posted\n', stderr: '' });
+      }
+      return Promise.reject(
+        Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:18789'), {
+          stderr: 'connect ECONNREFUSED 127.0.0.1:18789',
+        }),
+      );
+    });
+
+    await expect(
+      runChat('hello slack', {
+        sessionId: SESSION_ID,
+        sessionKey: THREAD_SESSION_KEY,
+        channel: 'slack',
+        target: 'channel:C123',
+        accountId: 'slack-acct',
+        deliver: true,
+      }),
+    ).rejects.toMatchObject({ code: 'openclaw_gateway_unavailable' });
+  });
+
+  it('keeps agent --deliver routing for plain Slack channel sessions without a thread suffix', async () => {
+    mockExecRoutingAgentTo(jsonAgentStdout('channel reply'));
+
+    const result = await runChat('hello channel', {
+      sessionId: SESSION_ID,
+      sessionKey: 'agent:main:slack:channel:C123',
+      channel: 'slack',
+      target: 'channel:C123',
+      accountId: 'slack-acct',
+      deliver: true,
+    });
+
+    expect(result.text).toBe('channel reply');
+
+    const transcriptCall = findOpenClawMessageSendInvocationWithMessage('> hello channel');
+    expect(transcriptCall.args).not.toContain('--thread-id');
+
+    const agentCall = findOpenClawExecFileInvocation('agent');
+    expect(agentCall.args).toEqual(expect.arrayContaining([
+      '--deliver',
+      '--reply-channel', 'slack',
+      '--reply-to', 'channel:C123',
+      '--reply-account', 'slack-acct',
+    ]));
+
+    // Only the transcript went through message send — the agent posted
+    // the reply itself.
+    const sendCalls = execFileInvocations.filter(
+      (invocation) => invocation.file === 'openclaw' && invocation.args[0] === 'message' && invocation.args[1] === 'send',
+    );
+    expect(sendCalls).toHaveLength(1);
+  });
+});
+
+describe('Slack delivery derivation from session keys', () => {
+  it('derives the parent channel plus thread ts from Slack thread session keys', () => {
+    expect(deriveSlackDeliveryFromSessionKey('agent:main:slack:channel:C123:thread:1710000000.000100')).toEqual({
+      channel: 'slack',
+      target: 'channel:C123',
+      threadId: '1710000000.000100',
+    });
+    expect(deriveSlackDeliveryFromSessionKey('agent:main:slack:channel:C123')).toEqual({
+      channel: 'slack',
+      target: 'channel:C123',
+    });
+  });
+
+  it('refuses to guess routes from malformed Slack session keys', () => {
+    expect(deriveSlackDeliveryFromSessionKey('agent:main:slack:channel:C123:thread:not-a-ts')).toBeUndefined();
+    expect(deriveSlackDeliveryFromSessionKey('agent:main:slack:channel:C123:extra:suffix')).toBeUndefined();
+    expect(deriveSlackDeliveryFromSessionKey('agent:main:slack:direct:U999')).toBeUndefined();
+    expect(deriveSlackDeliveryFromSessionKey('agent:main:discord:channel:123')).toBeUndefined();
+    expect(deriveSlackDeliveryFromSessionKey(undefined)).toBeUndefined();
   });
 });
 

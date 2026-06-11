@@ -101,6 +101,46 @@ export interface RecentSessionsSnapshot {
   sessions: RecentSession[];
 }
 
+// New-session destination catalog. The daemon is the trusted side: it
+// reports which chat surfaces a brand-new OpenClaw session can be bound
+// to. The browser never sees provider credentials — only ids, labels,
+// and an availability status per provider. The daemon only emits
+// providers it can actually create sessions for, backed by real channel
+// destinations; providers without creatable channels are omitted. The
+// status field stays on the wire so clients can filter defensively when
+// talking to daemons with different emission rules.
+export type NewSessionDestinationStatus = 'available' | 'unavailable' | 'unsupported';
+
+export interface NewSessionDestinationOption {
+  id: string;
+  target: string;
+  label: string;
+  accountId?: string;
+  group?: string;
+}
+
+export interface NewSessionDestinationProvider {
+  id: string;
+  label: string;
+  kind: 'local' | 'channel';
+  status: NewSessionDestinationStatus;
+  statusDetail?: string;
+  destinations: NewSessionDestinationOption[];
+}
+
+export interface NewSessionDestinationsCatalog {
+  generatedAt: string;
+  providers: NewSessionDestinationProvider[];
+}
+
+export interface NewSessionCreateInput {
+  requestId: string;
+  providerId: string;
+  agent?: string;
+  target?: string;
+  accountId?: string;
+}
+
 export type VoiceTurnPhase =
   | 'idle'
   | 'recording'
@@ -127,6 +167,8 @@ export const PROTOCOL_FEATURES = {
   sttCatalog: 'stt.catalog',
   sessionsList: 'sessions.list',
   sessionsCatalog: 'sessions.catalog',
+  sessionsDestinations: 'sessions.destinations',
+  sessionsCreate: 'sessions.create',
 } as const;
 
 export type ProtocolFeature = (typeof PROTOCOL_FEATURES)[keyof typeof PROTOCOL_FEATURES];
@@ -136,6 +178,8 @@ export const CLIENT_WANTED_PROTOCOL_FEATURES = [
   PROTOCOL_FEATURES.sttCatalog,
   PROTOCOL_FEATURES.sessionsList,
   PROTOCOL_FEATURES.sessionsCatalog,
+  PROTOCOL_FEATURES.sessionsDestinations,
+  PROTOCOL_FEATURES.sessionsCreate,
 ] as const satisfies readonly ProtocolFeature[];
 
 export const DAEMON_SUPPORTED_PROTOCOL_FEATURES = [
@@ -143,6 +187,8 @@ export const DAEMON_SUPPORTED_PROTOCOL_FEATURES = [
   PROTOCOL_FEATURES.sttCatalog,
   PROTOCOL_FEATURES.sessionsList,
   PROTOCOL_FEATURES.sessionsCatalog,
+  PROTOCOL_FEATURES.sessionsDestinations,
+  PROTOCOL_FEATURES.sessionsCreate,
 ] as const satisfies readonly ProtocolFeature[];
 
 export function isDaemonSupportedProtocol(protocol: unknown): protocol is typeof PROTOCOL_VERSION {
@@ -187,6 +233,15 @@ export type PhoneToDaemon =
   | { t: 'sessions.catalog.request' }
   | { t: 'sessions.list.subscribe' }
   | { t: 'sessions.list.unsubscribe' }
+  | { t: 'sessions.destinations.request' }
+  | {
+      t: 'sessions.create.request';
+      requestId: string;
+      providerId: string;
+      agent?: string;
+      target?: string;
+      accountId?: string;
+    }
   | { t: 'stt.start' }
   | { t: 'stt.audio.done' }
   | { t: 'stt.cancel' }
@@ -211,6 +266,9 @@ export type DaemonToPhoneEvent =
   | { t: 'stt.catalog'; catalog: SttCatalog }
   | { t: 'sessions.list'; generatedAt: string; sessions: RecentSession[] }
   | { t: 'sessions.catalog'; catalog: RecentSessionsSnapshot }
+  | { t: 'sessions.destinations'; catalog: NewSessionDestinationsCatalog }
+  | { t: 'sessions.created'; requestId: string; session: RecentSession }
+  | { t: 'sessions.create.error'; requestId: string; message: string }
   | { t: 'tts.done' }
   | { t: 'tts.error'; message: string };
 
@@ -256,6 +314,15 @@ export const phoneToDaemon = {
   sessionsCatalogRequest: (): PhoneToDaemon => ({ t: 'sessions.catalog.request' }),
   sessionsListSubscribe: (): PhoneToDaemon => ({ t: 'sessions.list.subscribe' }),
   sessionsListUnsubscribe: (): PhoneToDaemon => ({ t: 'sessions.list.unsubscribe' }),
+  sessionsDestinationsRequest: (): PhoneToDaemon => ({ t: 'sessions.destinations.request' }),
+  sessionsCreateRequest: (input: NewSessionCreateInput): PhoneToDaemon => ({
+    t: 'sessions.create.request',
+    requestId: input.requestId,
+    providerId: input.providerId,
+    ...(input.agent ? { agent: input.agent } : {}),
+    ...(input.target ? { target: input.target } : {}),
+    ...(input.accountId ? { accountId: input.accountId } : {}),
+  }),
   sttStart: (): PhoneToDaemon => ({ t: 'stt.start' }),
   sttAudioDone: (): PhoneToDaemon => ({ t: 'stt.audio.done' }),
   sttCancel: (): PhoneToDaemon => ({ t: 'stt.cancel' }),
@@ -329,6 +396,20 @@ export const daemonToPhone = {
   sessionsCatalog: (catalog: RecentSessionsSnapshot): DaemonToPhone => ({
     t: 'sessions.catalog',
     catalog,
+  }),
+  sessionsDestinations: (catalog: NewSessionDestinationsCatalog): DaemonToPhone => ({
+    t: 'sessions.destinations',
+    catalog,
+  }),
+  sessionsCreated: (requestId: string, session: RecentSession): DaemonToPhone => ({
+    t: 'sessions.created',
+    requestId,
+    session,
+  }),
+  sessionsCreateError: (requestId: string, message: string): DaemonToPhone => ({
+    t: 'sessions.create.error',
+    requestId,
+    message,
   }),
   sessionSnapshot: (input: {
     roomId: string;

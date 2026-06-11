@@ -109,6 +109,7 @@ describe('parseHandoffUrl', () => {
   });
 
   it('parses host-only dashboard URLs without treating them as handoffs', () => {
+    expect(parseHostDashboardUrl('/dashboard/#host=host-1')).toEqual({ hostPeerId: 'host-1' });
     expect(parseHostDashboardUrl('/dashboard#host=host-1')).toEqual({ hostPeerId: 'host-1' });
     expect(parseHostDashboardUrl('/voice#host=host-1')).toEqual({ hostPeerId: 'host-1' });
     expect(parseHostDashboardUrl('/?host=host-1')).toBeNull();

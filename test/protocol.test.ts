@@ -31,6 +31,8 @@ describe('additive v1 protocol capability handshake', () => {
       sttCatalog: 'stt.catalog',
       sessionsList: 'sessions.list',
       sessionsCatalog: 'sessions.catalog',
+      sessionsDestinations: 'sessions.destinations',
+      sessionsCreate: 'sessions.create',
     });
     expect(CLIENT_PROTOCOL_FEATURES).toEqual(DAEMON_PROTOCOL_FEATURES);
     expect(CLIENT_WANTED_PROTOCOL_FEATURES).toEqual(Object.values(CLIENT_PROTOCOL_FEATURES));
@@ -43,7 +45,7 @@ describe('additive v1 protocol capability handshake', () => {
     expect(phoneClient.clientHello()).toEqual({
       t: 'client.hello',
       protocol: 1,
-      wants: ['tts.catalog', 'stt.catalog', 'sessions.list', 'sessions.catalog'],
+      wants: ['tts.catalog', 'stt.catalog', 'sessions.list', 'sessions.catalog', 'sessions.destinations', 'sessions.create'],
     });
     expect(JSON.stringify(phoneClient.clientHello())).toBe(JSON.stringify(phoneDaemon.clientHello()));
   });
@@ -52,7 +54,7 @@ describe('additive v1 protocol capability handshake', () => {
     expect(daemonClient.daemonHello()).toEqual({
       t: 'daemon.hello',
       protocol: 1,
-      features: ['tts.catalog', 'stt.catalog', 'sessions.list', 'sessions.catalog'],
+      features: ['tts.catalog', 'stt.catalog', 'sessions.list', 'sessions.catalog', 'sessions.destinations', 'sessions.create'],
     });
     expect(JSON.stringify(daemonClient.daemonHello())).toBe(JSON.stringify(daemonDaemon.daemonHello()));
   });
@@ -198,6 +200,36 @@ describe('phone → daemon factories', () => {
     expect(phoneClient.sessionsCatalogRequest()).toEqual(phoneDaemon.sessionsCatalogRequest());
   });
 
+  it('requests the new-session destination catalog and session creation', () => {
+    expect(phoneClient.sessionsDestinationsRequest()).toEqual({ t: 'sessions.destinations.request' });
+    expect(phoneClient.sessionsDestinationsRequest()).toEqual(phoneDaemon.sessionsDestinationsRequest());
+
+    expect(phoneClient.sessionsCreateRequest({ requestId: 'req-1', providerId: 'webchat' })).toEqual({
+      t: 'sessions.create.request',
+      requestId: 'req-1',
+      providerId: 'webchat',
+    });
+    expect(
+      phoneClient.sessionsCreateRequest({
+        requestId: 'req-2',
+        providerId: 'discord',
+        agent: 'main',
+        target: 'channel:thread-1',
+        accountId: 'acct-1',
+      }),
+    ).toEqual({
+      t: 'sessions.create.request',
+      requestId: 'req-2',
+      providerId: 'discord',
+      agent: 'main',
+      target: 'channel:thread-1',
+      accountId: 'acct-1',
+    });
+    expect(
+      JSON.stringify(phoneClient.sessionsCreateRequest({ requestId: 'r', providerId: 'webchat' })),
+    ).toBe(JSON.stringify(phoneDaemon.sessionsCreateRequest({ requestId: 'r', providerId: 'webchat' })));
+  });
+
   it('includes canonical STT selection in settings.update', () => {
     const stt = { providerId: 'xai', model: 'grok-stt' };
     expect(phoneClient.settingsUpdate({ stt })).toEqual({
@@ -340,6 +372,53 @@ describe('daemon → phone factories', () => {
       t: 'sessions.catalog',
       catalog: snapshot,
     });
+  });
+
+  it('emits new-session destination catalog and creation payloads', () => {
+    const catalog = {
+      generatedAt: '2026-06-10T00:00:00.000Z',
+      providers: [
+        {
+          id: 'webchat',
+          label: 'Web only (no chat channel)',
+          kind: 'local' as const,
+          status: 'available' as const,
+          destinations: [],
+        },
+        {
+          id: 'discord',
+          label: 'Discord',
+          kind: 'channel' as const,
+          status: 'unsupported' as const,
+          statusDetail: 'channel_session_creation_unsupported',
+          destinations: [
+            { id: 'discord:channel:thread-1', target: 'channel:thread-1', label: 'Thread name' },
+          ],
+        },
+      ],
+    };
+    expect(daemonClient.sessionsDestinations(catalog)).toEqual({ t: 'sessions.destinations', catalog });
+    expect(daemonClient.sessionsDestinations(catalog)).toEqual(daemonDaemon.sessionsDestinations(catalog));
+
+    const session = {
+      sessionId: 'session-uuid',
+      sessionKey: 'agent:main:webchat:session:session-uuid',
+      agent: 'main',
+      channel: 'webchat',
+      displayLabel: 'New web session',
+    };
+    expect(daemonClient.sessionsCreated('req-1', session)).toEqual({
+      t: 'sessions.created',
+      requestId: 'req-1',
+      session,
+    });
+    expect(daemonClient.sessionsCreated('req-1', session)).toEqual(daemonDaemon.sessionsCreated('req-1', session));
+    expect(daemonClient.sessionsCreateError('req-1', 'new_session_destination_unsupported')).toEqual({
+      t: 'sessions.create.error',
+      requestId: 'req-1',
+      message: 'new_session_destination_unsupported',
+    });
+    expect(daemonClient.sessionsCreateError('req-1', 'x')).toEqual(daemonDaemon.sessionsCreateError('req-1', 'x'));
   });
 
   it('emits TTS catalog payloads', () => {

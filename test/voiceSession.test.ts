@@ -54,7 +54,11 @@ vi.mock('../daemon/src/ttsSession.js', () => ({
   TTS_SAMPLE_RATE: 24000,
 }));
 
-vi.mock('../daemon/src/chatSession.js', () => ({
+vi.mock('../daemon/src/chatSession.js', async (importOriginal) => ({
+  // Keep the real pure deliver-flag derivation so webchat/no-chat
+  // sessions exercise the same logic as production.
+  shouldDeliverReplyForChatTarget:
+    (await importOriginal<typeof import('../daemon/src/chatSession.js')>()).shouldDeliverReplyForChatTarget,
   runChat: chatMocks.runChat,
   ChatError: class ChatError extends Error {
     code: string;
@@ -88,7 +92,8 @@ vi.mock('../daemon/src/vad.js', () => ({
 }));
 
 import { ChatError } from '../daemon/src/chatSession.js';
-import type { RecentSessionsSnapshot, SttCatalog, TtsCatalog, VoiceSettings } from '../daemon/src/protocol.js';
+import { buildNewSessionCreateResponse } from '../daemon/src/newSession.js';
+import type { NewSessionDestinationOption, RecentSessionsSnapshot, SttCatalog, TtsCatalog, VoiceSettings } from '../daemon/src/protocol.js';
 import {
   createVoiceSessionState,
   decidePhoneConnection,
@@ -106,6 +111,9 @@ function makeVoiceSession(overrides: {
   ttsCatalogProvider?: () => Promise<TtsCatalog>;
   sttCatalogProvider?: () => Promise<SttCatalog>;
   recentSessionsProvider?: () => Promise<RecentSessionsSnapshot>;
+  newSessionDiscordDestinationsProvider?: () => Promise<NewSessionDestinationOption[]>;
+  newSessionSlackDestinationsProvider?: () => Promise<NewSessionDestinationOption[]>;
+  newSessionCreateResponder?: typeof buildNewSessionCreateResponse;
   voiceSettings?: VoiceSettings;
   ttsSessionFactory?: TtsSessionFactory;
   delivery?: { channel: string; target: string; accountId?: string } | null;
@@ -140,6 +148,13 @@ function makeVoiceSession(overrides: {
     ttsCatalogProvider: overrides.ttsCatalogProvider ?? defaultTtsCatalogProvider,
     ...(overrides.sttCatalogProvider ? { sttCatalogProvider: overrides.sttCatalogProvider } : {}),
     ...(overrides.recentSessionsProvider ? { recentSessionsProvider: overrides.recentSessionsProvider } : {}),
+    ...(overrides.newSessionDiscordDestinationsProvider
+      ? { newSessionDiscordDestinationsProvider: overrides.newSessionDiscordDestinationsProvider }
+      : {}),
+    ...(overrides.newSessionSlackDestinationsProvider
+      ? { newSessionSlackDestinationsProvider: overrides.newSessionSlackDestinationsProvider }
+      : {}),
+    ...(overrides.newSessionCreateResponder ? { newSessionCreateResponder: overrides.newSessionCreateResponder } : {}),
     ...(overrides.ttsSessionFactory ? { ttsSessionFactory: overrides.ttsSessionFactory } : {}),
     onClose: overrides.onClose ?? vi.fn(),
   });
@@ -331,7 +346,7 @@ describe('voice session capability handshake runtime', () => {
         {
           t: 'daemon.hello',
           protocol: 1,
-          features: ['tts.catalog', 'stt.catalog', 'sessions.list', 'sessions.catalog'],
+          features: ['tts.catalog', 'stt.catalog', 'sessions.list', 'sessions.catalog', 'sessions.destinations', 'sessions.create'],
         },
         { t: 'tts.catalog', catalog },
       ]);
@@ -512,7 +527,7 @@ describe('voice session capability handshake runtime', () => {
         {
           t: 'daemon.hello',
           protocol: 1,
-          features: ['tts.catalog', 'stt.catalog', 'sessions.list', 'sessions.catalog'],
+          features: ['tts.catalog', 'stt.catalog', 'sessions.list', 'sessions.catalog', 'sessions.destinations', 'sessions.create'],
         },
         { t: 'tts.catalog', catalog },
       ]);
@@ -646,6 +661,144 @@ describe('voice session recent-session list runtime', () => {
 
     await vi.waitFor(() => {
       expect(sentJson(peer)).toContainEqual({ t: 'sessions.catalog', catalog: snapshot });
+    });
+  });
+
+  it('answers new-session destination requests on the voice lane from the real channel catalogs', async () => {
+    const snapshot: RecentSessionsSnapshot = {
+      generatedAt: 'destinations-time',
+      sessions: [
+        {
+          sessionId: 'uuid-1',
+          sessionKey: 'agent:main:discord:channel:thread-1',
+          agent: 'main',
+          channel: 'discord',
+          target: 'channel:thread-1',
+          displayLabel: 'Thread one',
+        },
+      ],
+    };
+    const recentSessionsProvider = vi.fn(async () => snapshot);
+    const newSessionDiscordDestinationsProvider = vi.fn(async (): Promise<NewSessionDestinationOption[]> => [
+      { id: 'discord:channel:100', target: 'channel:100', label: '#general' },
+    ]);
+    const newSessionSlackDestinationsProvider = vi.fn(async (): Promise<NewSessionDestinationOption[]> => [
+      { id: 'slack:channel:C123', target: 'channel:C123', label: '#general' },
+    ]);
+    const { session, peer } = makeVoiceSession({
+      recentSessionsProvider,
+      newSessionDiscordDestinationsProvider,
+      newSessionSlackDestinationsProvider,
+    });
+
+    sendControl(session, { t: 'sessions.destinations.request' });
+
+    await vi.waitFor(() => {
+      const destinations = sentJson(peer).find((msg) =>
+        (msg as { t: string }).t === 'sessions.destinations' &&
+        (msg as { catalog?: { providers?: { id: string }[] } }).catalog?.providers?.some((provider) => provider.id === 'discord')
+      ) as
+        | { catalog: { providers: { id: string; status: string; destinations: { target: string }[] }[] } }
+        | undefined;
+      expect(destinations).toBeTruthy();
+      expect(destinations!.catalog.providers.map((provider) => provider.id)).toEqual(['webchat', 'discord', 'slack']);
+      expect(destinations!.catalog.providers.every((provider) => provider.status === 'available')).toBe(true);
+      // Real catalog channels only — the recent-session thread target stays out.
+      expect(destinations!.catalog.providers[1].destinations.map((d) => d.target)).toEqual(['channel:100']);
+      expect(destinations!.catalog.providers[2].destinations.map((d) => d.target)).toEqual(['channel:C123']);
+    });
+    expect(newSessionDiscordDestinationsProvider).toHaveBeenCalledTimes(1);
+    expect(newSessionSlackDestinationsProvider).toHaveBeenCalledTimes(1);
+  });
+
+  it('omits channel providers on the voice lane when no real channel catalog exists', async () => {
+    const { session, peer } = makeVoiceSession({
+      recentSessionsProvider: vi.fn(async () => ({ generatedAt: 't', sessions: [] })),
+      newSessionDiscordDestinationsProvider: vi.fn(async (): Promise<NewSessionDestinationOption[]> => []),
+      newSessionSlackDestinationsProvider: vi.fn(async (): Promise<NewSessionDestinationOption[]> => []),
+    });
+
+    sendControl(session, { t: 'sessions.destinations.request' });
+
+    await vi.waitFor(() => {
+      const destinations = sentJson(peer).find((msg) => (msg as { t: string }).t === 'sessions.destinations') as
+        | { catalog: { providers: { id: string }[] } }
+        | undefined;
+      expect(destinations).toBeTruthy();
+      expect(destinations!.catalog.providers.map((provider) => provider.id)).toEqual(['webchat']);
+    });
+  });
+
+  it('answers new-session create requests on the voice lane', async () => {
+    const execOpenClaw = vi.fn(async (_command: string, args: string[]) =>
+      args.includes('thread')
+        ? { stdout: '{"thread":{"id":"t-777"}}' }
+        : { stdout: '{"ts":"1710000000.000100"}' });
+    const { session, peer } = makeVoiceSession({
+      recentSessionsProvider: vi.fn(async () => ({ generatedAt: 't', sessions: [] })),
+      newSessionCreateResponder: (msg) => buildNewSessionCreateResponse(msg, { execOpenClaw }),
+    });
+
+    sendControl(session, { t: 'sessions.create.request', requestId: 'req-1', providerId: 'webchat' });
+
+    await vi.waitFor(() => {
+      const created = sentJson(peer).find((msg) => (msg as { t: string }).t === 'sessions.created') as
+        | { requestId: string; session: { sessionId: string; channel?: string } }
+        | undefined;
+      expect(created).toBeTruthy();
+      expect(created!.requestId).toBe('req-1');
+      expect(created!.session.channel).toBe('webchat');
+      expect(created!.session.sessionId).toMatch(/^[0-9a-f-]{36}$/i);
+    });
+
+    sendControl(session, {
+      t: 'sessions.create.request',
+      requestId: 'req-2',
+      providerId: 'discord',
+      target: 'channel:parent-1',
+      accountId: 'acct-a',
+    });
+
+    await vi.waitFor(() => {
+      const discordCreated = sentJson(peer).find(
+        (msg) => (msg as { t: string; requestId?: string }).t === 'sessions.created'
+          && (msg as { requestId?: string }).requestId === 'req-2',
+      ) as { session: { sessionKey: string; channel?: string; target?: string; accountId?: string } } | undefined;
+      expect(discordCreated).toBeTruthy();
+      expect(discordCreated!.session.channel).toBe('discord');
+      expect(discordCreated!.session.target).toBe('channel:t-777');
+      expect(discordCreated!.session.sessionKey).toBe('agent:main:discord:channel:t-777');
+      expect(discordCreated!.session.accountId).toBe('acct-a');
+    });
+    expect(execOpenClaw).toHaveBeenCalledTimes(1);
+
+    sendControl(session, {
+      t: 'sessions.create.request',
+      requestId: 'req-3',
+      providerId: 'slack',
+      target: 'channel:C123',
+    });
+
+    await vi.waitFor(() => {
+      const slackCreated = sentJson(peer).find(
+        (msg) => (msg as { t: string; requestId?: string }).t === 'sessions.created'
+          && (msg as { requestId?: string }).requestId === 'req-3',
+      ) as { session: { sessionKey: string; channel?: string; target?: string } } | undefined;
+      expect(slackCreated).toBeTruthy();
+      expect(slackCreated!.session.channel).toBe('slack');
+      expect(slackCreated!.session.target).toBe('channel:C123');
+      expect(slackCreated!.session.sessionKey).toBe('agent:main:slack:channel:C123:thread:1710000000.000100');
+    });
+    expect(execOpenClaw).toHaveBeenCalledTimes(2);
+
+    sendControl(session, { t: 'sessions.create.request', requestId: 'req-4', providerId: 'telegram', target: 'chat:1' });
+
+    await vi.waitFor(() => {
+      expect(sentJson(peer)).toContainEqual({
+        t: 'sessions.create.error',
+        requestId: 'req-4',
+        message: 'new_session_destination_unsupported',
+      });
     });
   });
 
@@ -961,6 +1114,30 @@ describe('voice session OpenClaw infer STT runtime', () => {
         channel: 'discord',
         target: 'channel:1501983803436961932',
         deliver: true,
+      }),
+    );
+  });
+
+  it('runs webchat/no-chat voice turns without mandatory reply delivery', async () => {
+    const { session } = makeVoiceSession({
+      sessionKey: 'agent:main:webchat:session:session-1',
+      channel: 'webchat',
+      delivery: null,
+    });
+
+    sendControl(session, { t: 'stt.start' });
+    await vi.waitFor(() => expect(sttMocks.inferCtor).toHaveBeenCalledTimes(1));
+    const fakeStt = sttMocks.inferCtor.mock.results[0].value;
+
+    fakeStt.cb.onDone('hello web');
+
+    expect(chatMocks.runChat).toHaveBeenCalledWith(
+      'hello web',
+      expect.objectContaining({
+        sessionId: 'session-1',
+        sessionKey: 'agent:main:webchat:session:session-1',
+        channel: 'webchat',
+        deliver: false,
       }),
     );
   });

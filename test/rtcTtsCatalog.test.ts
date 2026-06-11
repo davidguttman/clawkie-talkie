@@ -1220,6 +1220,93 @@ describe('RtcProvider recent session picker sync', () => {
     expect(rendered.context().recentSessionsSupportStatus).toBe('unknown');
   });
 
+  it('sends rendezvous.join on the already-open dashboard lane when a created session is selected', async () => {
+    const rendered = await renderRtcProvider({ rendezvous: null, voiceSettings: null });
+    const dashboardClient = rtcMock.instances[0];
+
+    await openWithDaemonHello(dashboardClient);
+    expect(sentOf(dashboardClient, 'rendezvous.join')).toEqual([]);
+
+    // App reacts to sessions.created by selecting the new session, which
+    // flips the rendezvous prop while the host lane is already open.
+    await activeRender!.rerender({ rendezvous: { sessionId: 'session-created-1' } });
+
+    expect(rendered.context().status).toBe('open');
+    expect(sentOf(dashboardClient, 'rendezvous.join')).toEqual([
+      { t: 'rendezvous.join', sessionId: 'session-created-1' },
+    ]);
+
+    // A re-render with an equivalent (new identity) rendezvous object must
+    // not repeat the join while waiting for rendezvous.accept.
+    await activeRender!.rerender({ rendezvous: { sessionId: 'session-created-1' } });
+    expect(sentOf(dashboardClient, 'rendezvous.join')).toHaveLength(1);
+
+    await act(async () => {
+      dashboardClient.emitControl({ t: 'rendezvous.accept', roomId: 'voice-room-created' });
+    });
+    const voiceClient = rtcMock.instances.at(-1)!;
+    expect(voiceClient).not.toBe(dashboardClient);
+    expect(voiceClient.hostPeerId).toBe('voice-room-created');
+    expect(rendered.context().status).not.toBe('error');
+  });
+
+  it('joins on the dashboard lane after a legacy (no-hello) handshake when a session is selected', async () => {
+    await renderRtcProvider({ rendezvous: null, voiceSettings: null });
+    const dashboardClient = rtcMock.instances[0];
+
+    await openWithLegacyFallback(dashboardClient);
+    expect(sentOf(dashboardClient, 'rendezvous.join')).toEqual([]);
+
+    await activeRender!.rerender({ rendezvous: { sessionId: 'session-old-1' } });
+
+    expect(sentOf(dashboardClient, 'rendezvous.join')).toEqual([
+      { t: 'rendezvous.join', sessionId: 'session-old-1' },
+    ]);
+  });
+
+  it('joins after the legacy fallback when the session is selected before the host handshake resolves', async () => {
+    vi.useFakeTimers();
+    await renderRtcProvider({ rendezvous: null, voiceSettings: null });
+    const dashboardClient = rtcMock.instances[0];
+
+    // Lane opens; client.hello is in flight, negotiation still pending.
+    await act(async () => {
+      dashboardClient.emitStatus('open');
+    });
+    expect(sentOf(dashboardClient, 'rendezvous.join')).toEqual([]);
+
+    // Session selected before the daemon answered the handshake.
+    await activeRender!.rerender({ rendezvous: { sessionId: 'session-fast-select' } });
+
+    await act(async () => {
+      vi.advanceTimersByTime(CLIENT_HELLO_FALLBACK_MS);
+    });
+
+    expect(sentOf(dashboardClient, 'rendezvous.join')).toEqual([
+      { t: 'rendezvous.join', sessionId: 'session-fast-select' },
+    ]);
+  });
+
+  it('joins on a late daemon.hello when the session is selected before the host handshake resolves', async () => {
+    await renderRtcProvider({ rendezvous: null, voiceSettings: null });
+    const dashboardClient = rtcMock.instances[0];
+
+    await act(async () => {
+      dashboardClient.emitStatus('open');
+    });
+
+    await activeRender!.rerender({ rendezvous: { sessionId: 'session-fast-select' } });
+    expect(sentOf(dashboardClient, 'rendezvous.join')).toEqual([]);
+
+    await act(async () => {
+      dashboardClient.emitControl({ t: 'daemon.hello', protocol: 1, features: ALL_PROTOCOL_FEATURES });
+    });
+
+    expect(sentOf(dashboardClient, 'rendezvous.join')).toEqual([
+      { t: 'rendezvous.join', sessionId: 'session-fast-select' },
+    ]);
+  });
+
   it('returns to the rendezvous room when the selected session changes on the same host', async () => {
     await renderRtcProvider();
     const firstVoiceClient = await openRendezvousAndAccept('voice-room-1');

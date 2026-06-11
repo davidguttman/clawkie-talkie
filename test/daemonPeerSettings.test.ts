@@ -91,7 +91,7 @@ describe('DaemonPeer rendezvous capability handshake', () => {
       JSON.stringify({
         t: 'daemon.hello',
         protocol: 1,
-        features: ['tts.catalog', 'stt.catalog', 'sessions.list', 'sessions.catalog'],
+        features: ['tts.catalog', 'stt.catalog', 'sessions.list', 'sessions.catalog', 'sessions.destinations', 'sessions.create'],
       }),
     );
     expect((peer as unknown as { activeRoomIds: string[] }).activeRoomIds).toEqual([]);

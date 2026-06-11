@@ -30,6 +30,7 @@ import {
   phoneToDaemon,
   type DeliveryTarget,
   type ProtocolFeature,
+  type NewSessionDestinationsCatalog,
   type RecentSession,
   type RecentSessionsSnapshot,
   type SttCatalog,
@@ -72,6 +73,10 @@ export interface RtcContextValue {
   recentSessionsResponseSeq: number;
   recentSessionsSupportStatus: RecentSessionsSupportStatus;
   requestRecentSessions: () => void;
+  newSessionDestinationsCatalog: NewSessionDestinationsCatalog | null;
+  newSessionDestinationsResponseSeq: number;
+  requestNewSessionDestinations: () => void;
+  newSessionsSupported: boolean;
   retryConnection: () => void;
   canRetryConnection: boolean;
   hasClient: boolean;
@@ -97,6 +102,10 @@ const Ctx = createContext<RtcContextValue>({
   recentSessionsResponseSeq: 0,
   recentSessionsSupportStatus: 'unknown',
   requestRecentSessions: noop,
+  newSessionDestinationsCatalog: null,
+  newSessionDestinationsResponseSeq: 0,
+  requestNewSessionDestinations: noop,
+  newSessionsSupported: false,
   retryConnection: noop,
   canRetryConnection: false,
   hasClient: false,
@@ -191,9 +200,28 @@ function requiredFeatureForControlMessage(msg: ControlMessage): ProtocolFeature 
       return PROTOCOL_FEATURES.sessionsList;
     case 'sessions.catalog.request':
       return PROTOCOL_FEATURES.sessionsCatalog;
+    case 'sessions.destinations.request':
+      return PROTOCOL_FEATURES.sessionsDestinations;
+    case 'sessions.create.request':
+      return PROTOCOL_FEATURES.sessionsCreate;
     default:
       return null;
   }
+}
+
+// New-session creation is gated strictly on a negotiated daemon hello:
+// legacy daemons (no hello) predate the capability, so unlike read-only
+// catalog requests there is no legacy-mode benefit of the doubt.
+function supportsNewSessionCreation(
+  negotiation: DaemonNegotiationState,
+  roomId: string | undefined,
+): boolean {
+  return (
+    isNegotiationCurrent(negotiation, roomId) &&
+    negotiation.mode === 'negotiated' &&
+    negotiation.features.includes(PROTOCOL_FEATURES.sessionsDestinations) &&
+    negotiation.features.includes(PROTOCOL_FEATURES.sessionsCreate)
+  );
 }
 
 function allowsControlMessage(
@@ -255,6 +283,9 @@ export function RtcProvider({
     loadFavoriteRecentSessions(hostPeerId),
   );
   const [recentSessionsResponseSeq, setRecentSessionsResponseSeq] = useState(0);
+  const [newSessionDestinationsCatalog, setNewSessionDestinationsCatalog] =
+    useState<NewSessionDestinationsCatalog | null>(null);
+  const [newSessionDestinationsResponseSeq, setNewSessionDestinationsResponseSeq] = useState(0);
   const [recentSessionsSupportStatus, setRecentSessionsSupportStatus] =
     useState<RecentSessionsSupportStatus>('unknown');
   const [daemonNegotiation, setDaemonNegotiation] = useState<DaemonNegotiationState>(() =>
@@ -278,15 +309,21 @@ export function RtcProvider({
     setActiveRoomId(hostPeerId);
     setRecentSessionsSupportStatus('unknown');
     setRecentSessionsSnapshot({ generatedAt: '', sessions: [] });
+    setNewSessionDestinationsCatalog(null);
     setFavoriteRecentSessions(loadFavoriteRecentSessions(hostPeerId));
     setDaemonNegotiation(emptyNegotiation(hostPeerId));
     setAutoRetryAttempt(0);
   }, [hostPeerId]);
 
   const clientRef = useRef<RtcClient | null>(null);
+  // rendezvousKey whose rendezvous.join already went out on the current
+  // host-lane connection. Cleared on key changes and client re-creation
+  // so each (connection, session) pair joins exactly once.
+  const sentRendezvousJoinKeyRef = useRef<string | null>(null);
   const appliedVoiceSettingsRef = useRef<{ rendezvousKey: string; key: string } | null>(null);
   const lastSentVoiceRef = useRef<string | null>(null);
   const catalogRequestedRoomRef = useRef<string | null>(null);
+  const newSessionDestinationsRequestedRoomRef = useRef<string | null>(null);
   const sessionsSubscribedRoomRef = useRef<string | null>(null);
   const previousRendezvousKeyRef = useRef<string | null>(rendezvousKey);
   const controlListenersRef = useRef<Set<(msg: ControlMessage) => void>>(new Set());
@@ -297,6 +334,7 @@ export function RtcProvider({
   const resetRetryConnectionRefs = useCallback(() => {
     lastSentVoiceRef.current = null;
     catalogRequestedRoomRef.current = null;
+    newSessionDestinationsRequestedRoomRef.current = null;
     sessionsSubscribedRoomRef.current = null;
   }, []);
 
@@ -353,6 +391,10 @@ export function RtcProvider({
           generatedAt: typeof msg.generatedAt === 'string' ? msg.generatedAt : '',
           sessions: msg.sessions as RecentSession[],
         });
+      }
+      if (msg.t === 'sessions.destinations' && msg.catalog && typeof msg.catalog === 'object') {
+        setNewSessionDestinationsCatalog(msg.catalog as NewSessionDestinationsCatalog);
+        setNewSessionDestinationsResponseSeq((seq) => seq + 1);
       }
       if (
         msg.t === 'sessions.catalog' &&
@@ -412,6 +454,7 @@ export function RtcProvider({
       },
     });
     clientRef.current = client;
+    sentRendezvousJoinKeyRef.current = null;
     client.connect();
 
     return () => {
@@ -429,13 +472,25 @@ export function RtcProvider({
       appliedVoiceSettingsRef.current = null;
       lastSentVoiceRef.current = null;
       catalogRequestedRoomRef.current = null;
+      newSessionDestinationsRequestedRoomRef.current = null;
       sessionsSubscribedRoomRef.current = null;
+      sentRendezvousJoinKeyRef.current = null;
       setRecentSessionsSupportStatus('unknown');
-      setDaemonNegotiation(emptyNegotiation(hostPeerId));
       setDetail(undefined);
       setAutoRetryAttempt(0);
-      if (activeRoomId !== hostPeerId) setStatus('idle');
-      setActiveRoomId(hostPeerId);
+      if (activeRoomId !== hostPeerId) {
+        // Leaving a voice room: drop back to the host lane and redo the
+        // hello handshake from scratch on a fresh connection.
+        setDaemonNegotiation(emptyNegotiation(hostPeerId));
+        setStatus('idle');
+        setActiveRoomId(hostPeerId);
+      }
+      // Already on the host lane (a session was selected or created from
+      // the dashboard): keep the live connection and its daemon
+      // negotiation. Resetting it here would strand the lane — nothing
+      // re-runs the hello handshake while status stays 'open', so a
+      // pending/resolved negotiation must survive for the join effect
+      // below to fire once the handshake is (still) resolved.
     }
   }, [rendezvousKey, hostPeerId, activeRoomId]);
 
@@ -492,12 +547,14 @@ export function RtcProvider({
   // once and wait for the daemon to point us at the deterministic
   // per-session voice room.
   useEffect(() => {
-    if (!rendezvous || !hostPeerId) return;
+    if (!rendezvous || !hostPeerId || !rendezvousKey) return;
     if (activeRoomId !== hostPeerId) return;
     if (status !== 'open') return;
     if (!isNegotiationResolved(daemonNegotiation, activeRoomId)) return;
+    if (sentRendezvousJoinKeyRef.current === rendezvousKey) return;
+    sentRendezvousJoinKeyRef.current = rendezvousKey;
     const settingsKey = voiceSelectionKey(normalizedVoiceSettings);
-    if (settingsKey && rendezvousKey) {
+    if (settingsKey) {
       appliedVoiceSettingsRef.current = { rendezvousKey, key: settingsKey };
     }
     clientRef.current?.sendControl(
@@ -555,6 +612,15 @@ export function RtcProvider({
     clientRef.current?.sendControl(phoneToDaemon.sttCatalogRequest());
   }, [activeRoomId, daemonNegotiation, rendezvous, status]);
 
+  const requestNewSessionDestinations = useCallback(() => {
+    if (!activeRoomId) return;
+    if (rendezvous && activeRoomId === hostPeerId) return;
+    if (status !== 'open') return;
+    if (!isNegotiationResolved(daemonNegotiation, activeRoomId)) return;
+    if (!allowsProtocolFeature(daemonNegotiation, activeRoomId, PROTOCOL_FEATURES.sessionsDestinations)) return;
+    clientRef.current?.sendControl(phoneToDaemon.sessionsDestinationsRequest());
+  }, [activeRoomId, daemonNegotiation, hostPeerId, rendezvous, status]);
+
   const requestRecentSessions = useCallback(() => {
     if (!activeRoomId) return;
     if (rendezvous && activeRoomId === hostPeerId) return;
@@ -585,6 +651,12 @@ export function RtcProvider({
       requestTtsCatalog();
       requestSttCatalog();
     }
+    if (newSessionDestinationsRequestedRoomRef.current !== activeRoomId) {
+      newSessionDestinationsRequestedRoomRef.current = activeRoomId;
+      if (allowsProtocolFeature(daemonNegotiation, activeRoomId, PROTOCOL_FEATURES.sessionsDestinations)) {
+        requestNewSessionDestinations();
+      }
+    }
     if (sessionsSubscribedRoomRef.current !== activeRoomId) {
       sessionsSubscribedRoomRef.current = activeRoomId;
       const allowList = allowsProtocolFeature(daemonNegotiation, activeRoomId, PROTOCOL_FEATURES.sessionsList);
@@ -607,12 +679,14 @@ export function RtcProvider({
     daemonNegotiation,
     requestTtsCatalog,
     requestSttCatalog,
+    requestNewSessionDestinations,
   ]);
 
   useEffect(() => {
     if (activeRoomId === hostPeerId) {
       lastSentVoiceRef.current = null;
       catalogRequestedRoomRef.current = null;
+      newSessionDestinationsRequestedRoomRef.current = null;
       sessionsSubscribedRoomRef.current = null;
       if (rendezvous) setRecentSessionsSupportStatus('unknown');
     }
@@ -750,6 +824,10 @@ export function RtcProvider({
       recentSessionsResponseSeq,
       recentSessionsSupportStatus,
       requestRecentSessions,
+      newSessionDestinationsCatalog,
+      newSessionDestinationsResponseSeq,
+      requestNewSessionDestinations,
+      newSessionsSupported: status === 'open' && supportsNewSessionCreation(daemonNegotiation, activeRoomId),
       retryConnection,
       canRetryConnection,
       hasClient: !!hostPeerId,
@@ -771,6 +849,11 @@ export function RtcProvider({
       recentSessionsResponseSeq,
       recentSessionsSupportStatus,
       requestRecentSessions,
+      newSessionDestinationsCatalog,
+      newSessionDestinationsResponseSeq,
+      requestNewSessionDestinations,
+      daemonNegotiation,
+      activeRoomId,
       retryConnection,
       canRetryConnection,
       hostPeerId,

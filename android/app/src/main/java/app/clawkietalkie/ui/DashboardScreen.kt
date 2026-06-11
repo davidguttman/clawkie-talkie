@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -37,7 +38,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.clawkietalkie.protocol.NewSessionCreateInput
+import app.clawkietalkie.protocol.NewSessionDestinationOption
+import app.clawkietalkie.protocol.NewSessionDestinationProvider
+import app.clawkietalkie.protocol.NewSessionDestinationsCatalog
+import app.clawkietalkie.protocol.PhoneToDaemon
 import app.clawkietalkie.protocol.RecentSession
+import app.clawkietalkie.protocol.decodeRecentSession
+import app.clawkietalkie.protocol.webOnlyNewSessionDestinationsCatalog
 import app.clawkietalkie.rtc.RecentSessionsSupportStatus
 import app.clawkietalkie.rtc.RtcSession
 import app.clawkietalkie.rtc.RtcStatus
@@ -46,6 +54,7 @@ import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 
 // Recent-sessions dashboard. Mirror of the web client's Dashboard.tsx.
 
@@ -58,6 +67,7 @@ fun DashboardScreen(
     rtc: RtcSession,
     onSwitchHost: () -> Unit,
     onSelectSession: (RecentSession) -> Unit,
+    onNewSessionCreated: (RecentSession) -> Unit,
     onHistory: () -> Unit,
     onSettings: () -> Unit,
     compact: Boolean,
@@ -66,6 +76,7 @@ fun DashboardScreen(
     var refreshPhase by remember { mutableStateOf(RefreshPhase.IDLE) }
     var refreshRequestId by remember { mutableStateOf(0) }
     var timedOut by remember { mutableStateOf(false) }
+    var newSessionOpen by remember { mutableStateOf(false) }
 
     fun requestSessions(phase: RefreshPhase) {
         refreshPhase = phase
@@ -82,6 +93,16 @@ fun DashboardScreen(
         ) {
             requestSessions(RefreshPhase.LOADING)
         }
+    }
+
+    LaunchedEffect(rtcState.status, rtcState.newSessionsSupported) {
+        if (rtcState.status == RtcStatus.OPEN && rtcState.newSessionsSupported) {
+            rtc.requestNewSessionDestinations()
+        }
+    }
+
+    LaunchedEffect(rtcState.newSessionsSupported) {
+        if (!rtcState.newSessionsSupported) newSessionOpen = false
     }
 
     LaunchedEffect(rtcState.recentSessionsResponseSeq) {
@@ -133,6 +154,30 @@ fun DashboardScreen(
                 modifier = Modifier.weight(1f),
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (rtcState.newSessionsSupported) {
+                    Box(
+                        modifier = Modifier
+                            .widthIn(min = if (compact) 56.dp else 64.dp)
+                            .height(34.dp)
+                            .border(1.dp, Hifi.ai.a(0x66), RoundedCornerShape(12.dp))
+                            .background(Hifi.ai.a(0x14), RoundedCornerShape(12.dp))
+                            .clickable {
+                                newSessionOpen = true
+                                rtc.requestNewSessionDestinations()
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            "NEW",
+                            fontFamily = Hifi.mono,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.1.sp,
+                            color = Hifi.ai,
+                            modifier = Modifier.padding(horizontal = 10.dp),
+                        )
+                    }
+                }
                 Box(
                     modifier = Modifier
                         .widthIn(min = if (compact) 76.dp else 84.dp)
@@ -245,6 +290,17 @@ fun DashboardScreen(
             if (showUnsupported) Notice("This daemon does not support host dashboard session discovery.", error = false)
         }
 
+        if (newSessionOpen) {
+            NewSessionPanel(
+                rtc = rtc,
+                catalog = rtcState.newSessionDestinationsCatalog,
+                loadingDestinations = rtcState.newSessionDestinationsCatalog == null,
+                onClose = { newSessionOpen = false },
+                onCreated = onNewSessionCreated,
+                compact = compact,
+            )
+        }
+
         // Sessions list
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(
@@ -273,6 +329,247 @@ fun DashboardScreen(
             }
         }
     }
+}
+
+private const val NEW_SESSION_CREATE_TIMEOUT_MS = 15_000L
+
+@Composable
+private fun NewSessionPanel(
+    rtc: RtcSession,
+    catalog: NewSessionDestinationsCatalog?,
+    loadingDestinations: Boolean,
+    onClose: () -> Unit,
+    onCreated: (RecentSession) -> Unit,
+    compact: Boolean,
+) {
+    var providerId by remember { mutableStateOf<String?>(null) }
+    var createRequestId by remember { mutableStateOf<String?>(null) }
+    var createError by remember { mutableStateOf<String?>(null) }
+    val effectiveCatalog = catalog ?: webOnlyNewSessionDestinationsCatalog()
+    val providers = selectableNewSessionProviders(effectiveCatalog)
+    val activeProvider = providerId?.let { id -> providers.firstOrNull { it.id == id } }
+    val creating = createRequestId != null
+
+    fun startCreate(provider: NewSessionDestinationProvider, destination: NewSessionDestinationOption? = null) {
+        if (creating) return
+        val requestId = UUID.randomUUID().toString()
+        createRequestId = requestId
+        createError = null
+        rtc.sendControl(
+            PhoneToDaemon.sessionsCreateRequest(
+                NewSessionCreateInput(
+                    requestId = requestId,
+                    providerId = provider.id,
+                    target = destination?.target,
+                    accountId = destination?.accountId,
+                ),
+            ),
+        )
+    }
+
+    DisposableEffect(rtc, createRequestId) {
+        val off = rtc.addControlListener { msg ->
+            val currentRequestId = createRequestId ?: return@addControlListener
+            when (msg.t) {
+                "sessions.created" -> {
+                    if (msg.string("requestId") != currentRequestId) return@addControlListener
+                    val session = msg.obj("session")?.let { decodeRecentSession(it) } ?: return@addControlListener
+                    createRequestId = null
+                    createError = null
+                    onCreated(session)
+                }
+                "sessions.create.error" -> {
+                    if (msg.string("requestId") != currentRequestId) return@addControlListener
+                    createRequestId = null
+                    createError = newSessionCreateErrorCopy(msg.string("message"))
+                }
+            }
+        }
+        onDispose { off() }
+    }
+
+    LaunchedEffect(createRequestId) {
+        val requestId = createRequestId ?: return@LaunchedEffect
+        delay(NEW_SESSION_CREATE_TIMEOUT_MS)
+        if (createRequestId == requestId) {
+            createRequestId = null
+            createError = newSessionCreateErrorCopy("new_session_timeout")
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Hifi.ai.a(0x44), RoundedCornerShape(16.dp))
+            .background(Color.White.copy(alpha = 0.045f), RoundedCornerShape(16.dp))
+            .padding(if (compact) 10.dp else 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = activeProvider?.let { "NEW SESSION · ${it.label.uppercase()}" } ?: "NEW SESSION · CHOOSE CHAT",
+                fontFamily = Hifi.mono,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.2.sp,
+                color = Hifi.ink2,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (activeProvider != null) {
+                    SmallDashboardAction("BACK", enabled = !creating) {
+                        providerId = null
+                    }
+                }
+                SmallDashboardAction("CANCEL", enabled = !creating, onClick = onClose)
+            }
+        }
+
+        createError?.let { Notice(it, error = true) }
+        if (creating) {
+            DashboardDashedText("Creating session…")
+            return@Column
+        }
+
+        if (activeProvider == null) {
+            for (provider in providers) {
+                NewSessionProviderRow(provider = provider, compact = compact) {
+                    if (provider.kind == "local") startCreate(provider) else providerId = provider.id
+                }
+            }
+            if (loadingDestinations) {
+                DashboardDashedText("Loading chat destinations in the background…")
+            }
+        } else {
+            if (activeProvider.destinations.isEmpty()) {
+                DashboardDashedText("No writable destinations reported by the daemon.")
+            } else {
+                for (destination in activeProvider.destinations) {
+                    NewSessionDestinationRow(destination = destination, compact = compact) {
+                        startCreate(activeProvider, destination)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SmallDashboardAction(label: String, enabled: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .border(1.dp, Hifi.stroke, RoundedCornerShape(10.dp))
+            .let { if (enabled) it.clickable { onClick() } else it.alpha(0.55f) }
+            .padding(horizontal = 9.dp, vertical = 7.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            fontFamily = Hifi.mono,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.1.sp,
+            color = if (enabled) Hifi.ink2 else Hifi.ink3,
+        )
+    }
+}
+
+@Composable
+private fun NewSessionProviderRow(
+    provider: NewSessionDestinationProvider,
+    compact: Boolean,
+    onClick: () -> Unit,
+) {
+    val description = if (provider.kind == "local") {
+        "Voice-only OpenClaw session. Replies stay in the app."
+    } else {
+        "${provider.destinations.size} channel${if (provider.destinations.size == 1) "" else "s"}"
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Hifi.stroke, RoundedCornerShape(14.dp))
+            .background(Color.White.copy(alpha = 0.045f), RoundedCornerShape(14.dp))
+            .clickable { onClick() }
+            .padding(if (compact) 10.dp else 12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(provider.label, fontSize = if (compact) 14.sp else 15.sp, fontWeight = FontWeight.Bold, color = Hifi.ink)
+        Text(description, fontSize = if (compact) 11.sp else 12.sp, lineHeight = 15.sp, color = Hifi.ink3)
+    }
+}
+
+@Composable
+private fun NewSessionDestinationRow(
+    destination: NewSessionDestinationOption,
+    compact: Boolean,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Hifi.stroke, RoundedCornerShape(14.dp))
+            .background(Color.White.copy(alpha = 0.045f), RoundedCornerShape(14.dp))
+            .clickable { onClick() }
+            .padding(if (compact) 10.dp else 12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            destination.label,
+            fontSize = if (compact) 14.sp else 15.sp,
+            fontWeight = FontWeight.Bold,
+            color = Hifi.ink,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        val meta = listOfNotNull(destination.group, destination.target).joinToString(" · ")
+        Text(meta, fontFamily = Hifi.mono, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Hifi.ink3)
+    }
+}
+
+@Composable
+private fun DashboardDashedText(message: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .drawBehind {
+                drawRoundRect(
+                    color = Hifi.stroke,
+                    cornerRadius = CornerRadius(14.dp.toPx(), 14.dp.toPx()),
+                    style = Stroke(
+                        width = 1.dp.toPx(),
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f)),
+                    ),
+                )
+            }
+            .padding(12.dp),
+    ) {
+        Text(message, color = Hifi.ink3, fontSize = 12.sp, lineHeight = 16.sp, fontFamily = Hifi.sans)
+    }
+}
+
+private fun selectableNewSessionProviders(catalog: NewSessionDestinationsCatalog): List<NewSessionDestinationProvider> =
+    catalog.providers.filter { provider ->
+        provider.status == "available" && (provider.kind == "local" || provider.destinations.isNotEmpty())
+    }
+
+private fun newSessionCreateErrorCopy(code: String?): String = when (code) {
+    "new_session_destination_unsupported" -> "The daemon cannot create sessions for that destination."
+    "invalid_new_session_request", "invalid_new_session_target", "invalid_new_session_agent", "invalid_new_session_account" ->
+        "The daemon rejected the new-session request."
+    "discord_thread_create_failed" -> "The daemon could not create the Discord thread."
+    "discord_thread_id_unresolved" -> "Discord did not return a usable thread id."
+    "slack_thread_create_failed" -> "The daemon could not start the Slack thread."
+    "slack_thread_ts_unresolved" -> "Slack did not return a usable thread timestamp."
+    "new_session_timeout" -> "No response from the daemon. Try again."
+    null, "" -> "Session creation failed."
+    else -> "Session creation failed: $code"
 }
 
 @Composable

@@ -4,6 +4,7 @@ import android.os.Handler
 import android.os.Looper
 import app.clawkietalkie.protocol.CLIENT_WANTED_PROTOCOL_FEATURES
 import app.clawkietalkie.protocol.ControlMessage
+import app.clawkietalkie.protocol.NewSessionDestinationsCatalog
 import app.clawkietalkie.protocol.PhoneToDaemon
 import app.clawkietalkie.protocol.ProtocolFeatures
 import app.clawkietalkie.protocol.RecentSession
@@ -14,6 +15,7 @@ import app.clawkietalkie.protocol.SttSelection
 import app.clawkietalkie.protocol.TtsCatalog
 import app.clawkietalkie.protocol.TtsSelection
 import app.clawkietalkie.protocol.VoiceSettings
+import app.clawkietalkie.protocol.decodeNewSessionDestinationsCatalog
 import app.clawkietalkie.protocol.decodeRecentSession
 import app.clawkietalkie.protocol.decodeSttCatalog
 import app.clawkietalkie.protocol.decodeTtsCatalog
@@ -59,6 +61,9 @@ data class RtcUiState(
     val recentSessionsGeneratedAt: String? = null,
     val recentSessionsResponseSeq: Int = 0,
     val recentSessionsSupportStatus: RecentSessionsSupportStatus = RecentSessionsSupportStatus.UNKNOWN,
+    val newSessionDestinationsCatalog: NewSessionDestinationsCatalog? = null,
+    val newSessionDestinationsResponseSeq: Int = 0,
+    val newSessionsSupported: Boolean = false,
     val canRetryConnection: Boolean = false,
     val hasClient: Boolean = false,
 )
@@ -122,6 +127,7 @@ class RtcSession(
     private var appliedVoiceSettingsKey: String? = null
     private var lastSentVoiceKey: String? = null
     private var catalogRequestedRoom: String? = null
+    private var newSessionDestinationsRequestedRoom: String? = null
     private var sessionsSubscribedRoom: String? = null
     private var recentSessionsSnapshot = RecentSessionsSnapshot("", emptyList())
     private var favoriteSessions: List<RecentSession> =
@@ -212,6 +218,17 @@ class RtcSession(
             if (_state.value.status != RtcStatus.OPEN) return@post
             if (!allowsProtocolFeature(ProtocolFeatures.STT_CATALOG)) return@post
             client?.sendControl(PhoneToDaemon.sttCatalogRequest())
+        }
+    }
+
+    fun requestNewSessionDestinations() {
+        handler.post {
+            val roomId = activeRoomId ?: return@post
+            if (rendezvous != null && roomId == hostPeerId) return@post
+            if (_state.value.status != RtcStatus.OPEN) return@post
+            if (!isNegotiationResolved()) return@post
+            if (!allowsProtocolFeature(ProtocolFeatures.SESSIONS_DESTINATIONS)) return@post
+            client?.sendControl(PhoneToDaemon.sessionsDestinationsRequest())
         }
     }
 
@@ -333,6 +350,7 @@ class RtcSession(
         } else {
             setSupportStatusForLane()
         }
+        publishNewSessionsSupported()
         updateCanRetry()
         maybeScheduleAutoRetry()
     }
@@ -340,11 +358,13 @@ class RtcSession(
     private fun beginNegotiation() {
         val roomId = activeRoomId ?: return
         negotiation = NegotiationState(roomId, NegotiationMode.PENDING, emptyList())
+        publishNewSessionsSupported()
         client?.sendControl(PhoneToDaemon.clientHello(CLIENT_WANTED_PROTOCOL_FEATURES))
         cancelHelloFallback()
         val runnable = Runnable {
             if (negotiation.roomId == roomId && negotiation.mode == NegotiationMode.PENDING) {
                 negotiation = NegotiationState(roomId, NegotiationMode.LEGACY, emptyList())
+                publishNewSessionsSupported()
                 onNegotiationResolved()
             }
         }
@@ -389,12 +409,14 @@ class RtcSession(
                     ?: emptyList()
                 if (negotiation.roomId == roomId && negotiation.mode != NegotiationMode.UNSUPPORTED) {
                     negotiation = NegotiationState(roomId, NegotiationMode.NEGOTIATED, features)
+                    publishNewSessionsSupported()
                     cancelHelloFallback()
                     onNegotiationResolved()
                 }
             }
             "daemon.unsupported" -> {
                 negotiation = NegotiationState(roomId, NegotiationMode.UNSUPPORTED, emptyList())
+                publishNewSessionsSupported()
                 update {
                     it.copy(
                         detail = msg.string("message") ?: "unsupported_daemon_protocol",
@@ -456,6 +478,16 @@ class RtcSession(
                     applyRecentSessionsSnapshot(
                         RecentSessionsSnapshot(msg.string("generatedAt") ?: "", sessions),
                     )
+                }
+            }
+            "sessions.destinations" -> {
+                msg.obj("catalog")?.let { catalog ->
+                    update {
+                        it.copy(
+                            newSessionDestinationsCatalog = decodeNewSessionDestinationsCatalog(catalog),
+                            newSessionDestinationsResponseSeq = it.newSessionDestinationsResponseSeq + 1,
+                        )
+                    }
                 }
             }
             "sessions.catalog" -> {
@@ -523,6 +555,12 @@ class RtcSession(
             }
             if (allowsProtocolFeature(ProtocolFeatures.STT_CATALOG)) {
                 client?.sendControl(PhoneToDaemon.sttCatalogRequest())
+            }
+        }
+        if (newSessionDestinationsRequestedRoom != roomId) {
+            newSessionDestinationsRequestedRoom = roomId
+            if (allowsProtocolFeature(ProtocolFeatures.SESSIONS_DESTINATIONS)) {
+                client?.sendControl(PhoneToDaemon.sessionsDestinationsRequest())
             }
         }
         if (sessionsSubscribedRoom != roomId) {
@@ -599,6 +637,7 @@ class RtcSession(
     private fun resetRetryConnectionRefs() {
         lastSentVoiceKey = null
         catalogRequestedRoom = null
+        newSessionDestinationsRequestedRoom = null
         sessionsSubscribedRoom = null
     }
 
@@ -632,6 +671,17 @@ class RtcSession(
         update { it.copy(recentSessionsSupportStatus = status) }
     }
 
+    private fun publishNewSessionsSupported() {
+        update { it.copy(newSessionsSupported = supportsNewSessionCreation()) }
+    }
+
+    private fun supportsNewSessionCreation(): Boolean =
+        _state.value.status == RtcStatus.OPEN &&
+            negotiation.roomId == activeRoomId &&
+            negotiation.mode == NegotiationMode.NEGOTIATED &&
+            ProtocolFeatures.SESSIONS_DESTINATIONS in negotiation.features &&
+            ProtocolFeatures.SESSIONS_CREATE in negotiation.features
+
     private fun isNegotiationResolved(): Boolean =
         negotiation.roomId == activeRoomId &&
             (negotiation.mode == NegotiationMode.NEGOTIATED || negotiation.mode == NegotiationMode.LEGACY)
@@ -648,6 +698,8 @@ class RtcSession(
         "sessions.list.request", "sessions.list.subscribe", "sessions.list.unsubscribe" ->
             ProtocolFeatures.SESSIONS_LIST
         "sessions.catalog.request" -> ProtocolFeatures.SESSIONS_CATALOG
+        "sessions.destinations.request" -> ProtocolFeatures.SESSIONS_DESTINATIONS
+        "sessions.create.request" -> ProtocolFeatures.SESSIONS_CREATE
         else -> null
     }
 

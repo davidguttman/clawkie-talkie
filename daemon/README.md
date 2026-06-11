@@ -6,7 +6,7 @@ For end-user Mac/Linux installation, credentials, persistence, verification, and
 
 The daemon subscribes to a rambly-style signaling server (SSE subscribe + HTTP
 POST signal) on a stable UUID room — the `host=H` rendezvous/control room. The
-daemon prints `/dashboard#host=H` for the host dashboard; a browser landing on a
+daemon prints `/dashboard/#host=H` for the host dashboard; a browser landing on a
 `/voice#host=H&session=S` link joins that rendezvous
 room first, sends a single `rendezvous.join` message, and is told which
 deterministic per-session voice room (`H:<safeSession>`) to move to.
@@ -99,7 +99,7 @@ On startup the daemon prints:
 - `/voice/` — canonical public user-facing handoff entrypoint.
 - `/voice` — clean public handoff URL used in generated links; static hosts
   resolve it to `/voice/`.
-- `/dashboard#host=H` — canonical host dashboard URL printed by the daemon. Add
+- `/dashboard/#host=H` — canonical host dashboard URL printed by the daemon. Add
   this page to the home screen for host dashboard launches. The manifest
   intentionally omits a static `start_url` so installed launches preserve the
   chosen dashboard URL/hash.
