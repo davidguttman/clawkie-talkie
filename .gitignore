@@ -9,3 +9,10 @@ dist/
 .development-state.json
 .worktrees/
 worktrees/
+
+# Local Google/Firebase credentials and app config
+google-services*.json
+firebase-service-account*.json
+service-account*.json
+*-service-account*.json
+!*example*.json

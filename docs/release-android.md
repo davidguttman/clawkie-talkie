@@ -108,18 +108,46 @@ Android does not currently have in-app update plumbing. For GitHub-release APK
 installs, testers manually download/install the newer APK. If/when Play testing
 is enabled, Play handles update delivery for enrolled testers.
 
-## Optional Firebase / Play tester setup (David-only)
+## Firebase App Distribution tester setup (David-only)
 
-If broader tester distribution is needed, choose one:
+The release workflow can optionally upload the signed release APK to Firebase
+App Distribution after the GitHub Release assets are created. GitHub Release
+publishing still works when Firebase is not configured.
 
-- Firebase App Distribution: create the Android app, upload the signed APK, add
-  tester groups, and document tester invitation steps here.
-- Google Play internal testing: create the Play app, upload a signed artifact,
-  configure testers, and promote through internal/closed tracks as needed.
+Current Firebase setup contract:
 
-The repository does not currently store service-account JSON or Play upload
-credentials. Add automation only after deciding the distribution target, and keep
-credentials in GitHub Secrets or the relevant provider secret store.
+- `FIREBASE_ANDROID_APP_ID` is set as a GitHub repository secret for the Clawkie
+  Talkie Android Firebase app.
+- `FIREBASE_SERVICE_ACCOUNT_JSON` is set as a GitHub repository secret from the
+  `clawkie-firebase-distribution@clawkie-talkie.iam.gserviceaccount.com` service
+  account. That account has `roles/firebaseappdistro.admin` on project
+  `clawkie-talkie`.
+- The workflow uploads to tester group `trusted-testers` by default. That group
+  exists in Firebase App Distribution. To use a different group, set repository
+  variable `FIREBASE_APP_DISTRIBUTION_GROUPS` to a comma-separated list of
+  Firebase tester group aliases.
+- The uploaded/downloaded `google-services.json` is not committed and is not
+  required for the App Distribution upload. The workflow authenticates only with
+  the service-account JSON secret, written to a temporary runner file.
+
+To add testers, add their email addresses to the `trusted-testers` group in the
+Firebase Console, or use Firebase CLI with the configured service account:
+
+```bash
+firebase appdistribution:testers:add person@example.com \
+  --group-alias trusted-testers \
+  --project clawkie-talkie
+```
+
+Do not commit `google-services.json`, service-account JSON, Play credentials,
+Firebase tokens, or any other signing/distribution material.
+
+## Optional Play tester setup (David-only)
+
+If Google Play internal testing is needed later, create the Play app, upload a
+signed artifact, configure testers, and promote through internal/closed tracks as
+needed. Keep Play upload credentials in GitHub Secrets or the relevant provider
+secret store.
 
 ## Domain App Links / assetlinks setup
 

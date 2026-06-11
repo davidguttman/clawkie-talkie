@@ -160,3 +160,40 @@ jobs:
           else
             gh release create "$TAG_NAME" release-artifacts/* --verify-tag --title "Clawkie Talkie $TAG_NAME" --generate-notes
           fi
+
+      - name: Upload signed APK to Firebase App Distribution
+        env:
+          FIREBASE_ANDROID_APP_ID: ${{ secrets.FIREBASE_ANDROID_APP_ID }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          FIREBASE_APP_DISTRIBUTION_GROUPS: ${{ vars.FIREBASE_APP_DISTRIBUTION_GROUPS || 'trusted-testers' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$FIREBASE_ANDROID_APP_ID" ] || [ -z "$FIREBASE_SERVICE_ACCOUNT_JSON" ]; then
+            echo "::notice::Skipping Firebase App Distribution upload because FIREBASE_ANDROID_APP_ID and/or FIREBASE_SERVICE_ACCOUNT_JSON is not configured."
+            exit 0
+          fi
+
+          SIGNED_APK="$(find release-artifacts -maxdepth 1 -type f -name '*-release-signed.apk' | sort | head -n 1)"
+          if [ -z "$SIGNED_APK" ] || [ ! -f "$SIGNED_APK" ]; then
+            echo "::error::Signed release APK not found in release-artifacts."
+            exit 1
+          fi
+
+          SERVICE_ACCOUNT_FILE="$(mktemp)"
+          RELEASE_NOTES_FILE="$(mktemp)"
+          trap 'rm -f "$SERVICE_ACCOUNT_FILE" "$RELEASE_NOTES_FILE"' EXIT
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT_JSON" > "$SERVICE_ACCOUNT_FILE"
+          python -m json.tool "$SERVICE_ACCOUNT_FILE" >/dev/null
+
+          {
+            echo "Clawkie Talkie $TAG_NAME"
+            echo
+            echo "GitHub Release: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG_NAME"
+            echo "Commit: $GITHUB_SHA"
+          } > "$RELEASE_NOTES_FILE"
+
+          GOOGLE_APPLICATION_CREDENTIALS="$SERVICE_ACCOUNT_FILE" \
+            npx -y firebase-tools@latest appdistribution:distribute "$SIGNED_APK" \
+              --app "$FIREBASE_ANDROID_APP_ID" \
+              --groups "$FIREBASE_APP_DISTRIBUTION_GROUPS" \
+              --release-notes-file "$RELEASE_NOTES_FILE"
