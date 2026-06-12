@@ -27,6 +27,19 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref }}
           fetch-depth: 0
 
+      - name: Verify release notes file
+        run: |
+          set -euo pipefail
+          RELEASE_NOTES_FILE="docs/release-notes/$TAG_NAME.md"
+          if [ ! -f "$RELEASE_NOTES_FILE" ]; then
+            echo "::error::Missing release notes file $RELEASE_NOTES_FILE. Add human-readable notes before tagging."
+            exit 1
+          fi
+          if [ ! -s "$RELEASE_NOTES_FILE" ]; then
+            echo "::error::Release notes file $RELEASE_NOTES_FILE is empty. Add human-readable notes before tagging."
+            exit 1
+          fi
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -153,12 +166,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          RELEASE_NOTES_FILE="docs/release-notes/$TAG_NAME.md"
+          if [ ! -s "$RELEASE_NOTES_FILE" ]; then
+            echo "::error::Release notes file $RELEASE_NOTES_FILE is missing or empty."
+            exit 1
+          fi
+
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
             SAFE_TAG="${TAG_NAME//\//-}"
+            gh release edit "$TAG_NAME" --notes-file "$RELEASE_NOTES_FILE"
             gh release delete-asset "$TAG_NAME" "clawkie-talkie-${SAFE_TAG}-debug.apk" --yes >/dev/null 2>&1 || true
             gh release upload "$TAG_NAME" release-artifacts/* --clobber
           else
-            gh release create "$TAG_NAME" release-artifacts/* --verify-tag --title "Clawkie Talkie $TAG_NAME" --generate-notes
+            gh release create "$TAG_NAME" release-artifacts/* --verify-tag --title "Clawkie Talkie $TAG_NAME" --notes-file "$RELEASE_NOTES_FILE"
           fi
 
       - name: Upload signed APK to Firebase App Distribution
@@ -180,17 +200,15 @@ jobs:
           fi
 
           SERVICE_ACCOUNT_FILE="$(mktemp)"
-          RELEASE_NOTES_FILE="$(mktemp)"
-          trap 'rm -f "$SERVICE_ACCOUNT_FILE" "$RELEASE_NOTES_FILE"' EXIT
+          RELEASE_NOTES_FILE="docs/release-notes/$TAG_NAME.md"
+          trap 'rm -f "$SERVICE_ACCOUNT_FILE"' EXIT
           printf '%s' "$FIREBASE_SERVICE_ACCOUNT_JSON" > "$SERVICE_ACCOUNT_FILE"
           python -m json.tool "$SERVICE_ACCOUNT_FILE" >/dev/null
 
-          {
-            echo "Clawkie Talkie $TAG_NAME"
-            echo
-            echo "GitHub Release: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG_NAME"
-            echo "Commit: $GITHUB_SHA"
-          } > "$RELEASE_NOTES_FILE"
+          if [ ! -s "$RELEASE_NOTES_FILE" ]; then
+            echo "::error::Release notes file $RELEASE_NOTES_FILE is missing or empty."
+            exit 1
+          fi
 
           GOOGLE_APPLICATION_CREDENTIALS="$SERVICE_ACCOUNT_FILE" \
             npx -y firebase-tools@latest appdistribution:distribute "$SIGNED_APK" \

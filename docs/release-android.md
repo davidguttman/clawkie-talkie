@@ -61,9 +61,10 @@ CI runs the same gates for PRs/pushes and uploads the debug APK artifact.
   Android `assembleDebug`, and uploads `app-debug.apk`.
 - `.github/workflows/release.yml` runs all gates on `v*` tags or manual dispatch,
   checks out the requested tag, requires it to equal `v<package.json version>`,
-  verifies the tag points at the checked commit, builds debug + release APKs,
-  requires Android signing secrets, and creates/updates the GitHub Release with
-  only signed release APK assets and checksums.
+  verifies the tag points at the checked commit, requires a matching
+  `docs/release-notes/<tag>.md` file, builds debug + release APKs, requires
+  Android signing secrets, and creates/updates the GitHub Release with only
+  signed release APK assets and checksums.
 
 Ordinary CI does **not** require signing secrets and may upload debug APKs as CI
 artifacts. GitHub Releases must not publish debug APK assets.
@@ -89,20 +90,29 @@ other signing material.
 
 ## Tester/download/update story
 
-Current first-version flow:
+Current release flow:
 
-1. Merge the release commit to `master`.
-2. Tag the merge commit, for example:
+1. Draft human-readable release notes before tagging. Add
+   `docs/release-notes/vX.Y.Z.md` for the exact release tag and commit it with
+   the release prep. See `docs/release-notes/README.md` and
+   `docs/release-notes/TEMPLATE.md`.
+2. Merge the release commit to `master`.
+3. Tag the merge commit, for example:
 
    ```bash
    git tag v1.0.0
    git push origin master --tags
    ```
 
-3. Let the GitHub Release workflow finish.
-4. Testers download `*-release-signed.apk` from the GitHub Release assets.
+4. Let the GitHub Release workflow finish. It fails clearly if
+   `docs/release-notes/<tag>.md` is missing or empty.
+5. Testers download `*-release-signed.apk` from the GitHub Release assets.
    Debug APKs are available only from CI artifacts for engineering smoke tests.
-5. Web stays on the same train because the same tag/version passed the web gates.
+6. Web stays on the same train because the same tag/version passed the web gates.
+
+GitHub Releases and Firebase App Distribution use the same checked-in release
+notes file for the tag. Edit that file before tagging; do not rely on generated
+release notes or separate Firebase-only text.
 
 Android does not currently have in-app update plumbing. For GitHub-release APK
 installs, testers manually download/install the newer APK. If/when Play testing
