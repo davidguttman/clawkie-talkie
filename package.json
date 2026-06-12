@@ -1,6 +1,6 @@
 {
   "name": "clawkie-talkie",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "type": "module",
   "description": "Walkie-talkie voice surface for an OpenClaw session",
   "scripts": {
