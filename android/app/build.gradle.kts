@@ -13,8 +13,8 @@ android {
         applicationId = "app.clawkietalkie"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1000007
-        versionName = "1.0.6"
+        versionCode = 1000008
+        versionName = "1.0.7"
 
         // Transport defaults mirror the web client's Vite env fallbacks
         // (VITE_SIGNAL_SERVER / VITE_ICE_SERVERS_JSON / VITE_DEFAULT_HOST_ID).
