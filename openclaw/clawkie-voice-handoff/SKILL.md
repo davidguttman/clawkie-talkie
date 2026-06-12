@@ -1,11 +1,13 @@
 ---
 name: clawkie-voice-handoff
-description: Use when a user asks to switch to voice, move/continue this conversation by voice, start Clawkie/Clawkie-Talkie voice, create a Clawkie voice handoff/link, or says phrases like "do clawkie voice handoff". Build a Clawkie Talkie voice handoff URL from the current OpenClaw session context.
+description: Use when a user asks for their Clawkie/Clawkie-Talkie dashboard URL/link, asks to switch to voice, move/continue this conversation by voice, start Clawkie/Clawkie-Talkie voice, create a Clawkie voice handoff/link, or says phrases like "do clawkie voice handoff". Return the Clawkie Talkie dashboard URL from the configured daemon host ID, or build a direct voice handoff URL from the current OpenClaw session context when explicitly requested.
 ---
 
 # Clawkie Voice Handoff
 
-When the user asks to switch the current OpenClaw session to voice, reply with a Clawkie Talkie URL for this exact conversation.
+When the user asks for their Clawkie dashboard URL/link, reply with the host dashboard URL for the configured daemon.
+
+When the user explicitly asks to switch the current OpenClaw session to voice, reply with a direct Clawkie Talkie voice URL for this exact conversation.
 
 ## Install State
 
@@ -20,7 +22,7 @@ The installer patches the runtime-installed copy of this skill (not the repo sou
 If `INSTALLED` is not `true`, or `CLAWKIE_DAEMON_HOST_ID` is empty / not replaced with a real host ID, do not generate a link. Reply:
 
 ```txt
-I can’t create the voice link: Clawkie Talkie is not installed/configured for this OpenClaw runtime.
+I can’t create the Clawkie link: Clawkie Talkie is not installed/configured for this OpenClaw runtime.
 ```
 
 ## Hard rules
@@ -28,14 +30,28 @@ I can’t create the voice link: Clawkie Talkie is not installed/configured for 
 - Do **not** call a Clawkie helper just to create the URL.
 - Do **not** call the Clawkie daemon to create or mutate handoff state.
 - Do **not** create or reference handoff IDs, opaque tokens, registries, TTLs, claims, revocations, or lookup tables.
-- Do **not** guess the current session id/key.
+- Do **not** guess the current session id/key. A session id/key is not needed for dashboard URL requests.
 - Do **not** guess routing fields. Include `channel`, `target`, and `accountId` only when they are visible in trusted runtime/session context.
 - Trusted explicit delivery routing is not Discord-only. Preserve non-Discord surfaces exactly as exposed by runtime/session context, including direct-chat providers such as Telegram. If trusted context exposes `channel=telegram`, a Telegram chat/user `target`, and `accountId`, the generated hash must include `channel=telegram&target=<target>&accountId=<accountId>`.
 - Do **not** fall back to `agent:main:main` for Telegram/direct-chat or other external surfaces. If no exact current `session` value is visible for that surface, stop and report the missing `session` field instead of generating a web-chat URL.
 - Use the configured `CLAWKIE_DAEMON_HOST_ID` exactly as installed.
 - If a required field is unavailable, say exactly which field is missing.
 
-## URL contract
+## Dashboard URL contract
+
+For requests like “what's my Clawkie dashboard URL?”, “give me my Clawkie dashboard link”, or “what is the Clawkie Talkie dashboard link?”, generate only this public dashboard URL shape:
+
+```txt
+https://clawkietalkie.app/dashboard/#host=<host>
+```
+
+Use `CLAWKIE_DAEMON_HOST_ID` as `<host>`. Do not include a `session`, `sessionKey`, `channel`, `target`, or `accountId` in dashboard URLs.
+
+The dashboard is the normal user-facing phone entry point. It lets the user select from Recent OpenClaw Sessions exposed by the configured daemon.
+
+## Direct voice URL contract
+
+Use this only when the user explicitly asks to switch/open/continue a particular current conversation by voice.
 
 Generate only this public handoff URL shape:
 
@@ -58,10 +74,12 @@ Use `CLAWKIE_DAEMON_HOST_ID` from the installed configuration section above.
 If it is missing or not a real host ID, stop and say:
 
 ```txt
-I can’t create the voice link: missing Clawkie host ID.
+I can’t create the Clawkie link: missing Clawkie host ID.
 ```
 
 ### `session`
+
+Required only for direct `/voice` handoff URLs. Do not require this for dashboard URL requests.
 
 Use the current OpenClaw agent **actual sessionId** for `session` when it is visible in trusted runtime/session context. This is the safe transcript/session id, e.g. a UUID-like value:
 
@@ -123,7 +141,13 @@ For Telegram direct-chat context with trusted values like `session=<uuid>`, `cha
 
 ## Response format
 
-Keep the reply short:
+Keep dashboard replies short:
+
+```txt
+Clawkie dashboard: <url>
+```
+
+Keep direct voice handoff replies short:
 
 ```txt
 Switch to voice: <url>
@@ -132,7 +156,7 @@ Switch to voice: <url>
 If blocked:
 
 ```txt
-I can’t create the voice link: missing <field>.
+I can’t create the Clawkie link: missing <field>.
 ```
 
 ## Example: current sessionId UUID plus visible session key

@@ -74,7 +74,7 @@ Confirm:
 4. No active config line remains exactly `CLAWKIE_DAEMON_HOST_ID = <CONFIGURE_DAEMON_PEER_ID>`.
 5. The installed skill's `CLAWKIE_DAEMON_HOST_ID` matches the daemon `.env` `DAEMON_PEER_ID`.
 
-Construct a dry-run handoff URL using the same algorithm as the skill:
+Construct a dry-run compatibility `/voice` URL using the same algorithm as the skill's direct voice path:
 
 ```js
 const params = new URLSearchParams();
@@ -86,11 +86,11 @@ params.set('target', 'channel:EXAMPLE');
 console.log(`https://clawkietalkie.app/voice#${params.toString()}`);
 ```
 
-The dry-run URL must include `host` and `session`. Prefer the actual OpenClaw sessionId UUID for `session`; use a session key only as fallback when the UUID is not visible. When visible, include `sessionKey`, `channel`, `target`, and optional `accountId` so the daemon can select the right agent, deliver assistant replies explicitly, and mirror transcripts best-effort. For internal/webchat sessions, `session=agent:main:main` is valid only as fallback. The skill must never emit `agent:main:main` for external channels such as Discord, Slack, or WhatsApp.
+The dry-run compatibility URL must include `host` and `session`. Prefer the actual OpenClaw sessionId UUID for `session`; use a session key only as fallback when the UUID is not visible. When visible, include `sessionKey`, `channel`, `target`, and optional `accountId` so the daemon can select the right agent, deliver assistant replies explicitly, and mirror transcripts best-effort. For internal/webchat sessions, `session=agent:main:main` is valid only as fallback. The skill must never emit `agent:main:main` for external channels such as Discord, Slack, or WhatsApp.
 
-## Real handoff-link smoke test
+## Direct `/voice` compatibility smoke test
 
-Run a real handoff-link smoke test in the current OpenClaw runtime by asking for `switch to voice` from the surface being installed for.
+Run a direct `/voice` smoke test in the current OpenClaw runtime only when you need to verify exact-session URL generation. This is a verification path, not the default user onboarding flow.
 
 Inspect the generated URL before trying the phone:
 
@@ -104,7 +104,7 @@ Inspect the generated URL before trying the phone:
 
 `openclaw status --json`, STT, TTS, and daemon rendezvous registration are not enough. The install is not voice-ready until the daemon can run an OpenClaw chat turn without `openclaw_gateway_unavailable`.
 
-Use the real stored OpenClaw session id/UUID for the current conversation. Handoff URLs and skills use session **keys** such as `agent:main:main` or `agent:main:discord:channel:<id>`, but current `openclaw agent --session-id` expects the stored id/UUID from the OpenClaw state dir (`OPENCLAW_STATE_DIR`, else `dirname(OPENCLAW_CONFIG_PATH)`, else `<OPENCLAW_HOME-or-home>/.openclaw`). Resolve the key first when testing the CLI directly.
+Use the real stored OpenClaw session id/UUID for the current conversation. Compatibility `/voice` URLs and skills may use session **keys** such as `agent:main:main` or `agent:main:discord:channel:<id>`, but current `openclaw agent --session-id` expects the stored id/UUID from the OpenClaw state dir (`OPENCLAW_STATE_DIR`, else `dirname(OPENCLAW_CONFIG_PATH)`, else `<OPENCLAW_HOME-or-home>/.openclaw`). Resolve the key first when testing the CLI directly.
 
 ```bash
 SESSION_KEY="agent:main:discord:channel:<id>" # or agent:main:main for web chat
@@ -156,7 +156,7 @@ openclaw agent --agent main --session-id "$OPENCLAW_STORED_SESSION_ID" --deliver
 npm run agent-install-preflight -- --require-agent-turn --session-id "$OPENCLAW_STORED_SESSION_ID" --deliver --reply-channel discord --reply-to "channel:<id>"
 ```
 
-If there is no real session key/stored session id available, do not fake one. Mark this verification as blocked until a real `switch to voice` handoff can be generated from a live OpenClaw session.
+If there is no real session key/stored session id available, do not fake one. Mark this verification as blocked until a real direct `/voice` URL can be generated from a live OpenClaw session.
 
 If this check fails with `scope upgrade pending approval`, `pending device approval`, or a pending `openclaw devices approve <requestId>` command, treat it as an early actionable failure even if `openclaw status --json`, STT, and TTS all passed. The agent reply path needs upgraded local gateway scopes: `operator.pairing`, `operator.read`, and `operator.write`. Record the request ID, tell the user to approve the pending device/scope request in the OpenClaw dashboard or run the shown approval command, and report the install as **blocked pending device approval**. After approval, rerun the agent-turn preflight/check and restart the daemon service if needed.
 
@@ -167,7 +167,7 @@ If you get connection errors, auth errors, gateway errors, or session lookup err
 Do not rely only on `openclaw status --json`, STT, TTS, or a daemon `Waiting for phone…` log line. Verify one of these before reporting success:
 
 - Preferred: complete a real phone voice smoke test. Logs must show STT, `[chat] running OpenClaw turn`, a successful agent reply, TTS conversion, and no fatal `openclaw_gateway_unavailable`.
-- If no phone is available: resolve the handoff session key to its stored session id/UUID, then run the same `openclaw agent --agent <agent-from-session-key> --session-id <stored-session-id-or-uuid> --json --timeout 60 -m <smoke-message>` command from the same OS user and environment shape that the service uses. Add `--deliver --reply-channel <channel> --reply-to <target>` only when intentionally testing explicit reply delivery. For systemd installs, inspect the user service environment and fix missing `OPENCLAW_*`, auth, `PATH`, or gateway settings before claiming success.
+- If no phone is available: resolve the compatibility `/voice` session key to its stored session id/UUID, then run the same `openclaw agent --agent <agent-from-session-key> --session-id <stored-session-id-or-uuid> --json --timeout 60 -m <smoke-message>` command from the same OS user and environment shape that the service uses. Add `--deliver --reply-channel <channel> --reply-to <target>` only when intentionally testing explicit reply delivery. For systemd installs, inspect the user service environment and fix missing `OPENCLAW_*`, auth, `PATH`, or gateway settings before claiming success.
 
 ## Required final report
 
@@ -186,7 +186,9 @@ Report only non-secret facts:
 - Skill destination path
 - Skill configured: yes/no
 - Verification commands run
+- Dashboard URL: `https://clawkietalkie.app/dashboard/#host=<DAEMON_PEER_ID>` unless the current chat is public/shared
+- User coaching delivered: bookmark the dashboard URL on the phone or add it to the phone home screen; dashboard shows Recent OpenClaw Sessions; select a session to open voice; transcript/replies stay in the original OpenClaw session; if no sessions appear, start/resume one at the desk and refresh on the phone; the installed skill can provide the Clawkie dashboard URL again later from its configured host ID
 - Confirmation that agent/default model config was snapshotted before infer config and unchanged afterward
 - Any blockers
 
-Avoid posting the daemon host ID into public/shared chat unless necessary.
+The dashboard URL contains the daemon host ID and is bearer routing material. If the current chat is public/shared, do not post it directly; warn the user and ask for a private delivery path or explicit permission.

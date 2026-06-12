@@ -6,12 +6,12 @@ The main use case is the drive: a feature, an essay, an app idea, or a stretch o
 
 Clawkie Talkie is not a separate assistant and not a quick-chat app. It is a voice lane into an existing OpenClaw conversation: the same session, the same thread, the same context — built for long-form prompts and long-form replies, not short back-and-forth.
 
-You ask OpenClaw to switch to voice. It gives you a link. You open the link on your phone, press the big button to toggle talk mode, talk through the whole thought without interruption, and hear the agent answer back at length.
+After install, your agent gives you a host dashboard URL like `https://clawkietalkie.app/dashboard/#host=<daemon-peer-id>`. Open that dashboard URL on your phone, bookmark it there or add it to your phone home screen, pick a session from Recent OpenClaw Sessions, press the big button to toggle talk mode, talk through the whole thought without interruption, and hear the agent answer back at length.
 
 The original OpenClaw/Discord thread stays canonical. Your spoken direction is transcribed into that session, the agent responds in that session, and Clawkie Talkie plays the reply back to you. Everything you say and hear in the car is still there in the thread when you sit back down.
 
 ```text
-feature thread ── "switch to voice" ──▶ phone link ──▶ talk next step
+host dashboard ──▶ Recent OpenClaw Sessions ──▶ talk next step
       ▲                                                        │
       └──────────── same OpenClaw session keeps moving ◀───────┘
 ```
@@ -24,8 +24,8 @@ The normal install path is agent-run. Tell your agent:
 Install Clawkie-Talkie for me by following https://github.com/davidguttman/clawkie-talkie/blob/v1.0.0/AGENT-INSTALL.md. 
 
 Before installing, download or clone the repo and inspect the source; stop and ask me if anything looks suspicious, harmful, or you are not confident. 
-The install should set up the persistent Clawkie-Talkie daemon and the OpenClaw clawkie-voice-handoff skill so I can say "switch to voice" and get a working handoff link. 
-Verify the daemon/service status, logs, and skill configuration before reporting success. When finished, give me a plain English summary of what changed, what you verified, and any blockers.
+The install should set up the persistent Clawkie-Talkie daemon and the OpenClaw clawkie-voice-handoff skill.
+Verify the daemon/service status, logs, and skill configuration before reporting success. When finished, give me the dashboard URL in the form https://clawkietalkie.app/dashboard/#host=<daemon-peer-id>, tell me to bookmark the dashboard URL on my phone or add it to my phone home screen, explain that the dashboard shows Recent OpenClaw Sessions and that I select a session to start voice, and mention that I can ask for my Clawkie dashboard URL again later if I need it.
 ```
 
 The install does three important things:
@@ -63,27 +63,37 @@ Clawkie Talkie is for that mode of work. It is not a quick voice chat. It is a v
 
 ## The user experience
 
-1. In an OpenClaw conversation, say:
+1. After install, open the dashboard URL your agent reported:
 
    ```text
-   switch to voice
+   https://clawkietalkie.app/dashboard/#host=<daemon-peer-id>
    ```
 
-2. OpenClaw replies with a Clawkie Talkie link for that exact session.
-3. Open the link in a browser, usually on your phone.
-4. Tap the main button to record.
-5. Talk through the whole thought — a long prompt, a paragraph of direction, a full framing for a feature or essay. Push-to-talk means the floor stays yours until you tap again.
-6. Watch the live transcript while talking.
-7. Tap stop. The transcript is sent immediately.
-8. OpenClaw answers in the original session, at length, with the session's full context.
-9. Clawkie Talkie speaks the reply back through the browser.
-10. Later, at the desk, open the original OpenClaw/Discord thread and read everything that was said.
+2. Bookmark the dashboard URL on your phone or add it to your phone home screen.
+3. Open the dashboard before a drive and choose from Recent OpenClaw Sessions.
+   If no sessions appear, start or resume an OpenClaw conversation at the desk, then refresh the dashboard on your phone.
+4. The voice surface opens for that OpenClaw thread/session.
+5. Tap the main button to record.
+6. Talk through the whole thought — a long prompt, a paragraph of direction, a full framing for a feature or essay. Push-to-talk means the floor stays yours until you tap again.
+7. Watch the live transcript while talking.
+8. Tap stop. The transcript is sent immediately.
+9. OpenClaw answers in the original session, at length, with the session's full context.
+10. Clawkie Talkie speaks the reply back through the browser.
+11. Later, at the desk, open the original OpenClaw/Discord thread and read everything that was said.
 
 The interface is intentionally walkie-talkie shaped: one obvious start/stop control, visible transcript while speaking, a thinking state while the agent works, and spoken playback when the reply is ready. It is built for long-form voice steering of an existing session, not for becoming a separate quick-chat app.
 
-## What the link means
+## What the links mean
 
-A real handoff URL looks like this:
+The dashboard URL is the normal phone entry point to bookmark or add to your phone home screen:
+
+```text
+https://clawkietalkie.app/dashboard/#host=<daemon-peer-id>
+```
+
+It connects to your local daemon host and asks it for Recent OpenClaw Sessions. Pick one to open the voice surface for that session. If the list is empty, start or resume an OpenClaw conversation at the desk, then refresh the dashboard on your phone.
+
+For troubleshooting and compatibility, the skill can still generate a compatibility `/voice` URL when explicitly requested:
 
 ```text
 https://clawkietalkie.app/voice#host=<daemon>&session=<openclaw-session-id>&sessionKey=<openclaw-session-key>&channel=<channel>&target=<message-target>
@@ -135,9 +145,9 @@ There is no inbound HTTP port for the daemon. It connects outbound to signaling 
 
 ## Session model
 
-There is one durable daemon per machine. Its `DAEMON_PEER_ID` is the stable rendezvous identity used in `host=...`. Treat the daemon host ID and dashboard URL as bearer routing material: anyone who has it can connect to the host dashboard, enumerate recent sessions exposed by that daemon, and select one for voice handoff. Do not post it in public or shared chats; if it is exposed, rotate `DAEMON_PEER_ID` and update the installed OpenClaw skill/config to match.
+There is one durable daemon per machine. Its `DAEMON_PEER_ID` is the stable rendezvous identity used in `host=...`. Treat the daemon host ID and dashboard URL as bearer routing material: anyone who has it can connect to the host dashboard, enumerate recent sessions exposed by that daemon, and select one for voice. Do not post it in public or shared chats; if it is exposed, rotate `DAEMON_PEER_ID` and update the installed OpenClaw skill/config to match.
 
-Each voice handoff is then scoped by OpenClaw session:
+Each voice room is then scoped by OpenClaw session:
 
 ```text
 voice room = daemon host + OpenClaw session
@@ -145,7 +155,7 @@ voice room = daemon host + OpenClaw session
 
 That means the same daemon can support multiple OpenClaw sessions without mixing them together. A Discord thread, a webchat session, and another channel can all produce different voice rooms through the same local daemon.
 
-The agent does not call a daemon API to mint a link. It builds the URL directly from already-known OpenClaw context: daemon host ID and session ID. The session ID is preferably the actual OpenClaw UUID; colon-style session keys are fallback/legacy inputs and cannot be assumed to exist for every surface.
+The dashboard asks the daemon for recent OpenClaw sessions, then the browser opens a voice room from already-known OpenClaw context: daemon host ID and session ID. The session ID is preferably the actual OpenClaw UUID; colon-style session keys are fallback/legacy inputs and cannot be assumed to exist for every surface.
 
 ## What must already work
 
@@ -220,7 +230,7 @@ Join URL: https://clawkietalkie.app/dashboard/#host=<daemon-peer-id>
 Waiting for phone…
 ```
 
-That host-only URL opens the host-scoped session dashboard. A real OpenClaw voice handoff still uses `/voice#host=...&session=...`.
+That host-only URL opens the host-scoped session dashboard. Bookmark the dashboard URL on the user's phone or add it to the phone home screen; the dashboard shows Recent OpenClaw Sessions and lets the user select the session to continue by voice. The installed OpenClaw skill can also give the user this dashboard URL again later from the configured daemon host ID.
 
 ## Troubleshooting
 
@@ -230,11 +240,11 @@ Check that the daemon is running and that the `host` value in the link matches t
 
 ### The page says to update the daemon
 
-The hosted browser client is current by definition. If the UI reports a daemon protocol/capability mismatch, update the installed daemon from the latest repo source, keep the same `DAEMON_PEER_ID`, restart the service, and verify the handoff again.
+The hosted browser client is current by definition. If the UI reports a daemon protocol/capability mismatch, update the installed daemon from the latest repo source, keep the same `DAEMON_PEER_ID`, restart the service, and verify the dashboard/voice flow again.
 
-### The page says the session is bad
+### A compatibility `/voice` page says the session is bad
 
-The handoff link is missing routing fields or was built for the wrong context. All handoff links need `host` and `session`; prefer the actual OpenClaw sessionId UUID, include `sessionKey`, `channel`, and `target` when those exact runtime values are visible, and use an exact session key in `session` only as fallback. Delivered assistant replies require an explicit reply route, either from `channel`/`target` or a resolvable Discord session key.
+The compatibility voice URL is missing routing fields or was built for the wrong context. Voice URLs need `host` and `session`; prefer the actual OpenClaw sessionId UUID, include `sessionKey`, `channel`, and `target` when those exact runtime values are visible, and use an exact session key in `session` only as fallback. Delivered assistant replies require an explicit reply route, either from `channel`/`target` or a resolvable Discord session key.
 
 ### Voice records but no reply comes back
 
@@ -262,7 +272,7 @@ Corporate networks, VPNs, proxies, and blocked UDP/TURN traffic can prevent the 
 
 - `client/` — phone/browser UI.
 - `daemon/` — local WebRTC/OpenClaw bridge.
-- `openclaw/clawkie-voice-handoff/` — skill source for generating handoff links.
+- `openclaw/clawkie-voice-handoff/` — skill source for returning the dashboard URL and compatibility voice URLs.
 - `docs/install-daemon.md` — daemon install and service setup.
 - `docs/voice-handoff.md` — deterministic rendezvous protocol.
 - `test/` — client, daemon, protocol, and infer tests.

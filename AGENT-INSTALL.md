@@ -16,6 +16,8 @@ Before reporting success, verify all of this:
 6. `ffmpeg` is installed and available on `PATH` for the daemon service user, because the daemon currently decodes OpenClaw TTS output into PCM before sending it over WebRTC.
 7. The daemon, skill, infer config, persistence, and OpenClaw agent-turn path are verified. See [`docs/agent-install-verification.md`](docs/agent-install-verification.md).
 8. The browser client is current by definition; if verification shows a daemon protocol/capability mismatch, update the installed daemon from the current source instead of changing the browser link.
+9. The installed skill can return the dashboard URL later from `CLAWKIE_DAEMON_HOST_ID` when the user asks for their Clawkie dashboard URL/link.
+10. The final user report includes the dashboard URL (`https://clawkietalkie.app/dashboard/#host=<DAEMON_PEER_ID>`) and brief coaching: bookmark the dashboard URL on the phone or add it to the phone home screen, pick from Recent OpenClaw Sessions, select a session to open voice, transcript/replies stay in the original session, if no sessions appear start/resume one at the desk and refresh on the phone, and ask for the Clawkie dashboard URL again later if needed.
 
 ## Nontechnical user contract
 
@@ -31,7 +33,7 @@ Never ask the user to paste provider API keys into chat. Never print keys in log
 - Do not treat an OpenClaw update/repair as optional. Stop Clawkie Talkie work until `openclaw status --json` works on 2026.4.25+.
 - Do not commit `.env`, generated host IDs, LaunchAgent plists with private paths, or systemd unit files with private paths.
 - Do not paste or print provider API keys.
-- Treat `DAEMON_PEER_ID` and the dashboard URL as bearer routing material. Anyone with it can open the host dashboard, enumerate/select recent sessions exposed by the daemon, and attempt voice handoff. Do not publish it or post it in public/shared chats; rotate `DAEMON_PEER_ID` and update the installed skill/config if exposed.
+- Treat `DAEMON_PEER_ID` and the dashboard URL as bearer routing material. Anyone with it can open the host dashboard, enumerate/select recent sessions exposed by the daemon, and attempt to open voice for one. Do not publish it or post it in public/shared chats; rotate `DAEMON_PEER_ID` and update the installed skill/config if exposed. If the current chat is public or shared, do not print the URL there; warn the user and ask for a private delivery path.
 - Use the public client origin: `https://clawkietalkie.app`.
 - Do not use local development shortcuts for an end-user install.
 - Do not start/stop unrelated OpenClaw, browser, Docker, or system services.
@@ -56,7 +58,7 @@ If the active OpenClaw workspace or skills directory cannot be determined, stop 
 
 ## Choose install mode first
 
-- **Fresh install:** no existing source directory, daemon `.env`, persistence service, or installed handoff skill exists.
+- **Fresh install:** no existing source directory, daemon `.env`, persistence service, or installed Clawkie skill exists.
 - **Upgrade:** Clawkie Talkie already exists and should keep the same `.env`, `DAEMON_PEER_ID`, persistence method, and installed skill configuration.
 - **Reinstall/repair:** source files or dependencies are broken. Preserve secrets and IDs first, then replace code.
 
@@ -169,7 +171,7 @@ Before reporting success, run every applicable check in [`docs/agent-install-ver
 - persistent service check
 - OpenClaw infer smoke tests
 - installed skill config check
-- real handoff-link smoke test
+- direct `/voice` compatibility smoke test when applicable
 - OpenClaw agent-turn smoke test using the real stored OpenClaw session id/UUID
 - final report checklist
 
@@ -179,7 +181,7 @@ Use the Node preflight as the repeatable gate when a real stored OpenClaw sessio
 npm run agent-install-preflight -- --require-agent-turn --session-id "$OPENCLAW_STORED_SESSION_ID"
 ```
 
-Handoff URLs carry a session **key** such as `agent:main:main` or `agent:main:discord:...`. Current `openclaw agent --session-id` expects the stored session id/UUID from the OpenClaw state dir (`OPENCLAW_STATE_DIR`, else `dirname(OPENCLAW_CONFIG_PATH)`, else `<OPENCLAW_HOME-or-home>/.openclaw`). The daemon resolves URL session keys before invoking the CLI; direct preflight commands should use the stored id/UUID, not a colon-containing session key.
+Compatibility `/voice` URLs may carry a session **key** such as `agent:main:main` or `agent:main:discord:...`. Current `openclaw agent --session-id` expects the stored session id/UUID from the OpenClaw state dir (`OPENCLAW_STATE_DIR`, else `dirname(OPENCLAW_CONFIG_PATH)`, else `<OPENCLAW_HOME-or-home>/.openclaw`). The daemon resolves URL session keys before invoking the CLI; direct preflight commands should use the stored id/UUID, not a colon-containing session key.
 
 By default the preflight agent-turn smoke test does **not** deliver a reply. If you intentionally need to prove explicit reply delivery into the originating channel/thread too, opt in with a reply target:
 
@@ -189,4 +191,22 @@ npm run agent-install-preflight -- --require-agent-turn --session-id "$OPENCLAW_
 
 `openclaw status --json`, infer STT, and infer TTS can all pass while the daemon still cannot run agent replies because the local gateway is waiting on a scope/device approval. The `--session-id` agent-turn preflight is the relevant gate for that class of issue.
 
-If verification fails, use [`docs/agent-install-troubleshooting.md`](docs/agent-install-troubleshooting.md). Do not report success with unresolved infer, service, handoff URL, device approval, auth, gateway, or session-key failures.
+If verification fails, use [`docs/agent-install-troubleshooting.md`](docs/agent-install-troubleshooting.md). Do not report success with unresolved infer, service, dashboard/voice URL, device approval, auth, gateway, or session-key failures.
+
+## Final user report
+
+When all required verification passes, give the user the dashboard URL:
+
+```text
+https://clawkietalkie.app/dashboard/#host=<DAEMON_PEER_ID>
+```
+
+If the current chat is public/shared, do not post the URL directly; warn that it is bearer routing material and ask for a private channel or explicit permission before sharing it.
+
+Coach the user briefly:
+
+- Bookmark the dashboard URL on their phone or add it to their phone home screen.
+- The dashboard shows Recent OpenClaw Sessions from the installed daemon.
+- Select a session to open voice for that OpenClaw thread; transcript and replies stay in the original session.
+- If no sessions appear, start or resume an OpenClaw conversation at the desk, then refresh the dashboard on the phone.
+- They can ask for their Clawkie dashboard URL/link again later; the installed skill should return `https://clawkietalkie.app/dashboard/#host=<DAEMON_PEER_ID>` from its configured host ID.

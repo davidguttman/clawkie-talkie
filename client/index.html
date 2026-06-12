@@ -787,13 +787,13 @@
             </p>
           </div>
           <div class="step">
-            <span class="step-num">02 · HANDOFF</span>
-            <h3>Say "switch to voice."</h3>
+            <span class="step-num">02 · DASHBOARD</span>
+            <h3>Bookmark your dashboard URL.</h3>
             <p>
-              From the OpenClaw thread you are already in, the agent
-              hands you a rendezvous URL built from that exact session.
-              Open it on the phone in your pocket &mdash; same thread,
-              same agent, same code.
+              After install, your agent gives you a host dashboard link.
+              Open the dashboard URL on your phone, bookmark it there or add
+              it to your phone home screen. Choose a Recent OpenClaw Session
+              to open voice; if the list is empty, start or resume one at the desk and refresh.
             </p>
           </div>
           <div class="step">
@@ -893,9 +893,9 @@
             <span class="label">FEATURES IN FLIGHT</span>
             <h4>Keep the session moving.</h4>
             <p>
-              You were mid-feature when you got in the car. Switch
-              that exact OpenClaw thread to voice, steer the next
-              decision in long form, and pick up the canonical
+              You were mid-feature when you got in the car. Open
+              the dashboard, choose that OpenClaw thread, steer the
+              next decision in long form, and pick up the canonical
               transcript when you stop.
             </p>
           </article>
@@ -908,7 +908,7 @@
               The whole product runs on your agent's side &mdash; the
               persistent daemon, the WebRTC rendezvous, OpenClaw infer STT,
               OpenClaw infer TTS calls, and the OpenClaw <code>clawkie-voice-handoff</code>
-              skill that makes "switch to voice" work.
+              skill that can give you the dashboard URL again later.
             </p>
             <p style="margin-top:14px;font-family:var(--mono);font-size:12px;color:var(--ink3);letter-spacing:0.4px;">
               Tell your agent to follow
@@ -1123,10 +1123,13 @@
           "Before installing, download or clone the repo and inspect the source; " +
           "stop and ask me if anything looks suspicious, harmful, or you are not confident. " +
           "The install should set up the persistent Clawkie-Talkie daemon and the " +
-          "OpenClaw clawkie-voice-handoff skill so I can say \"switch to voice\" " +
-          "and get a working handoff link. Verify the daemon/service status, logs, " +
+          "OpenClaw clawkie-voice-handoff skill. Verify the daemon/service status, logs, " +
           "and skill configuration before reporting success. When finished, give me " +
-          "a plain English summary of what changed, what you verified, and any blockers.";
+          "the dashboard URL in the form https://clawkietalkie.app/dashboard/#host=<daemon-peer-id>, " +
+          "tell me to bookmark the dashboard URL on my phone or add it to my phone home screen, explain that the dashboard " +
+          "shows Recent OpenClaw Sessions, that I select one to open voice, and that if none appear I should start or resume " +
+          "an OpenClaw conversation at the desk and refresh on my phone; also mention " +
+          "that I can ask for my Clawkie dashboard URL again later if I need it.";
         buttons.forEach(function (btn) {
           var defaultHTML = btn.innerHTML;
           var resetTimer = null;
