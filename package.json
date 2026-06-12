@@ -1,7 +1,6 @@
 {
   "name": "clawkie-talkie",
-  "version": "1.0.5",
-  "private": true,
+  "version": "1.0.6",
   "type": "module",
   "description": "Walkie-talkie voice surface for an OpenClaw session",
   "scripts": {
@@ -46,5 +45,25 @@
     "typescript": "^5.6.3",
     "vite": "^5.4.10",
     "vitest": "^4.1.5"
-  }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "README.md",
+    "AGENT-INSTALL.md",
+    ".env.example",
+    "daemon/",
+    "openclaw/",
+    "shared/",
+    "scripts/agent-install-preflight.mjs",
+    "docs/agent-install-infer.md",
+    "docs/agent-install-troubleshooting.md",
+    "docs/agent-install-upgrade-repair.md",
+    "docs/agent-install-verification.md",
+    "docs/custom-stack.md",
+    "docs/install-daemon.md",
+    "docs/voice-handoff.md",
+    "client/public/fixtures/stt-check-hi.wav"
+  ]
 }
