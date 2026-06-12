@@ -17,6 +17,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -33,8 +35,14 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -290,6 +298,8 @@ fun DashboardScreen(
             if (showUnsupported) Notice("This daemon does not support host dashboard session discovery.", error = false)
         }
 
+        // Weighted content area. The web new-session flow replaces the recent-session list;
+        // do the same on Android so destination catalogs get all remaining height.
         if (newSessionOpen) {
             NewSessionPanel(
                 rtc = rtc,
@@ -298,34 +308,38 @@ fun DashboardScreen(
                 onClose = { newSessionOpen = false },
                 onCreated = onNewSessionCreated,
                 compact = compact,
+                modifier = Modifier.weight(1f),
             )
-        }
-
-        // Sessions list
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(
-                "RECENT OPENCLAW SESSIONS",
-                fontFamily = Hifi.mono,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 1.4.sp,
-                color = Hifi.ink2,
-            )
-            if (rtcState.recentSessions.isNotEmpty()) {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(
-                        rtcState.recentSessions,
-                        key = { "${it.session.sessionKey}:${it.session.sessionId}" },
-                    ) { row ->
-                        SessionButton(row = row, compact = compact, onSelect = onSelectSession)
-                    }
-                }
-            } else {
-                DashboardEmptyState(
-                    loading = waiting || supportStatus == RecentSessionsSupportStatus.PROBING,
-                    connected = rtcState.status == RtcStatus.OPEN,
-                    unsupported = showUnsupported,
+        } else {
+            // Sessions list
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "RECENT OPENCLAW SESSIONS",
+                    fontFamily = Hifi.mono,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.4.sp,
+                    color = Hifi.ink2,
                 )
+                if (rtcState.recentSessions.isNotEmpty()) {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(
+                            rtcState.recentSessions,
+                            key = { "${it.session.sessionKey}:${it.session.sessionId}" },
+                        ) { row ->
+                            SessionButton(row = row, compact = compact, onSelect = onSelectSession)
+                        }
+                    }
+                } else {
+                    DashboardEmptyState(
+                        loading = waiting || supportStatus == RecentSessionsSupportStatus.PROBING,
+                        connected = rtcState.status == RtcStatus.OPEN,
+                        unsupported = showUnsupported,
+                    )
+                }
             }
         }
     }
@@ -341,13 +355,19 @@ private fun NewSessionPanel(
     onClose: () -> Unit,
     onCreated: (RecentSession) -> Unit,
     compact: Boolean,
+    modifier: Modifier = Modifier,
 ) {
     var providerId by remember { mutableStateOf<String?>(null) }
+    var destinationQuery by remember { mutableStateOf("") }
     var createRequestId by remember { mutableStateOf<String?>(null) }
     var createError by remember { mutableStateOf<String?>(null) }
     val effectiveCatalog = catalog ?: webOnlyNewSessionDestinationsCatalog()
     val providers = selectableNewSessionProviders(effectiveCatalog)
     val activeProvider = providerId?.let { id -> providers.firstOrNull { it.id == id } }
+    val filteredDestinationGroups = activeProvider?.let { provider ->
+        groupNewSessionDestinations(filterNewSessionDestinations(provider.destinations, destinationQuery))
+    }.orEmpty()
+    val filteredDestinationCount = filteredDestinationGroups.sumOf { it.destinations.size }
     val creating = createRequestId != null
 
     fun startCreate(provider: NewSessionDestinationProvider, destination: NewSessionDestinationOption? = null) {
@@ -398,7 +418,7 @@ private fun NewSessionPanel(
     }
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .border(1.dp, Hifi.ai.a(0x44), RoundedCornerShape(16.dp))
             .background(Color.White.copy(alpha = 0.045f), RoundedCornerShape(16.dp))
@@ -425,6 +445,7 @@ private fun NewSessionPanel(
                 if (activeProvider != null) {
                     SmallDashboardAction("BACK", enabled = !creating) {
                         providerId = null
+                        destinationQuery = ""
                     }
                 }
                 SmallDashboardAction("CANCEL", enabled = !creating, onClick = onClose)
@@ -438,26 +459,121 @@ private fun NewSessionPanel(
         }
 
         if (activeProvider == null) {
-            for (provider in providers) {
-                NewSessionProviderRow(provider = provider, compact = compact) {
-                    if (provider.kind == "local") startCreate(provider) else providerId = provider.id
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(providers, key = { it.id }) { provider ->
+                    NewSessionProviderRow(provider = provider, compact = compact) {
+                        if (provider.kind == "local") {
+                            startCreate(provider)
+                        } else {
+                            providerId = provider.id
+                            destinationQuery = ""
+                        }
+                    }
+                }
+                if (loadingDestinations) {
+                    item(key = "loading-destinations") {
+                        DashboardDashedText("Loading chat destinations in the background…")
+                    }
                 }
             }
-            if (loadingDestinations) {
-                DashboardDashedText("Loading chat destinations in the background…")
-            }
         } else {
-            if (activeProvider.destinations.isEmpty()) {
-                DashboardDashedText("No writable destinations reported by the daemon.")
-            } else {
-                for (destination in activeProvider.destinations) {
-                    NewSessionDestinationRow(destination = destination, compact = compact) {
-                        startCreate(activeProvider, destination)
+            NewSessionSearchField(
+                value = destinationQuery,
+                onValueChange = { destinationQuery = it },
+                placeholder = "Search ${activeProvider.label} channels…",
+                compact = compact,
+            )
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                newSessionDestinationsEmptyCopy(
+                    totalDestinationCount = activeProvider.destinations.size,
+                    filteredDestinationCount = filteredDestinationCount,
+                )?.let { copy ->
+                    item(key = "empty-copy") { DashboardDashedText(copy) }
+                }
+                for (group in filteredDestinationGroups) {
+                    group.group?.let { groupName ->
+                        item(key = "group:${groupName}") { NewSessionDestinationGroupHeader(groupName) }
+                    }
+                    items(
+                        group.destinations,
+                        key = { destination ->
+                            "${destination.id}:${destination.target}:${destination.accountId.orEmpty()}"
+                        },
+                    ) { destination ->
+                        NewSessionDestinationRow(destination = destination, compact = compact) {
+                            startCreate(activeProvider, destination)
+                        }
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun NewSessionSearchField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    compact: Boolean,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Hifi.stroke, RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        if (value.isEmpty()) {
+            Text(
+                placeholder,
+                fontFamily = Hifi.sans,
+                fontSize = if (compact) 13.sp else 14.sp,
+                color = Hifi.ink4,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        BasicTextField(
+            value = value,
+            onValueChange = { onValueChange(it.replace("\n", "")) },
+            singleLine = true,
+            textStyle = TextStyle(
+                fontFamily = Hifi.sans,
+                fontSize = if (compact) 13.sp else 14.sp,
+                color = Hifi.ink,
+            ),
+            cursorBrush = SolidColor(Hifi.ai),
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.None,
+                autoCorrectEnabled = false,
+                imeAction = ImeAction.Search,
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics { contentDescription = "Search destinations" },
+        )
+    }
+}
+
+@Composable
+private fun NewSessionDestinationGroupHeader(group: String) {
+    Text(
+        group.uppercase(),
+        fontFamily = Hifi.mono,
+        fontSize = 9.sp,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 1.2.sp,
+        color = Hifi.ink3,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
 }
 
 @Composable
@@ -553,11 +669,6 @@ private fun DashboardDashedText(message: String) {
         Text(message, color = Hifi.ink3, fontSize = 12.sp, lineHeight = 16.sp, fontFamily = Hifi.sans)
     }
 }
-
-private fun selectableNewSessionProviders(catalog: NewSessionDestinationsCatalog): List<NewSessionDestinationProvider> =
-    catalog.providers.filter { provider ->
-        provider.status == "available" && (provider.kind == "local" || provider.destinations.isNotEmpty())
-    }
 
 private fun newSessionCreateErrorCopy(code: String?): String = when (code) {
     "new_session_destination_unsupported" -> "The daemon cannot create sessions for that destination."
