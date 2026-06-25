@@ -546,8 +546,6 @@ function useMediaSessionPttTrigger({
     if (!mediaSession) return;
 
     writeMediaSessionMetadata(mediaSession, sessionLabel);
-    writeMediaSessionPlaybackState(mediaSession, mediaSessionPlaybackStateForDriving(state, holdMusicMuted));
-    writeMediaSessionMicrophoneActive(mediaSession, state === 'recording');
 
     if (typeof mediaSession.setActionHandler !== 'function') {
       return () => {
@@ -577,11 +575,18 @@ function useMediaSessionPttTrigger({
       for (const action of MEDIA_SESSION_MIC_ACTIONS) {
         setMediaSessionActionHandler(mediaSession, action, null);
       }
-      writeMediaSessionPlaybackState(mediaSession, 'none');
-      writeMediaSessionMicrophoneActive(mediaSession, false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionLabel]);
+
+  // Keep the advisory playback/microphone state in sync without re-registering
+  // action handlers every time the recording state changes.
+  useEffect(() => {
+    const mediaSession = navigator.mediaSession;
+    if (!mediaSession) return;
+    writeMediaSessionPlaybackState(mediaSession, mediaSessionPlaybackStateForDriving(state, holdMusicMuted));
+    writeMediaSessionMicrophoneActive(mediaSession, state === 'recording');
+  }, [state, holdMusicMuted]);
 
   useEffect(() => {
     if (state !== 'recording') return;
