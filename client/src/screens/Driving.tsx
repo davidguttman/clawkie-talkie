@@ -533,6 +533,14 @@ function useMediaSessionPttTrigger({
   holdMusicMuted,
   sessionLabel,
 }: MediaSessionPttConfig): void {
+  const onTriggerRef = useRef(onTrigger);
+  useEffect(() => {
+    onTriggerRef.current = onTrigger;
+  }, [onTrigger]);
+
+  // Register media-session action handlers once per session. Re-registering
+  // on every STT partial (via a changing `onTrigger` callback) causes iOS
+  // Safari to repeatedly jostle the audio session and drop the mic.
   useEffect(() => {
     const mediaSession = navigator.mediaSession;
     if (!mediaSession) return;
@@ -548,14 +556,18 @@ function useMediaSessionPttTrigger({
       };
     }
 
+    const wrappedTrigger: MediaSessionActionHandler = () => {
+      onTriggerRef.current();
+    };
+
     for (const action of MEDIA_SESSION_PTT_ACTIONS) {
-      setMediaSessionActionHandler(mediaSession, action, onTrigger);
+      setMediaSessionActionHandler(mediaSession, action, wrappedTrigger);
     }
 
-    if (state === 'recording') {
-      for (const action of MEDIA_SESSION_MIC_ACTIONS) {
-        setMediaSessionActionHandler(mediaSession, action, onTrigger);
-      }
+    // Register mic actions unconditionally so we don't have to re-register
+    // handlers whenever `state` changes.
+    for (const action of MEDIA_SESSION_MIC_ACTIONS) {
+      setMediaSessionActionHandler(mediaSession, action, wrappedTrigger);
     }
 
     return () => {
@@ -568,7 +580,8 @@ function useMediaSessionPttTrigger({
       writeMediaSessionPlaybackState(mediaSession, 'none');
       writeMediaSessionMicrophoneActive(mediaSession, false);
     };
-  }, [holdMusicMuted, onTrigger, sessionLabel, state]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionLabel]);
 
   useEffect(() => {
     if (state !== 'recording') return;
