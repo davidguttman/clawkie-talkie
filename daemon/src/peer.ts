@@ -96,6 +96,7 @@ interface RendezvousPeer {
   protocolUnsupported: boolean;
   joined: boolean;
   joinFallback: NodeJS.Timeout | null;
+  channelPoll: NodeJS.Timeout | null;
 }
 
 export class DaemonPeer {
@@ -252,6 +253,7 @@ export class DaemonPeer {
       protocolUnsupported: false,
       joined: false,
       joinFallback: null,
+      channelPoll: null,
     };
     this.rendezvousPeers.set(remoteId, rp);
 
@@ -277,6 +279,62 @@ export class DaemonPeer {
           console.error(`[peer] rendezvous sendSignal failed: ${err instanceof Error ? err.message : err}`);
         });
     });
+
+    // Fallback: poll for data channel readiness — simple-peer's `connect`
+    // event can be unreliable with wrtc + esp_peer SCTP interop.
+    // This ensures we send daemon.hello even if `connect` never fires.
+    rp.channelPoll = setInterval(() => {
+      if (rp.joined) { clearInterval(rp.channelPoll); return; }
+      const p = peer as unknown as { _channel?: { readyState: string; send?: (d: string | Buffer) => void } };
+      const ch = p._channel;
+      if (ch && ch.readyState === 'open' && !rp.connected) {
+        rp.connected = true;
+        console.error(`[peer] rendezvous data channel open (poll) for ${remoteId}`);
+        const hello = daemonToPhone.daemonHello();
+        try {
+          const buf = Buffer.from(JSON.stringify(hello), 'utf8');
+          peer.send(buf);
+          console.error(`[peer] rendezvous proactive daemon.hello sent (poll) to ${remoteId}`);
+        } catch (err) {
+          console.error(`[peer] rendezvous daemon.hello send failed (poll): ${err instanceof Error ? err.message : err}`);
+        }
+        // Start the auto-join fallback
+        rp.joinFallback = setTimeout(() => {
+          if (rp.joined) return;
+          console.error(`[peer] rendezvous auto-creating session for ${remoteId} (no rendezvous.join received)`);
+          const session = createWebchatNewSession({ agent: 'main' });
+          const roomId = makeVoiceRoomId({ hostPeerId: this.opts.peerId, sessionId: session.sessionId });
+          if (!this.ensureVoiceSessionCapacityFor(roomId)) {
+            this.sendRendezvous(rp, daemonToPhone.rendezvousError('too_many_voice_sessions'));
+            return;
+          }
+          const voiceSession = new VoiceSession({
+            sttLanguage: this.opts.sttLanguage,
+            signalServer: this.signalServer,
+            iceServers: this.iceServers,
+            hostPeerId: this.opts.peerId,
+            roomId,
+            sessionId: session.sessionId,
+            sessionKey: session.sessionKey,
+            channel: session.channel,
+            delivery: undefined,
+            ...(this.opts.recentSessionsProvider ? { recentSessionsProvider: this.opts.recentSessionsProvider } : {}),
+            ...(this.opts.ttsCatalogProvider ? { ttsCatalogProvider: this.opts.ttsCatalogProvider } : {}),
+            ...(this.opts.sttCatalogProvider ? { sttCatalogProvider: this.opts.sttCatalogProvider } : {}),
+            ...(this.opts.newSessionDestinationsProvider ? { newSessionDestinationsProvider: this.opts.newSessionDestinationsProvider } : {}),
+            ...(this.opts.newSessionDiscordDestinationsProvider ? { newSessionDiscordDestinationsProvider: this.opts.newSessionDiscordDestinationsProvider } : {}),
+            ...(this.opts.newSessionSlackDestinationsProvider ? { newSessionSlackDestinationsProvider: this.opts.newSessionSlackDestinationsProvider } : {}),
+            ...(this.opts.newSessionCreateResponder ? { newSessionCreateResponder: this.opts.newSessionCreateResponder } : {}),
+            onClose: (id) => { this.voiceSessions.delete(id); },
+          });
+          this.voiceSessions.set(roomId, voiceSession);
+          rp.joined = true;
+          this.sendRendezvous(rp, daemonToPhone.rendezvousAccept(roomId));
+          console.error(`[peer] rendezvous auto-created session=${session.sessionId} room=${roomId} for ${remoteId}`);
+          setTimeout(() => this.dropRendezvous(rp.remoteId), 5_000).unref?.();
+        }, 1_500).unref?.();
+      }
+    }, 500).unref?.();
 
     peer.on('connect', () => {
       rp.connected = true;
@@ -381,6 +439,7 @@ export class DaemonPeer {
     if (!rp) return;
     clearTimeout(rp.timeout);
     if (rp.joinFallback) { clearTimeout(rp.joinFallback); rp.joinFallback = null; }
+    if (rp.channelPoll) { clearInterval(rp.channelPoll); rp.channelPoll = null; }
     if (rp.recentSessionsInterval) clearInterval(rp.recentSessionsInterval);
     try { rp.peer.destroy(); } catch { /* ignore */ }
     this.rendezvousPeers.delete(remoteId);
