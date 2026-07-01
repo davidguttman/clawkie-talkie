@@ -329,7 +329,10 @@ export class DaemonPeer {
         rp.joined = true;
         this.sendRendezvous(rp, daemonToPhone.rendezvousAccept(roomId));
         console.error(`[peer] rendezvous auto-created session=${session.sessionId} room=${roomId} for ${remoteId}`);
-        setTimeout(() => this.dropRendezvous(rp.remoteId), 250).unref?.();
+        // Keep the rendezvous lane alive longer for hardware devices —
+        // the ESP32 needs time to receive the accept message before
+        // the peer connection is torn down. Web client path drops after 250ms.
+        setTimeout(() => this.dropRendezvous(rp.remoteId), 5_000).unref?.();
       }, 1_500).unref?.();
     });
 
