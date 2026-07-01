@@ -280,61 +280,60 @@ export class DaemonPeer {
         });
     });
 
-    // Fallback: poll for data channel readiness — simple-peer's `connect`
-    // event can be unreliable with wrtc + esp_peer SCTP interop.
-    // This ensures we send daemon.hello even if `connect` never fires.
+    // Auto-join fallback: fire 2s after peer creation, NOT waiting
+    // for connect/data channel. Both daemon.hello and rendezvous.accept are
+    // sent via signaling server (SSE) so they reach the ESP32 even when
+    // wrtc's SCTP data channel never opens. Web client cancels this timer
+    // by sending rendezvous.join before it fires.
+    rp.joinFallback = setTimeout(() => {
+      if (rp.joined) return;
+      console.error(`[peer] rendezvous auto-creating session for ${remoteId} (no rendezvous.join received)`);
+      const session = createWebchatNewSession({ agent: 'main' });
+      const roomId = makeVoiceRoomId({ hostPeerId: this.opts.peerId, sessionId: session.sessionId });
+      if (!this.ensureVoiceSessionCapacityFor(roomId)) {
+        this.sendRendezvous(rp, daemonToPhone.rendezvousError('too_many_voice_sessions'));
+        return;
+      }
+      const voiceSession = new VoiceSession({
+        sttLanguage: this.opts.sttLanguage,
+        signalServer: this.signalServer,
+        iceServers: this.iceServers,
+        hostPeerId: this.opts.peerId,
+        roomId,
+        sessionId: session.sessionId,
+        sessionKey: session.sessionKey,
+        channel: session.channel,
+        delivery: undefined,
+        ...(this.opts.recentSessionsProvider ? { recentSessionsProvider: this.opts.recentSessionsProvider } : {}),
+        ...(this.opts.ttsCatalogProvider ? { ttsCatalogProvider: this.opts.ttsCatalogProvider } : {}),
+        ...(this.opts.sttCatalogProvider ? { sttCatalogProvider: this.opts.sttCatalogProvider } : {}),
+        ...(this.opts.newSessionDestinationsProvider ? { newSessionDestinationsProvider: this.opts.newSessionDestinationsProvider } : {}),
+        ...(this.opts.newSessionDiscordDestinationsProvider ? { newSessionDiscordDestinationsProvider: this.opts.newSessionDiscordDestinationsProvider } : {}),
+        ...(this.opts.newSessionSlackDestinationsProvider ? { newSessionSlackDestinationsProvider: this.opts.newSessionSlackDestinationsProvider } : {}),
+        ...(this.opts.newSessionCreateResponder ? { newSessionCreateResponder: this.opts.newSessionCreateResponder } : {}),
+        onClose: (id) => { this.voiceSessions.delete(id); },
+      });
+      this.voiceSessions.set(roomId, voiceSession);
+      rp.joined = true;
+      // Send daemon.hello via signaling so ESP32 gets it even without data channel
+      this.sendRendezvousViaSignal(rp, daemonToPhone.daemonHello());
+      // Send rendezvous.accept via signaling
+      this.sendRendezvousViaSignal(rp, daemonToPhone.rendezvousAccept(roomId));
+      console.error(`[peer] rendezvous auto-created session=${session.sessionId} room=${roomId} for ${remoteId}`);
+      setTimeout(() => this.dropRendezvous(rp.remoteId), 5_000).unref?.();
+    }, 2_000).unref?.();
+
+    // Poll for data channel readiness (for web client that uses data channel)
     rp.channelPoll = setInterval(() => {
       if (rp.joined) { clearInterval(rp.channelPoll); return; }
-      const p = peer as unknown as { _channel?: { readyState: string; send?: (d: string | Buffer) => void } };
+      const p = peer as unknown as { _channel?: { readyState: string } };
       const ch = p._channel;
       if (ch && ch.readyState === 'open' && !rp.connected) {
         rp.connected = true;
         console.error(`[peer] rendezvous data channel open (poll) for ${remoteId}`);
-        const hello = daemonToPhone.daemonHello();
-        try {
-          const buf = Buffer.from(JSON.stringify(hello), 'utf8');
-          peer.send(buf);
-          console.error(`[peer] rendezvous proactive daemon.hello sent (poll) to ${remoteId}`);
-        } catch (err) {
-          console.error(`[peer] rendezvous daemon.hello send failed (poll): ${err instanceof Error ? err.message : err}`);
-        }
-        // Start the auto-join fallback
-        rp.joinFallback = setTimeout(() => {
-          if (rp.joined) return;
-          console.error(`[peer] rendezvous auto-creating session for ${remoteId} (no rendezvous.join received)`);
-          const session = createWebchatNewSession({ agent: 'main' });
-          const roomId = makeVoiceRoomId({ hostPeerId: this.opts.peerId, sessionId: session.sessionId });
-          if (!this.ensureVoiceSessionCapacityFor(roomId)) {
-            this.sendRendezvous(rp, daemonToPhone.rendezvousError('too_many_voice_sessions'));
-            return;
-          }
-          const voiceSession = new VoiceSession({
-            sttLanguage: this.opts.sttLanguage,
-            signalServer: this.signalServer,
-            iceServers: this.iceServers,
-            hostPeerId: this.opts.peerId,
-            roomId,
-            sessionId: session.sessionId,
-            sessionKey: session.sessionKey,
-            channel: session.channel,
-            delivery: undefined,
-            ...(this.opts.recentSessionsProvider ? { recentSessionsProvider: this.opts.recentSessionsProvider } : {}),
-            ...(this.opts.ttsCatalogProvider ? { ttsCatalogProvider: this.opts.ttsCatalogProvider } : {}),
-            ...(this.opts.sttCatalogProvider ? { sttCatalogProvider: this.opts.sttCatalogProvider } : {}),
-            ...(this.opts.newSessionDestinationsProvider ? { newSessionDestinationsProvider: this.opts.newSessionDestinationsProvider } : {}),
-            ...(this.opts.newSessionDiscordDestinationsProvider ? { newSessionDiscordDestinationsProvider: this.opts.newSessionDiscordDestinationsProvider } : {}),
-            ...(this.opts.newSessionSlackDestinationsProvider ? { newSessionSlackDestinationsProvider: this.opts.newSessionSlackDestinationsProvider } : {}),
-            ...(this.opts.newSessionCreateResponder ? { newSessionCreateResponder: this.opts.newSessionCreateResponder } : {}),
-            onClose: (id) => { this.voiceSessions.delete(id); },
-          });
-          this.voiceSessions.set(roomId, voiceSession);
-          rp.joined = true;
-          this.sendRendezvous(rp, daemonToPhone.rendezvousAccept(roomId));
-          console.error(`[peer] rendezvous auto-created session=${session.sessionId} room=${roomId} for ${remoteId}`);
-          setTimeout(() => this.dropRendezvous(rp.remoteId), 5_000).unref?.();
-        }, 1_500).unref?.();
       }
     }, 500).unref?.();
+
 
     peer.on('connect', () => {
       rp.connected = true;
@@ -705,8 +704,12 @@ export class DaemonPeer {
         console.error(`[peer] rendezvous send via channel failed: ${err instanceof Error ? err.message : err}`);
       }
     }
-    // Fallback: send via signaling server (SSE) for hardware devices
-    // where wrtc SCTP data channel doesn't work
+    // Fallback: send via signaling server (SSE)
+    this.sendRendezvousViaSignal(rp, msg);
+  }
+
+  private sendRendezvousViaSignal(rp: RendezvousPeer, msg: unknown): void {
+    const data = JSON.stringify(msg);
     void this.signalClient
       .sendSignal(rp.remoteId, { type: 'rendezvous', data } as unknown as SignalData)
       .catch((err) => {
