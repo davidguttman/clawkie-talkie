@@ -54,7 +54,7 @@ const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
 // Mobile browsers can take noticeably longer to complete the initial
 // answer/ICE exchange, so keep the rendezvous peer alive a bit longer
 // before giving up on the join.
-const RENDEZVOUS_TIMEOUT_MS = 30_000;
+const RENDEZVOUS_TIMEOUT_MS = 60_000;
 const RECENT_SESSIONS_SUBSCRIPTION_INTERVAL_MS = 60_000;
 // Conservative resource guard for simultaneous WebRTC/STT/TTS lanes;
 // not a mathematically derived capacity limit.
@@ -330,7 +330,7 @@ export class DaemonPeer {
         this.sendRendezvous(rp, daemonToPhone.rendezvousAccept(roomId));
         console.error(`[peer] rendezvous auto-created session=${session.sessionId} room=${roomId} for ${remoteId}`);
         setTimeout(() => this.dropRendezvous(rp.remoteId), 250).unref?.();
-      }, 3_000).unref?.();
+      }, 1_500).unref?.();
     });
 
     peer.on('data', (data: unknown) => {
