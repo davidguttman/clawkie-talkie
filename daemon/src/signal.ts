@@ -178,6 +178,9 @@ export class SignalClient extends EventEmitter<SignalClientEvents> {
           const payload = JSON.parse(msg.data) as SignalEvent;
           if (payload.to === this.peerId) {
             this.emit('signal', payload);
+          } else {
+            // Debug: log mismatched signals to diagnose routing
+            console.error(`[signal] to=${payload.to} !== peerId=${this.peerId} (from=${payload.from})`);
           }
           break;
         }

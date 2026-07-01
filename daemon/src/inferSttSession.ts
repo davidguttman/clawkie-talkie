@@ -145,7 +145,7 @@ export class OpenClawInferSttSession {
       await this.writeFile(wavPath, wav);
 
       const finalStartedAtMs = Date.now();
-      this.log(`[stt] final infer start wav=turn.wav`);
+      this.log(`[stt] final infer start wav=turn.wav pcmBytes=${pcm.length} chunks=${this.chunks.length}`);
       const text = await this.transcribe({
         wavPath,
         language: this.opts.language,

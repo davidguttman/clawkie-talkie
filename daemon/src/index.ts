@@ -23,6 +23,20 @@ import { parseCli } from './cli.js';
 import { formatDashboardJoinUrl } from './dashboardUrl.js';
 import { defaultRecentSessionsCache } from './recentSessions.js';
 
+// Add HH:MM:SS.mmm timestamps to all console output (matching ESP32 log format)
+const origLog = console.log;
+const origErr = console.error;
+function ts(): string {
+  const d = new Date();
+  const h = String(d.getHours()).padStart(2, '0');
+  const m = String(d.getMinutes()).padStart(2, '0');
+  const s = String(d.getSeconds()).padStart(2, '0');
+  const ms = String(d.getMilliseconds()).padStart(3, '0');
+  return `${h}:${m}:${s}.${ms}`;
+}
+console.log = (...args: unknown[]) => origLog(`[${ts()}]`, ...args);
+console.error = (...args: unknown[]) => origErr(`[${ts()}]`, ...args);
+
 async function main(): Promise<void> {
   const cli = parseCli();
 

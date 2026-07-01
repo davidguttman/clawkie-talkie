@@ -249,6 +249,8 @@ export class VoiceSession {
   private ttsSelection: TtsSelection = {};
   private sttSelection: SttSelection = {};
   private sttOpenToken = 0;
+  private _pcmDumpPath?: string;
+  private _pcmDumpBytes = 0;
   private turnToken = 0;
   private audioPumpTurnToken: number | null = null;
   private recentSessionsInterval: NodeJS.Timeout | null = null;
@@ -301,7 +303,7 @@ export class VoiceSession {
       this.acceptPhone(peerId, true);
     });
 
-    this.signalClient.on('signal', (event) => {
+    this.signalClient.on('signal', async (event) => {
       console.log(`[voice ${opts.roomId}] DEBUG: received signal from ${event.from} (remoteId=${this.remoteId}, hasPeer=${!!this.peer}, peerDestroyed=${this.peer?.destroyed})`);
       if (this.replacedRemoteIds.has(event.from)) return;
       const payload = event.data as SignalPayload;
@@ -317,6 +319,19 @@ export class VoiceSession {
             if (b64 && this.stt) {
               const audioBytes = Buffer.from(b64, 'base64');
               this.stt.sendAudio(new Uint8Array(audioBytes));
+              /* Debug: append PCM to file for validation */
+              const fs = await import('node:fs');
+              if (!this._pcmDumpPath) {
+                this._pcmDumpPath = `/tmp/clawkie-debug-${Date.now()}.pcm`;
+                this._pcmDumpBytes = 0;
+              }
+              fs.appendFileSync(this._pcmDumpPath, audioBytes);
+              this._pcmDumpBytes += audioBytes.length;
+              console.log(`[voice ${opts.roomId}] DEBUG: stt.audio chunk=${audioBytes.length} total=${this._pcmDumpBytes} file=${this._pcmDumpPath}`);
+            } else if (!b64) {
+              console.log(`[voice ${opts.roomId}] WARNING: stt.audio missing b64 field`);
+            } else if (!this.stt) {
+              console.log(`[voice ${opts.roomId}] WARNING: stt.audio received but no STT session`);
             }
           } else {
             /* Feed control message to handleControl */
@@ -781,7 +796,7 @@ export class VoiceSession {
     }
   }
 
-  private handleControl(msg: PhoneToDaemon): void {
+  private async handleControl(msg: PhoneToDaemon): Promise<void> {
     if (this.protocolUnsupported) return;
     if (msg.t === 'client.hello') {
       const response = daemonHandshakeResponse(msg);
@@ -830,6 +845,30 @@ export class VoiceSession {
       return;
     }
     if (msg.t === 'stt.audio.done') {
+      /* Debug: convert PCM dump to WAV */
+      if (this._pcmDumpPath && this._pcmDumpBytes > 0) {
+        const fs = await import('node:fs');
+        const pcm = fs.readFileSync(this._pcmDumpPath);
+        const wavHeader = Buffer.alloc(44);
+        wavHeader.write('RIFF', 0);
+        wavHeader.writeUInt32LE(36 + pcm.length, 4);
+        wavHeader.write('WAVE', 8);
+        wavHeader.write('fmt ', 12);
+        wavHeader.writeUInt32LE(16, 16);
+        wavHeader.writeUInt16LE(1, 20);
+        wavHeader.writeUInt16LE(1, 22);
+        wavHeader.writeUInt32LE(16000, 24);
+        wavHeader.writeUInt32LE(32000, 28);
+        wavHeader.writeUInt16LE(2, 32);
+        wavHeader.writeUInt16LE(16, 34);
+        wavHeader.write('data', 36);
+        wavHeader.writeUInt32LE(pcm.length, 40);
+        const wavPath = this._pcmDumpPath.replace('.pcm', '.wav');
+        fs.writeFileSync(wavPath, Buffer.concat([wavHeader, pcm]));
+        console.log(`[voice ${this.roomId}] DEBUG: WAV written ${wavPath} (${pcm.length} PCM bytes, ${pcm.length / 32000}s)`);
+        this._pcmDumpPath = undefined;
+        this._pcmDumpBytes = 0;
+      }
       this.stt?.signalAudioDone();
       return;
     }
