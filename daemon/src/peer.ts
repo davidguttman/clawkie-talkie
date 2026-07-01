@@ -33,6 +33,7 @@ import { classifySignal, decideForwardToLivePeer, decideIncomingSignal } from '.
 import { createEmptyRecentSessionsSnapshot, defaultRecentSessionsCache } from './recentSessions.js';
 import {
   buildNewSessionCreateResponse,
+  createWebchatNewSession,
   createWebchatOnlyNewSessionDestinationsCatalog,
   getNewSessionDestinationsWithOpenClaw,
   type NewSessionCreateRequestLike,
@@ -93,6 +94,8 @@ interface RendezvousPeer {
   acceptedAnswer: boolean;
   recentSessionsInterval: NodeJS.Timeout | null;
   protocolUnsupported: boolean;
+  joined: boolean;
+  joinFallback: NodeJS.Timeout | null;
 }
 
 export class DaemonPeer {
@@ -247,10 +250,27 @@ export class DaemonPeer {
       acceptedAnswer: false,
       recentSessionsInterval: null,
       protocolUnsupported: false,
+      joined: false,
+      joinFallback: null,
     };
     this.rendezvousPeers.set(remoteId, rp);
 
     peer.on('signal', (data) => {
+      // Filter candidates to reduce ESP32 network stack load.
+      // The ESP32 has limited LwIP sockets — TCP and IPv6 candidates
+      // exhaust sockets and starve the DTLS handshake.
+      const candidateStr = (data as { candidate?: { candidate?: string } })?.candidate?.candidate;
+      if (candidateStr) {
+        // Drop TCP candidates — ESP32 has limited sockets
+        if (candidateStr.includes('tcptype')) return;
+        // Drop localhost
+        if (candidateStr.includes('127.0.0.1')) return;
+        // Drop IPv6 candidates (addresses with multiple colons)
+        // IPv4 candidates contain dots (192.168.x.x), IPv6 don't
+        const parts = candidateStr.split(' ');
+        const ip = parts[4]; // candidate:ID COMPONENT PROTO PRIORITY IP PORT ...
+        if (ip && ip.includes(':') && !ip.includes('.')) return;
+      }
       void this.signalClient
         .sendSignal(remoteId, data as unknown as SignalData)
         .catch((err) => {
@@ -261,11 +281,75 @@ export class DaemonPeer {
     peer.on('connect', () => {
       rp.connected = true;
       console.error(`[peer] rendezvous data channel connected for ${remoteId}`);
+      // Proactively send daemon.hello without waiting for client.hello.
+      // This handles clients (e.g. ESP32) that can receive data but whose
+      // SCTP data-channel sends don't surface in wrtc's `data` event.
+      const hello = daemonToPhone.daemonHello();
+      try {
+        const buf = Buffer.from(JSON.stringify(hello), 'utf8');
+        peer.send(buf);
+        console.error(`[peer] rendezvous proactive daemon.hello sent to ${remoteId}`);
+      } catch (err) {
+        console.error(`[peer] rendezvous proactive daemon.hello send failed: ${err instanceof Error ? err.message : err}`);
+      }
+
+      // Fallback: if no rendezvous.join arrives within 3s (web client
+      // sends it immediately), auto-create a webchat session for hardware
+      // devices that can send data daemon→device but not device→daemon.
+      // Web client is unaffected — its rendezvous.join cancels this timer.
+      rp.joinFallback = setTimeout(() => {
+        if (rp.joined) return;
+        console.error(`[peer] rendezvous auto-creating session for ${remoteId} (no rendezvous.join received)`);
+        const session = createWebchatNewSession({ agent: 'main' });
+        const roomId = makeVoiceRoomId({ hostPeerId: this.opts.peerId, sessionId: session.sessionId });
+        if (!this.ensureVoiceSessionCapacityFor(roomId)) {
+          this.sendRendezvous(rp, daemonToPhone.rendezvousError('too_many_voice_sessions'));
+          return;
+        }
+        const voiceSession = new VoiceSession({
+          sttLanguage: this.opts.sttLanguage,
+          signalServer: this.signalServer,
+          iceServers: this.iceServers,
+          hostPeerId: this.opts.peerId,
+          roomId,
+          sessionId: session.sessionId,
+          sessionKey: session.sessionKey,
+          channel: session.channel,
+          delivery: undefined,
+          ...(this.opts.recentSessionsProvider ? { recentSessionsProvider: this.opts.recentSessionsProvider } : {}),
+          ...(this.opts.ttsCatalogProvider ? { ttsCatalogProvider: this.opts.ttsCatalogProvider } : {}),
+          ...(this.opts.sttCatalogProvider ? { sttCatalogProvider: this.opts.sttCatalogProvider } : {}),
+          ...(this.opts.newSessionDestinationsProvider ? { newSessionDestinationsProvider: this.opts.newSessionDestinationsProvider } : {}),
+          ...(this.opts.newSessionDiscordDestinationsProvider ? { newSessionDiscordDestinationsProvider: this.opts.newSessionDiscordDestinationsProvider } : {}),
+          ...(this.opts.newSessionSlackDestinationsProvider ? { newSessionSlackDestinationsProvider: this.opts.newSessionSlackDestinationsProvider } : {}),
+          ...(this.opts.newSessionCreateResponder ? { newSessionCreateResponder: this.opts.newSessionCreateResponder } : {}),
+          onClose: (id) => { this.voiceSessions.delete(id); },
+        });
+        this.voiceSessions.set(roomId, voiceSession);
+        rp.joined = true;
+        this.sendRendezvous(rp, daemonToPhone.rendezvousAccept(roomId));
+        console.error(`[peer] rendezvous auto-created session=${session.sessionId} room=${roomId} for ${remoteId}`);
+        setTimeout(() => this.dropRendezvous(rp.remoteId), 250).unref?.();
+      }, 3_000).unref?.();
     });
 
     peer.on('data', (data: unknown) => {
+      console.error(`[peer] rendezvous DATA EVENT fired for ${remoteId} (${typeof data} len=${Array.isArray(data) ? data.length : data instanceof ArrayBuffer ? data.byteLength : data instanceof Uint8Array ? data.length : typeof data === 'string' ? data.length : '?'})`);
       this.handleRendezvousData(rp, data);
     });
+
+    // Log raw channel events for debugging SCTP interop
+    const rawChannel = (peer as unknown as { channel?: { onopen?: ((e: unknown) => void) | null; onmessage?: ((e: unknown) => void) | null; readyState?: string; label?: string } }).channel;
+    if (rawChannel) {
+      console.error(`[peer] rendezvous raw channel label=${rawChannel.label} readyState=${rawChannel.readyState}`);
+      const origOnMessage = rawChannel.onmessage;
+      rawChannel.onmessage = (e: unknown) => {
+        console.error(`[peer] rendezvous raw onmessage for ${remoteId}: ${typeof e}`);
+        if (origOnMessage) origOnMessage.call(rawChannel, e);
+      };
+    } else {
+      console.error(`[peer] rendezvous no raw channel available for ${remoteId}`);
+    }
 
     peer.on('close', () => {
       this.dropRendezvous(remoteId);
@@ -293,6 +377,7 @@ export class DaemonPeer {
     const rp = this.rendezvousPeers.get(remoteId);
     if (!rp) return;
     clearTimeout(rp.timeout);
+    if (rp.joinFallback) { clearTimeout(rp.joinFallback); rp.joinFallback = null; }
     if (rp.recentSessionsInterval) clearInterval(rp.recentSessionsInterval);
     try { rp.peer.destroy(); } catch { /* ignore */ }
     this.rendezvousPeers.delete(remoteId);
@@ -361,6 +446,10 @@ export class DaemonPeer {
       this.sendRendezvous(rp, daemonToPhone.rendezvousError('unexpected_message'));
       return;
     }
+    // Cancel the auto-join fallback — the web client sent rendezvous.join
+    // normally, so the hardware-device fallback is not needed.
+    if (rp.joinFallback) { clearTimeout(rp.joinFallback); rp.joinFallback = null; }
+    rp.joined = true;
     const sessionId = (msg.sessionId ?? '').trim();
     const sessionKey = (msg.sessionKey ?? '').trim();
     const channel = (msg.channel ?? '').trim();
