@@ -748,11 +748,16 @@ export class VoiceSession {
       } catch {
         return;
       }
+      console.log(`[voice ${this.roomId}] DEBUG: handleControl t=${msg.t} stt=${!!this.stt}`);
       this.handleControl(msg);
       return;
     }
     if (this.protocolUnsupported) return;
-    if (this.stt) this.stt.sendAudio(bytes);
+    if (this.stt) {
+      this.stt.sendAudio(bytes);
+    } else {
+      console.log(`[voice ${this.roomId}] DEBUG: binary audio received but stt is null (${bytes.length} bytes)`);
+    }
   }
 
   private handleControl(msg: PhoneToDaemon): void {
