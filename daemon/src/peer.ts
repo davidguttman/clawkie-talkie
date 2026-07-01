@@ -695,12 +695,23 @@ export class DaemonPeer {
   }
 
   private sendRendezvous(rp: RendezvousPeer, msg: unknown): void {
-    if (rp.peer.destroyed) return;
-    try {
-      rp.peer.send(JSON.stringify(msg));
-    } catch (err) {
-      console.error(`[peer] rendezvous send failed: ${err instanceof Error ? err.message : err}`);
+    const data = JSON.stringify(msg);
+    // Try data channel first
+    if (!rp.peer.destroyed) {
+      try {
+        rp.peer.send(data);
+        return;
+      } catch (err) {
+        console.error(`[peer] rendezvous send via channel failed: ${err instanceof Error ? err.message : err}`);
+      }
     }
+    // Fallback: send via signaling server (SSE) for hardware devices
+    // where wrtc SCTP data channel doesn't work
+    void this.signalClient
+      .sendSignal(rp.remoteId, { type: 'rendezvous', data } as unknown as SignalData)
+      .catch((err) => {
+        console.error(`[peer] rendezvous send via signal failed: ${err instanceof Error ? err.message : err}`);
+      });
   }
 
   // Test/manager hook for tracking active rooms.
