@@ -305,6 +305,27 @@ export class VoiceSession {
       console.log(`[voice ${opts.roomId}] DEBUG: received signal from ${event.from} (remoteId=${this.remoteId}, hasPeer=${!!this.peer}, peerDestroyed=${this.peer?.destroyed})`);
       if (this.replacedRemoteIds.has(event.from)) return;
       const payload = event.data as SignalPayload;
+
+      /* Check if this is a data-channel-over-signaling message (stt.*, etc.) */
+      if (payload && typeof payload === 'object' && 't' in payload && typeof (payload as Record<string, unknown>).t === 'string') {
+        const t = (payload as Record<string, unknown>).t as string;
+        if (t === 'stt.start' || t === 'stt.audio' || t === 'stt.audio.done' || t === 'stt.cancel' || t === 'client.hello' || t === 'reply.cancel' || t === 'settings.update') {
+          console.log(`[voice ${opts.roomId}] DEBUG: data-channel-over-signal t=${t}`);
+          if (t === 'stt.audio') {
+            /* Decode base64 audio and feed to STT */
+            const b64 = (payload as Record<string, unknown>).b64 as string | undefined;
+            if (b64 && this.stt) {
+              const audioBytes = Buffer.from(b64, 'base64');
+              this.stt.sendAudio(new Uint8Array(audioBytes));
+            }
+          } else {
+            /* Feed control message to handleControl */
+            this.handleControl(payload as unknown as PhoneToDaemon);
+          }
+          return;
+        }
+      }
+
       const livePeer = !!this.peer && this.remoteId === event.from && !this.peer.destroyed;
       const kind = classifySignal(payload);
       console.log(`[voice ${opts.roomId}] DEBUG: signal kind=${kind} from ${event.from} livePeer=${livePeer}`);
