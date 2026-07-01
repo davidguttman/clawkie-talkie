@@ -296,16 +296,20 @@ export class VoiceSession {
     });
 
     this.signalClient.on('announce', ({ peerId }) => {
+      console.log(`[voice ${opts.roomId}] DEBUG: announce from ${peerId} (replaced=${this.replacedRemoteIds.has(peerId)})`);
       if (this.replacedRemoteIds.has(peerId)) return;
       this.acceptPhone(peerId, true);
     });
 
     this.signalClient.on('signal', (event) => {
+      console.log(`[voice ${opts.roomId}] DEBUG: received signal from ${event.from} (remoteId=${this.remoteId}, hasPeer=${!!this.peer}, peerDestroyed=${this.peer?.destroyed})`);
       if (this.replacedRemoteIds.has(event.from)) return;
       const payload = event.data as SignalPayload;
       const livePeer = !!this.peer && this.remoteId === event.from && !this.peer.destroyed;
       const kind = classifySignal(payload);
+      console.log(`[voice ${opts.roomId}] DEBUG: signal kind=${kind} from ${event.from} livePeer=${livePeer}`);
       const action = decideIncomingSignal({ hasLivePeer: livePeer, kind });
+      console.log(`[voice ${opts.roomId}] DEBUG: action=${action}`);
 
       if (action === 'forward') {
         const decision = decideForwardToLivePeer(
@@ -583,7 +587,10 @@ export class VoiceSession {
   }
 
   private openOutboundAudio(): { stream: unknown | null } {
-    if (this.outboundStream) return { stream: this.outboundStream };
+    // TEMPORARILY DISABLED: Audio track causes wrtc to add m=audio to SDP offer,
+    // which triggers ICE failure with esp_peer. Audio is sent via data channel instead.
+    console.log(`[voice ${this.roomId}] outbound audio track disabled (using data channel for audio)`);
+    return { stream: null };
     const nonstandard = (wrtc as { nonstandard?: { RTCAudioSource?: new () => AudioSourceLike } })
       .nonstandard;
     const Ctor = nonstandard?.RTCAudioSource;
