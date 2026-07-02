@@ -24,27 +24,25 @@ import { default as ndcPolyfill } from 'node-datachannel/polyfill';
 
 // --- Patch RTCSessionDescription.sdp to be writable ---
 
-const SDP_PROTO = ndcPolyfill.RTCSessionDescription.prototype;
-const sdpDescriptor = Object.getOwnPropertyDescriptor(SDP_PROTO, 'sdp');
-
-if (sdpDescriptor && sdpDescriptor.get && !sdpDescriptor.set) {
-  const origGetter = sdpDescriptor.get;
-
-  Object.defineProperty(SDP_PROTO, 'sdp', {
-    get() {
-      return origGetter.call(this);
-    },
-    set(val: string) {
-      // Override sdp on this specific instance
-      Object.defineProperty(this, 'sdp', {
-        get() { return val; },
-        configurable: true,
-        enumerable: true,
-      });
-    },
-    configurable: true,
-    enumerable: true,
-  });
+const RTCSessionDescriptionCtor = (ndcPolyfill as any).RTCSessionDescription;
+if (RTCSessionDescriptionCtor?.prototype) {
+  const SDP_PROTO = RTCSessionDescriptionCtor.prototype;
+  const sdpDescriptor = Object.getOwnPropertyDescriptor(SDP_PROTO, 'sdp');
+  if (sdpDescriptor?.get && !sdpDescriptor.set) {
+    const origGetter = sdpDescriptor.get;
+    Object.defineProperty(SDP_PROTO, 'sdp', {
+      get() { return origGetter.call(this); },
+      set(val: string) {
+        Object.defineProperty(this, 'sdp', {
+          get() { return val; },
+          configurable: true,
+          enumerable: true,
+        });
+      },
+      configurable: true,
+      enumerable: true,
+    });
+  }
 }
 
 // --- Export the patched polyfill as a wrtc replacement ---
