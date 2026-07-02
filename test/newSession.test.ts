@@ -26,7 +26,7 @@ import {
 import { shouldDeliverReplyForChatTarget } from '../daemon/src/chatSession';
 import type { NewSessionDestinationOption } from '../daemon/src/protocol';
 
-vi.mock('@roamhq/wrtc', () => ({ default: {} }));
+vi.mock('node-datachannel/polyfill', () => ({ default: {} }));
 
 vi.mock('../daemon/src/signal.js', () => ({
   SignalClient: class SignalClient {

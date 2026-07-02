@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { makeVoiceRoomId } from '../daemon/src/voiceRoom';
 
-vi.mock('@roamhq/wrtc', () => ({ default: {} }));
+vi.mock('node-datachannel/polyfill', () => ({ default: {} }));
 
 vi.mock('../daemon/src/signal.js', () => ({
   SignalClient: class SignalClient {

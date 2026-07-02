@@ -11,7 +11,7 @@
 // `roomId`. None of the existing per-turn singleton fields from
 // `peer.ts` survive — they all moved here so each room is isolated.
 
-import wrtc from '@roamhq/wrtc';
+import { wrtc } from './wrtc-patch.js';
 import SimplePeer from 'simple-peer';
 import { runChat, ChatError, shouldDeliverReplyForChatTarget, type DeliveryTarget as ChatDeliveryTarget } from './chatSession.js';
 import { OpenClawInferTtsSession, TTS_SAMPLE_RATE, type TtsSessionCallbacks, type TtsSessionOptions } from './ttsSession.js';
@@ -625,30 +625,10 @@ export class VoiceSession {
   private openOutboundAudio(): { stream: unknown | null } {
     // TEMPORARILY DISABLED: Audio track causes wrtc to add m=audio to SDP offer,
     // which triggers ICE failure with esp_peer. Audio is sent via data channel instead.
+    // node-datachannel polyfill doesn't support addTrack/RTCAudioSource.
+    // Audio is sent via data channel (binary PCM) instead of RTP tracks.
     console.log(`[voice ${this.roomId}] outbound audio track disabled (using data channel for audio)`);
     return { stream: null };
-    const nonstandard = (wrtc as { nonstandard?: { RTCAudioSource?: new () => AudioSourceLike } })
-      .nonstandard;
-    const Ctor = nonstandard?.RTCAudioSource;
-    const MediaStreamCtor = (wrtc as { MediaStream?: new () => MediaStreamLike }).MediaStream;
-    if (!Ctor || !MediaStreamCtor) {
-      console.error(`[voice ${this.roomId}] wrtc.nonstandard.RTCAudioSource unavailable; outbound audio disabled`);
-      return { stream: null };
-    }
-    try {
-      const source = new Ctor();
-      const track = source.createTrack();
-      const stream = new MediaStreamCtor();
-      stream.addTrack(track);
-      this.audioSource = source;
-      this.outboundStream = stream;
-      return { stream };
-    } catch (err) {
-      console.error(`[voice ${this.roomId}] failed to open outbound audio: ${err instanceof Error ? err.message : err}`);
-      this.audioSource = null;
-      this.outboundStream = null;
-      return { stream: null };
-    }
   }
 
   private closeOutboundAudio(): void {
@@ -776,12 +756,17 @@ export class VoiceSession {
     this.touchActivity();
     const bytes = toBytes(data);
     if (!bytes) return;
+    // Debug: log first few bytes to understand what's arriving
+    if (bytes.length < 50 && bytes[0] !== 0x7b) {
+      console.log(`[voice ${this.roomId}] DEBUG: small non-JSON frame (${bytes.length} bytes) firstByte=0x${bytes[0]?.toString(16)} data=${Buffer.from(bytes).toString('hex').substring(0, 40)}`);
+    }
     const text = tryDecodeJsonText(bytes);
     if (text !== null) {
       let msg: PhoneToDaemon;
       try {
         msg = JSON.parse(text) as PhoneToDaemon;
       } catch {
+        console.log(`[voice ${this.roomId}] DEBUG: JSON parse failed (${bytes.length} bytes): ${text.substring(0, 100)}`);
         return;
       }
       console.log(`[voice ${this.roomId}] DEBUG: handleControl t=${msg.t} stt=${!!this.stt}`);
@@ -792,7 +777,7 @@ export class VoiceSession {
     if (this.stt) {
       this.stt.sendAudio(bytes);
     } else {
-      console.log(`[voice ${this.roomId}] DEBUG: binary audio received but stt is null (${bytes.length} bytes)`);
+      console.log(`[voice ${this.roomId}] DEBUG: binary audio but stt null (${bytes.length} bytes) firstByte=0x${bytes[0]?.toString(16)}`);
     }
   }
 
@@ -970,6 +955,28 @@ export class VoiceSession {
     console.error(`[voice ${this.roomId}] opening OpenClaw infer STT session`);
     const createStt = this.opts.sttSessionFactory ?? ((opts, cb) => new OpenClawInferSttSession(opts, cb));
     const createSpeechDetector = this.opts.createSpeechDetector ?? createWasmVad;
+
+    // Buffer audio chunks that arrive while the STT session is being created.
+    // The web client waits for stt.ready before sending audio; the ESP32 sends
+    // immediately after stt.start, so we need to buffer until the session is ready.
+    const pendingAudio: Uint8Array[] = [];
+    let sessionReady = false;
+    this.stt = {
+      sendAudio: (bytes) => {
+        if (sessionReady) {
+          realSession.sendAudio(bytes);
+        } else {
+          pendingAudio.push(bytes);
+        }
+      },
+      signalAudioDone: () => {
+        if (sessionReady) realSession.signalAudioDone();
+      },
+      close: () => {
+        try { realSession.close(); } catch { /* best effort */ }
+      },
+    };
+    let realSession: SttSessionLike;
     let speechDetector: SpeechDetector | undefined;
     let detectorDestroyed = false;
     const destroySpeechDetector = () => {
@@ -1004,11 +1011,19 @@ export class VoiceSession {
     };
     if (speechDetector) sttOptions.speechDetector = speechDetector;
 
-    const session = createStt(
+    let sessionRef: SttSessionLike;
+    const newSession = createStt(
       sttOptions,
       {
         onReady: () => {
           if (!this.isTurnActive(token)) return;
+          // Flush buffered audio before signaling ready
+          // Defer to next tick so `newSession` assignment completes first
+          sessionReady = true;
+          queueMicrotask(() => {
+            for (const buf of pendingAudio) sessionRef.sendAudio(buf);
+            pendingAudio.length = 0;
+          });
           this.send(daemonToPhone.sttReady());
         },
         onPartial: (text, isFinal) => {
@@ -1036,24 +1051,18 @@ export class VoiceSession {
         },
       },
     );
-
-    this.stt = {
-      sendAudio: (bytes) => session.sendAudio(bytes),
-      signalAudioDone: () => session.signalAudioDone(),
-      close: () => {
-        try {
-          session.close();
-        } finally {
-          destroySpeechDetector();
-        }
-      },
-    };
+    realSession = newSession;
+    sessionRef = newSession;
+    // this.stt was already set at the start of openStt with a buffering wrapper.
+    // No need to reassign here — the buffer flush happens in onReady.
   }
 
   private async runReplyTurn(transcript: string, token: number): Promise<void> {
+    console.log(`[voice ${this.roomId}] DEBUG: runReplyTurn transcript="${transcript.trim().substring(0, 100)}" token=${token}`);
     if (!this.isTurnActive(token)) return;
     const trimmed = transcript.trim();
     if (!trimmed) {
+      console.log(`[voice ${this.roomId}] DEBUG: empty transcript, sending error`);
       this.send(daemonToPhone.replyError('empty_transcript'));
       this.resetTurn('empty_transcript');
       return;
@@ -1061,6 +1070,7 @@ export class VoiceSession {
     this.send(daemonToPhone.replyStart(trimmed));
     this.chatAbort = new AbortController();
     let replyText: string;
+    console.log(`[voice ${this.roomId}] DEBUG: runChat starting transcript="${trimmed.substring(0, 80)}"`);
     try {
       const target = this.state.chatTarget();
       const result = await runChat(trimmed, {
@@ -1086,6 +1096,7 @@ export class VoiceSession {
     }
     this.chatAbort = null;
     if (!this.isTurnActive(token)) return;
+    console.log(`[voice ${this.roomId}] DEBUG: runChat done reply="${replyText.substring(0, 80)}" opening TTS`);
     this.send(daemonToPhone.replyDone(replyText));
     void this.openTtsAsync(replyText, token);
   }
@@ -1192,7 +1203,10 @@ export class VoiceSession {
     if (turn.replayOnReconnect) return;
     while (turn.liveDataCursor < turn.chunks.length) {
       const chunk = turn.chunks[turn.liveDataCursor];
-      if (!this.sendBinary(chunk)) {
+      // Resample from TTS_SAMPLE_RATE (24kHz) to STT_SAMPLE_RATE (16kHz)
+      // to match the ESP32's codec playback rate.
+      const resampled = resamplePcm(chunk, TTS_SAMPLE_RATE, STT_SAMPLE_RATE);
+      if (!this.sendBinary(new Uint8Array(resampled))) {
         if (turn.started) {
           this.abandonTtsAudioTurn(token);
         } else {
@@ -1276,7 +1290,7 @@ export class VoiceSession {
       this.tts = createTts(request, {
         onOpen: () => {
           if (!this.isTurnActive(token)) return;
-          this.send(daemonToPhone.ttsStart(useTrack ? WEBRTC_SAMPLE_RATE : TTS_SAMPLE_RATE));
+          this.send(daemonToPhone.ttsStart(useTrack ? WEBRTC_SAMPLE_RATE : STT_SAMPLE_RATE));
         },
         onAudio: (pcm) => {
           if (!this.isTurnActive(token)) return;
@@ -1297,7 +1311,10 @@ export class VoiceSession {
           }
           // Replay retention overflow must not cut off live connected
           // data-channel audio; only reconnect replay is dropped.
-          this.sendBinary(audio.chunk);
+          // Resample from TTS_SAMPLE_RATE (24kHz) to STT_SAMPLE_RATE (16kHz)
+          // to match the ESP32's codec playback rate.
+          const resampled = resamplePcm(Buffer.from(audio.chunk), TTS_SAMPLE_RATE, STT_SAMPLE_RATE);
+          this.sendBinary(new Uint8Array(resampled));
         },
         onDone: () => {
           if (!this.isTurnActive(token)) return;
