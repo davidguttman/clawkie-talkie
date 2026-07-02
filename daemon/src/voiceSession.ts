@@ -1503,18 +1503,15 @@ export class VoiceSession {
   private ttsPumping = false;
 
   private pumpTtsAudioChunk(pcm: Uint8Array): void {
-    // Send TTS audio via the signaling POST fallback instead of the data channel.
-    // The ESP32's SCTP receive buffer overflows when receiving binary data via the
-    // WebRTC data channel — it works fine for small JSON text messages but not
-    // for audio chunks. The signaling POST path is reliable for ESP32.
-    // Encode as hex in a JSON message so the ESP32 can decode and play it.
-    const hex = Buffer.from(pcm).toString('hex');
-    // Split into 512-byte hex chunks (256 bytes PCM each) to avoid large POSTs
-    const hexChunkSize = 512; // 256 bytes PCM = 512 hex chars
-    for (let offset = 0; offset < hex.length; offset += hexChunkSize) {
-      const end = Math.min(offset + hexChunkSize, hex.length);
-      const chunk = hex.substring(offset, end);
-      this.ttsPumpQueue.push(new TextEncoder().encode(JSON.stringify({ t: 'tts.audio', hex: chunk })) as unknown as Uint8Array);
+    // Send TTS audio as hex-encoded JSON via the data channel.
+    // ESP32 SCTP buffer overflows with large or fast data. Use small chunks
+    // (64 bytes PCM = 128 hex chars) with pacing delay.
+    const chunkSize = 64; // 64 bytes PCM per message
+    const hexChunkSize = chunkSize * 2; // 128 hex chars
+    for (let offset = 0; offset < pcm.byteLength; offset += chunkSize) {
+      const end = Math.min(offset + chunkSize, pcm.byteLength);
+      const hex = Buffer.from(pcm.subarray(offset, end)).toString('hex');
+      this.ttsPumpQueue.push(new TextEncoder().encode(JSON.stringify({ t: 'tts.audio', hex })) as unknown as Uint8Array);
     }
     void this.drainTtsPump();
   }
@@ -1530,7 +1527,7 @@ export class VoiceSession {
           break;
         }
         // Small yield between chunks
-        await new Promise<void>(r => setTimeout(r, 5));
+        await new Promise<void>(r => setTimeout(r, 50));
       }
     } finally {
       this.ttsPumping = false;
