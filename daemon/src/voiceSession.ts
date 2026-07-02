@@ -950,6 +950,28 @@ export class VoiceSession {
     console.error(`[voice ${this.roomId}] opening OpenClaw infer STT session`);
     const createStt = this.opts.sttSessionFactory ?? ((opts, cb) => new OpenClawInferSttSession(opts, cb));
     const createSpeechDetector = this.opts.createSpeechDetector ?? createWasmVad;
+
+    // Buffer audio chunks that arrive while the STT session is being created.
+    // The web client waits for stt.ready before sending audio; the ESP32 sends
+    // immediately after stt.start, so we need to buffer until the session is ready.
+    const pendingAudio: Uint8Array[] = [];
+    let sessionReady = false;
+    this.stt = {
+      sendAudio: (bytes) => {
+        if (sessionReady) {
+          realSession.sendAudio(bytes);
+        } else {
+          pendingAudio.push(bytes);
+        }
+      },
+      signalAudioDone: () => {
+        if (sessionReady) realSession.signalAudioDone();
+      },
+      close: () => {
+        try { realSession.close(); } catch { /* best effort */ }
+      },
+    };
+    let realSession: SttSessionLike;
     let speechDetector: SpeechDetector | undefined;
     let detectorDestroyed = false;
     const destroySpeechDetector = () => {
@@ -984,11 +1006,15 @@ export class VoiceSession {
     };
     if (speechDetector) sttOptions.speechDetector = speechDetector;
 
-    const session = createStt(
+    realSession = createStt(
       sttOptions,
       {
         onReady: () => {
           if (!this.isTurnActive(token)) return;
+          // Flush buffered audio before signaling ready
+          sessionReady = true;
+          for (const buf of pendingAudio) realSession.sendAudio(buf);
+          pendingAudio.length = 0;
           this.send(daemonToPhone.sttReady());
         },
         onPartial: (text, isFinal) => {
@@ -1016,18 +1042,8 @@ export class VoiceSession {
         },
       },
     );
-
-    this.stt = {
-      sendAudio: (bytes) => session.sendAudio(bytes),
-      signalAudioDone: () => session.signalAudioDone(),
-      close: () => {
-        try {
-          session.close();
-        } finally {
-          destroySpeechDetector();
-        }
-      },
-    };
+    // this.stt was already set at the start of openStt with a buffering wrapper.
+    // No need to reassign here — the buffer flush happens in onReady.
   }
 
   private async runReplyTurn(transcript: string, token: number): Promise<void> {
