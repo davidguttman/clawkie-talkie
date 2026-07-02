@@ -10,7 +10,7 @@
 // under a UUID token generated each session (or overridden via
 // DAEMON_PEER_ID env). The phone discovers the daemon via
 // `/dashboard/#host=<uuid>` for the host dashboard or `/voice#host=...&session=...`
-// for a selected voice session. simple-peer + @roamhq/wrtc
+// for a selected voice session. simple-peer + node-datachannel polyfill
 // drive the WebRTC DataChannel; the daemon owns the full turn:
 // OpenClaw infer transcription on inbound mic PCM, the configured
 // OpenClaw agent on the final transcript, and OpenClaw infer TTS on
