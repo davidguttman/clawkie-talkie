@@ -1058,9 +1058,11 @@ export class VoiceSession {
   }
 
   private async runReplyTurn(transcript: string, token: number): Promise<void> {
+    console.log(`[voice ${this.roomId}] DEBUG: runReplyTurn transcript="${transcript.trim().substring(0, 100)}" token=${token}`);
     if (!this.isTurnActive(token)) return;
     const trimmed = transcript.trim();
     if (!trimmed) {
+      console.log(`[voice ${this.roomId}] DEBUG: empty transcript, sending error`);
       this.send(daemonToPhone.replyError('empty_transcript'));
       this.resetTurn('empty_transcript');
       return;
@@ -1068,6 +1070,7 @@ export class VoiceSession {
     this.send(daemonToPhone.replyStart(trimmed));
     this.chatAbort = new AbortController();
     let replyText: string;
+    console.log(`[voice ${this.roomId}] DEBUG: runChat starting transcript="${trimmed.substring(0, 80)}"`);
     try {
       const target = this.state.chatTarget();
       const result = await runChat(trimmed, {
@@ -1093,6 +1096,7 @@ export class VoiceSession {
     }
     this.chatAbort = null;
     if (!this.isTurnActive(token)) return;
+    console.log(`[voice ${this.roomId}] DEBUG: runChat done reply="${replyText.substring(0, 80)}" opening TTS`);
     this.send(daemonToPhone.replyDone(replyText));
     void this.openTtsAsync(replyText, token);
   }
@@ -1304,7 +1308,8 @@ export class VoiceSession {
           }
           // Replay retention overflow must not cut off live connected
           // data-channel audio; only reconnect replay is dropped.
-          this.sendBinary(audio.chunk);
+          // Chunk TTS audio to 512 bytes for ESP32 SCTP buffer compatibility.
+          this.sendBinaryChunked(audio.chunk, 512);
         },
         onDone: () => {
           if (!this.isTurnActive(token)) return;
@@ -1492,6 +1497,19 @@ export class VoiceSession {
     const peer = this.peer;
     if (!peer || !this.connected) return false;
     return this.sendBinaryToPeer(peer, pcm, 'binary send failed');
+  }
+
+  private sendBinaryChunked(pcm: Uint8Array, chunkSize: number): boolean {
+    let ok = true;
+    for (let offset = 0; offset < pcm.byteLength; offset += chunkSize) {
+      const end = Math.min(offset + chunkSize, pcm.byteLength);
+      const chunk = pcm.subarray(offset, end);
+      if (!this.sendBinary(chunk)) {
+        ok = false;
+        break;
+      }
+    }
+    return ok;
   }
 
   private sendBinaryToPeer(peer: SimplePeer.Instance, pcm: Uint8Array, label: string): boolean {
