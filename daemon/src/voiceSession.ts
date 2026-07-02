@@ -1203,7 +1203,10 @@ export class VoiceSession {
     if (turn.replayOnReconnect) return;
     while (turn.liveDataCursor < turn.chunks.length) {
       const chunk = turn.chunks[turn.liveDataCursor];
-      if (!this.sendBinary(chunk)) {
+      // Resample from TTS_SAMPLE_RATE (24kHz) to STT_SAMPLE_RATE (16kHz)
+      // to match the ESP32's codec playback rate.
+      const resampled = resamplePcm(chunk, TTS_SAMPLE_RATE, STT_SAMPLE_RATE);
+      if (!this.sendBinary(new Uint8Array(resampled))) {
         if (turn.started) {
           this.abandonTtsAudioTurn(token);
         } else {
