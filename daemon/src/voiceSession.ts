@@ -1308,8 +1308,8 @@ export class VoiceSession {
           }
           // Replay retention overflow must not cut off live connected
           // data-channel audio; only reconnect replay is dropped.
-          // Chunk TTS audio to 512 bytes for ESP32 SCTP buffer compatibility.
-          this.sendBinaryChunked(audio.chunk, 512);
+          // Chunk TTS audio and send with pacing for ESP32 SCTP buffer compatibility.
+          this.pumpTtsAudioChunk(audio.chunk);
         },
         onDone: () => {
           if (!this.isTurnActive(token)) return;
@@ -1499,17 +1499,35 @@ export class VoiceSession {
     return this.sendBinaryToPeer(peer, pcm, 'binary send failed');
   }
 
-  private sendBinaryChunked(pcm: Uint8Array, chunkSize: number): boolean {
-    let ok = true;
+  private ttsPumpQueue: Uint8Array[] = [];
+  private ttsPumping = false;
+
+  private pumpTtsAudioChunk(pcm: Uint8Array): void {
+    // Split into 256-byte chunks and queue for paced sending
+    const chunkSize = 256;
     for (let offset = 0; offset < pcm.byteLength; offset += chunkSize) {
       const end = Math.min(offset + chunkSize, pcm.byteLength);
-      const chunk = pcm.subarray(offset, end);
-      if (!this.sendBinary(chunk)) {
-        ok = false;
-        break;
-      }
+      this.ttsPumpQueue.push(pcm.subarray(offset, end));
     }
-    return ok;
+    void this.drainTtsPump();
+  }
+
+  private async drainTtsPump(): Promise<void> {
+    if (this.ttsPumping) return;
+    this.ttsPumping = true;
+    try {
+      while (this.ttsPumpQueue.length > 0) {
+        const chunk = this.ttsPumpQueue.shift()!;
+        if (!this.sendBinary(chunk)) {
+          this.ttsPumpQueue.length = 0;
+          break;
+        }
+        // Yield to event loop between chunks so the ESP32 SCTP stack can drain
+        await new Promise<void>(r => setTimeout(r, 4));
+      }
+    } finally {
+      this.ttsPumping = false;
+    }
   }
 
   private sendBinaryToPeer(peer: SimplePeer.Instance, pcm: Uint8Array, label: string): boolean {
