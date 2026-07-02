@@ -1309,7 +1309,7 @@ export class VoiceSession {
           // Replay retention overflow must not cut off live connected
           // data-channel audio; only reconnect replay is dropped.
           // Chunk TTS audio and send with pacing for ESP32 SCTP buffer compatibility.
-          this.pumpTtsAudioChunk(audio.chunk);
+          this.sendBinary(audio.chunk);
         },
         onDone: () => {
           if (!this.isTurnActive(token)) return;
@@ -1497,43 +1497,6 @@ export class VoiceSession {
     const peer = this.peer;
     if (!peer || !this.connected) return false;
     return this.sendBinaryToPeer(peer, pcm, 'binary send failed');
-  }
-
-  private ttsPumpQueue: Uint8Array[] = [];
-  private ttsPumping = false;
-
-  private pumpTtsAudioChunk(pcm: Uint8Array): void {
-    // Send TTS audio as hex-encoded JSON via the data channel.
-    // ESP32 SCTP buffer overflows with large or fast data. Use small chunks
-    // (64 bytes PCM = 128 hex chars) with pacing delay.
-    const chunkSize = 64; // 64 bytes PCM per message
-    const hexChunkSize = chunkSize * 2; // 128 hex chars
-    for (let offset = 0; offset < pcm.byteLength; offset += chunkSize) {
-      const end = Math.min(offset + chunkSize, pcm.byteLength);
-      const hex = Buffer.from(pcm.subarray(offset, end)).toString('hex');
-      this.ttsPumpQueue.push(new TextEncoder().encode(JSON.stringify({ t: 'tts.audio', hex })) as unknown as Uint8Array);
-    }
-    void this.drainTtsPump();
-  }
-
-  private async drainTtsPump(): Promise<void> {
-    if (this.ttsPumping) return;
-    this.ttsPumping = true;
-    try {
-      // Initial delay before first chunk — let ESP32 process tts.start
-      await new Promise<void>(r => setTimeout(r, 200));
-      while (this.ttsPumpQueue.length > 0) {
-        const chunk = this.ttsPumpQueue.shift()!;
-        if (!this.sendBinary(chunk)) {
-          this.ttsPumpQueue.length = 0;
-          break;
-        }
-        // Small yield between chunks
-        await new Promise<void>(r => setTimeout(r, 50));
-      }
-    } finally {
-      this.ttsPumping = false;
-    }
   }
 
   private sendBinaryToPeer(peer: SimplePeer.Instance, pcm: Uint8Array, label: string): boolean {
