@@ -1503,8 +1503,9 @@ export class VoiceSession {
   private ttsPumping = false;
 
   private pumpTtsAudioChunk(pcm: Uint8Array): void {
-    // Split into 256-byte chunks and queue for paced sending
-    const chunkSize = 256;
+    // Split into small chunks and queue for paced sending
+    // ESP32 SCTP buffer is very limited — need small chunks with delay
+    const chunkSize = 64;
     for (let offset = 0; offset < pcm.byteLength; offset += chunkSize) {
       const end = Math.min(offset + chunkSize, pcm.byteLength);
       this.ttsPumpQueue.push(pcm.subarray(offset, end));
@@ -1517,13 +1518,21 @@ export class VoiceSession {
     this.ttsPumping = true;
     try {
       while (this.ttsPumpQueue.length > 0) {
+        // Check if the data channel send buffer is too full
+        const peer = this.peer as any;
+        const buffered = peer?._channel?.bufferedAmount ?? 0;
+        if (buffered > 8192) {
+          // Wait for buffer to drain
+          await new Promise<void>(r => setTimeout(r, 50));
+          continue;
+        }
         const chunk = this.ttsPumpQueue.shift()!;
         if (!this.sendBinary(chunk)) {
           this.ttsPumpQueue.length = 0;
           break;
         }
-        // Yield to event loop between chunks so the ESP32 SCTP stack can drain
-        await new Promise<void>(r => setTimeout(r, 4));
+        // Small yield between chunks
+        await new Promise<void>(r => setTimeout(r, 10));
       }
     } finally {
       this.ttsPumping = false;
