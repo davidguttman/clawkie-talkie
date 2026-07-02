@@ -1503,12 +1503,18 @@ export class VoiceSession {
   private ttsPumping = false;
 
   private pumpTtsAudioChunk(pcm: Uint8Array): void {
-    // Split into small chunks and queue for paced sending
-    // ESP32 SCTP buffer is very limited — need small chunks with delay
-    const chunkSize = 64;
-    for (let offset = 0; offset < pcm.byteLength; offset += chunkSize) {
-      const end = Math.min(offset + chunkSize, pcm.byteLength);
-      this.ttsPumpQueue.push(pcm.subarray(offset, end));
+    // Send TTS audio via the signaling POST fallback instead of the data channel.
+    // The ESP32's SCTP receive buffer overflows when receiving binary data via the
+    // WebRTC data channel — it works fine for small JSON text messages but not
+    // for audio chunks. The signaling POST path is reliable for ESP32.
+    // Encode as hex in a JSON message so the ESP32 can decode and play it.
+    const hex = Buffer.from(pcm).toString('hex');
+    // Split into 512-byte hex chunks (256 bytes PCM each) to avoid large POSTs
+    const hexChunkSize = 512; // 256 bytes PCM = 512 hex chars
+    for (let offset = 0; offset < hex.length; offset += hexChunkSize) {
+      const end = Math.min(offset + hexChunkSize, hex.length);
+      const chunk = hex.substring(offset, end);
+      this.ttsPumpQueue.push(new TextEncoder().encode(JSON.stringify({ t: 'tts.audio', hex: chunk })) as unknown as Uint8Array);
     }
     void this.drainTtsPump();
   }
@@ -1518,21 +1524,13 @@ export class VoiceSession {
     this.ttsPumping = true;
     try {
       while (this.ttsPumpQueue.length > 0) {
-        // Check if the data channel send buffer is too full
-        const peer = this.peer as any;
-        const buffered = peer?._channel?.bufferedAmount ?? 0;
-        if (buffered > 8192) {
-          // Wait for buffer to drain
-          await new Promise<void>(r => setTimeout(r, 50));
-          continue;
-        }
         const chunk = this.ttsPumpQueue.shift()!;
         if (!this.sendBinary(chunk)) {
           this.ttsPumpQueue.length = 0;
           break;
         }
         // Small yield between chunks
-        await new Promise<void>(r => setTimeout(r, 10));
+        await new Promise<void>(r => setTimeout(r, 5));
       }
     } finally {
       this.ttsPumping = false;
