@@ -756,12 +756,17 @@ export class VoiceSession {
     this.touchActivity();
     const bytes = toBytes(data);
     if (!bytes) return;
+    // Debug: log first few bytes to understand what's arriving
+    if (bytes.length < 50 && bytes[0] !== 0x7b) {
+      console.log(`[voice ${this.roomId}] DEBUG: small non-JSON frame (${bytes.length} bytes) firstByte=0x${bytes[0]?.toString(16)} data=${Buffer.from(bytes).toString('hex').substring(0, 40)}`);
+    }
     const text = tryDecodeJsonText(bytes);
     if (text !== null) {
       let msg: PhoneToDaemon;
       try {
         msg = JSON.parse(text) as PhoneToDaemon;
       } catch {
+        console.log(`[voice ${this.roomId}] DEBUG: JSON parse failed (${bytes.length} bytes): ${text.substring(0, 100)}`);
         return;
       }
       console.log(`[voice ${this.roomId}] DEBUG: handleControl t=${msg.t} stt=${!!this.stt}`);
@@ -772,7 +777,7 @@ export class VoiceSession {
     if (this.stt) {
       this.stt.sendAudio(bytes);
     } else {
-      console.log(`[voice ${this.roomId}] DEBUG: binary audio received but stt is null (${bytes.length} bytes)`);
+      console.log(`[voice ${this.roomId}] DEBUG: binary audio but stt null (${bytes.length} bytes) firstByte=0x${bytes[0]?.toString(16)}`);
     }
   }
 
@@ -1006,15 +1011,19 @@ export class VoiceSession {
     };
     if (speechDetector) sttOptions.speechDetector = speechDetector;
 
-    realSession = createStt(
+    let sessionRef: SttSessionLike;
+    const newSession = createStt(
       sttOptions,
       {
         onReady: () => {
           if (!this.isTurnActive(token)) return;
           // Flush buffered audio before signaling ready
+          // Defer to next tick so `newSession` assignment completes first
           sessionReady = true;
-          for (const buf of pendingAudio) realSession.sendAudio(buf);
-          pendingAudio.length = 0;
+          queueMicrotask(() => {
+            for (const buf of pendingAudio) sessionRef.sendAudio(buf);
+            pendingAudio.length = 0;
+          });
           this.send(daemonToPhone.sttReady());
         },
         onPartial: (text, isFinal) => {
@@ -1042,6 +1051,8 @@ export class VoiceSession {
         },
       },
     );
+    realSession = newSession;
+    sessionRef = newSession;
     // this.stt was already set at the start of openStt with a buffering wrapper.
     // No need to reassign here — the buffer flush happens in onReady.
   }
