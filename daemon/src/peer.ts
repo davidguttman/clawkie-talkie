@@ -13,7 +13,7 @@
 // `roomId -> VoiceSession` map. There is no pre-created link table,
 // no random join-id store, no TTL, no claim/revocation.
 
-import wrtc from '@roamhq/wrtc';
+import { wrtc } from './wrtc-patch.js';
 import SimplePeer from 'simple-peer';
 import {
   daemonHandshakeResponse,

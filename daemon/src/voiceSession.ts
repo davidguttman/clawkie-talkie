@@ -11,7 +11,7 @@
 // `roomId`. None of the existing per-turn singleton fields from
 // `peer.ts` survive — they all moved here so each room is isolated.
 
-import wrtc from '@roamhq/wrtc';
+import { wrtc } from './wrtc-patch.js';
 import SimplePeer from 'simple-peer';
 import { runChat, ChatError, shouldDeliverReplyForChatTarget, type DeliveryTarget as ChatDeliveryTarget } from './chatSession.js';
 import { OpenClawInferTtsSession, TTS_SAMPLE_RATE, type TtsSessionCallbacks, type TtsSessionOptions } from './ttsSession.js';
@@ -625,30 +625,10 @@ export class VoiceSession {
   private openOutboundAudio(): { stream: unknown | null } {
     // TEMPORARILY DISABLED: Audio track causes wrtc to add m=audio to SDP offer,
     // which triggers ICE failure with esp_peer. Audio is sent via data channel instead.
+    // node-datachannel polyfill doesn't support addTrack/RTCAudioSource.
+    // Audio is sent via data channel (binary PCM) instead of RTP tracks.
     console.log(`[voice ${this.roomId}] outbound audio track disabled (using data channel for audio)`);
     return { stream: null };
-    const nonstandard = (wrtc as { nonstandard?: { RTCAudioSource?: new () => AudioSourceLike } })
-      .nonstandard;
-    const Ctor = nonstandard?.RTCAudioSource;
-    const MediaStreamCtor = (wrtc as { MediaStream?: new () => MediaStreamLike }).MediaStream;
-    if (!Ctor || !MediaStreamCtor) {
-      console.error(`[voice ${this.roomId}] wrtc.nonstandard.RTCAudioSource unavailable; outbound audio disabled`);
-      return { stream: null };
-    }
-    try {
-      const source = new Ctor();
-      const track = source.createTrack();
-      const stream = new MediaStreamCtor();
-      stream.addTrack(track);
-      this.audioSource = source;
-      this.outboundStream = stream;
-      return { stream };
-    } catch (err) {
-      console.error(`[voice ${this.roomId}] failed to open outbound audio: ${err instanceof Error ? err.message : err}`);
-      this.audioSource = null;
-      this.outboundStream = null;
-      return { stream: null };
-    }
   }
 
   private closeOutboundAudio(): void {
