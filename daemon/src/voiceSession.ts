@@ -1287,7 +1287,7 @@ export class VoiceSession {
       this.tts = createTts(request, {
         onOpen: () => {
           if (!this.isTurnActive(token)) return;
-          this.send(daemonToPhone.ttsStart(useTrack ? WEBRTC_SAMPLE_RATE : TTS_SAMPLE_RATE));
+          this.send(daemonToPhone.ttsStart(useTrack ? WEBRTC_SAMPLE_RATE : STT_SAMPLE_RATE));
         },
         onAudio: (pcm) => {
           if (!this.isTurnActive(token)) return;
@@ -1308,8 +1308,10 @@ export class VoiceSession {
           }
           // Replay retention overflow must not cut off live connected
           // data-channel audio; only reconnect replay is dropped.
-          // Chunk TTS audio and send with pacing for ESP32 SCTP buffer compatibility.
-          this.sendBinary(audio.chunk);
+          // Resample from TTS_SAMPLE_RATE (24kHz) to STT_SAMPLE_RATE (16kHz)
+          // to match the ESP32's codec playback rate.
+          const resampled = resamplePcm(Buffer.from(audio.chunk), TTS_SAMPLE_RATE, STT_SAMPLE_RATE);
+          this.sendBinary(new Uint8Array(resampled));
         },
         onDone: () => {
           if (!this.isTurnActive(token)) return;
