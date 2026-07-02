@@ -1520,6 +1520,8 @@ export class VoiceSession {
     if (this.ttsPumping) return;
     this.ttsPumping = true;
     try {
+      // Initial delay before first chunk — let ESP32 process tts.start
+      await new Promise<void>(r => setTimeout(r, 200));
       while (this.ttsPumpQueue.length > 0) {
         const chunk = this.ttsPumpQueue.shift()!;
         if (!this.sendBinary(chunk)) {
