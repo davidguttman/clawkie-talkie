@@ -245,6 +245,7 @@ export class VoiceSession {
   private audioPumpAwaitingDone = false;
   private rawRemainder: Buffer = Buffer.alloc(0);
   private resampledRemainder: Buffer = Buffer.alloc(0);
+  private sampleRateForTts: number = TTS_SAMPLE_RATE; // tracks the active TTS output rate
   private closing = false;
   private ttsSelection: TtsSelection = {};
   private sttSelection: SttSelection = {};
@@ -822,6 +823,10 @@ export class VoiceSession {
       void this.sendNewSessionCreateResponse(msg);
       return;
     }
+    if (msg.t === 'session.preview') {
+      void this.speakSessionPreview(msg.sessionId);
+      return;
+    }
     if (msg.t === 'stt.start') {
       this.resetTurn('stt_restart');
       // Routing is room-bound — ignore any payload on stt.start.
@@ -904,6 +909,26 @@ export class VoiceSession {
     if (!this.recentSessionsInterval) return;
     clearInterval(this.recentSessionsInterval);
     this.recentSessionsInterval = null;
+  }
+
+  // Speak a session's display label as TTS without running a chat turn.
+  // Used by screenless clients (the Pi walkie-talkie) to voice the session
+  // they stepped onto with switch blips. Skips while a live turn is in
+  // flight; a new preview replaces an unfinished one (turn token bump).
+  private async speakSessionPreview(sessionId: string): Promise<void> {
+    try {
+      if (this.state.turnInFlight && !this.tts) return;
+      const loadSessions = this.opts.recentSessionsProvider ?? (() => defaultRecentSessionsCache.get());
+      const snapshot = await loadSessions();
+      const label = (snapshot.sessions ?? []).find((s) => s.sessionId === sessionId)?.displayLabel?.trim();
+      if (!label) return;
+      if (this.state.turnInFlight && !this.tts) return; // re-check after await
+      console.log(`[voice ${this.roomId}] session preview: ${label}`);
+      const token = this.beginTurn();
+      void this.openTtsAsync(label, token);
+    } catch (err) {
+      console.error(`[voice ${this.roomId}] session preview failed: ${sanitizedErrorMessage(err)}`);
+    }
   }
 
   private async sendRecentSessions(format: 'list' | 'catalog' = 'list'): Promise<void> {
@@ -1203,10 +1228,11 @@ export class VoiceSession {
     if (turn.replayOnReconnect) return;
     while (turn.liveDataCursor < turn.chunks.length) {
       const chunk = turn.chunks[turn.liveDataCursor];
-      // Resample from TTS_SAMPLE_RATE (24kHz) to STT_SAMPLE_RATE (16kHz)
-      // to match the ESP32's codec playback rate.
-      const resampled = resamplePcm(chunk, TTS_SAMPLE_RATE, STT_SAMPLE_RATE);
-      if (!this.sendBinary(new Uint8Array(resampled))) {
+      // Resample only when TTS output is not already at the data channel rate
+      const chunkToSend = this.sampleRateForTts === STT_SAMPLE_RATE
+        ? chunk
+        : resamplePcm(chunk, TTS_SAMPLE_RATE, STT_SAMPLE_RATE);
+      if (!this.sendBinary(new Uint8Array(chunkToSend))) {
         if (turn.started) {
           this.abandonTtsAudioTurn(token);
         } else {
@@ -1287,6 +1313,14 @@ export class VoiceSession {
       const useTrack = !!this.audioSource;
       const createTts = this.opts.ttsSessionFactory ?? ((opts, cb) => new OpenClawInferTtsSession(opts, cb));
       const request = buildTtsSessionRequest(text, this.ttsSelection, { catalog });
+      // When sending via data channel (not WebRTC audio track), request 16kHz PCM
+      // directly from the TTS engine to skip the 24kHz→16kHz resample step.
+      if (!useTrack) {
+        request.sampleRate = STT_SAMPLE_RATE;
+        this.sampleRateForTts = STT_SAMPLE_RATE;
+      } else {
+        this.sampleRateForTts = TTS_SAMPLE_RATE;
+      }
       this.tts = createTts(request, {
         onOpen: () => {
           if (!this.isTurnActive(token)) return;
@@ -1311,10 +1345,14 @@ export class VoiceSession {
           }
           // Replay retention overflow must not cut off live connected
           // data-channel audio; only reconnect replay is dropped.
-          // Resample from TTS_SAMPLE_RATE (24kHz) to STT_SAMPLE_RATE (16kHz)
-          // to match the ESP32's codec playback rate.
-          const resampled = resamplePcm(Buffer.from(audio.chunk), TTS_SAMPLE_RATE, STT_SAMPLE_RATE);
-          this.sendBinary(new Uint8Array(resampled));
+          // When TTS generates at 16kHz directly (data channel mode),
+          // no resampling is needed.
+          if (this.sampleRateForTts === STT_SAMPLE_RATE) {
+            this.sendBinary(new Uint8Array(audio.chunk));
+          } else {
+            const resampled = resamplePcm(Buffer.from(audio.chunk), TTS_SAMPLE_RATE, STT_SAMPLE_RATE);
+            this.sendBinary(new Uint8Array(resampled));
+          }
         },
         onDone: () => {
           if (!this.isTurnActive(token)) return;
@@ -1552,7 +1590,7 @@ export function buildTtsSessionRequest(
   text: string,
   selection: TtsSelection,
   options: { catalog?: TtsCatalog | null } = {},
-): { text: string; model?: string; voice?: string } {
+): { text: string; model?: string; voice?: string; sampleRate?: number } {
   const model = ttsModelOverride(selection);
   const providerId = trimmedString(selection.providerId);
   const voice = trimmedString(selection.voice);

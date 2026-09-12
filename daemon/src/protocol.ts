@@ -234,6 +234,7 @@ export type PhoneToDaemon =
   | { t: 'sessions.list.subscribe' }
   | { t: 'sessions.list.unsubscribe' }
   | { t: 'sessions.destinations.request' }
+  | { t: 'session.preview'; sessionId: string }
   | {
       t: 'sessions.create.request';
       requestId: string;
@@ -315,6 +316,7 @@ export const phoneToDaemon = {
   sessionsListSubscribe: (): PhoneToDaemon => ({ t: 'sessions.list.subscribe' }),
   sessionsListUnsubscribe: (): PhoneToDaemon => ({ t: 'sessions.list.unsubscribe' }),
   sessionsDestinationsRequest: (): PhoneToDaemon => ({ t: 'sessions.destinations.request' }),
+  sessionPreview: (sessionId: string): PhoneToDaemon => ({ t: 'session.preview', sessionId }),
   sessionsCreateRequest: (input: NewSessionCreateInput): PhoneToDaemon => ({
     t: 'sessions.create.request',
     requestId: input.requestId,
