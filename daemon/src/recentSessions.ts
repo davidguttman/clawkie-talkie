@@ -36,6 +36,7 @@ export interface BuildRecentSessionsOptions {
   generatedAt?: string;
   resolveDisplayLabel?: (session: RecentSession) => Promise<string | undefined>;
   resolveSessionPreviews?: (sessions: RecentSession[]) => Promise<RecentSessionPreviewMap | undefined>;
+  resolveSessionTitles?: (sessions: RecentSession[]) => Promise<Map<string, string> | undefined>;
   resolveSessionAccountId?: (session: RecentSession) => Promise<string | undefined> | string | undefined;
 }
 
@@ -110,6 +111,7 @@ export async function getRecentSessionsWithOpenClaw(): Promise<RecentSessionsSna
     resolveSessionAccountId: resolveOpenClawSessionAccountId,
     resolveDisplayLabel: resolveOpenClawDisplayLabel,
     resolveSessionPreviews: resolveOpenClawSessionPreviews,
+    resolveSessionTitles: resolveOpenClawSessionTitles,
   });
 }
 
@@ -144,9 +146,20 @@ export async function buildRecentSessionsFromRows(
 
   const routedSessions = await enrichRecentSessionsWithAccountIds(parsed, options.resolveSessionAccountId);
 
+  // Descriptive titles (derived by the gateway from session content — the
+  // same names the web UI sidebar shows) take precedence over per-channel
+  // labels and the cryptic session-key fallback. Batched: one gateway call.
+  let titleMap = new Map<string, string>();
+  try {
+    titleMap = (await options.resolveSessionTitles?.(routedSessions)) ?? titleMap;
+  } catch { /* fall back to labels below */ }
+
   const labeledSessions = await Promise.all(
     routedSessions.map(async (session) => {
-      const displayLabel = (await options.resolveDisplayLabel?.(session))?.trim() || session.displayLabel;
+      const derived = titleMap.get(session.sessionKey)?.trim();
+      const displayLabel = derived
+        || (await options.resolveDisplayLabel?.(session))?.trim()
+        || session.displayLabel;
       return { ...session, displayLabel };
     }),
   );
@@ -192,6 +205,45 @@ async function enrichRecentSessionsWithPreviews(
     const preview = previews.get(session.sessionKey) ?? previews.get(session.sessionId);
     return preview ? { ...session, ...preview } : session;
   });
+}
+
+// Batched derived titles: the gateway derives descriptive session names
+// from session content (the same titles the web UI sidebar shows).
+async function resolveOpenClawSessionTitles(sessions: RecentSession[]): Promise<Map<string, string> | undefined> {
+  const keys = [...new Set(sessions.map((session) => session.sessionKey).filter(Boolean))];
+  if (keys.length === 0) return undefined;
+  const stdout = await execOpenClaw([
+    'gateway',
+    'call',
+    'sessions.list',
+    '--json',
+    '--params',
+    JSON.stringify({ includeDerivedTitles: true, includeLastMessage: false }),
+  ]);
+  return extractOpenClawSessionTitles(stdout);
+}
+
+function extractOpenClawSessionTitles(stdout: string): Map<string, string> | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return undefined;
+  }
+  const rows = parsed && typeof parsed === 'object' && Array.isArray((parsed as { sessions?: unknown[] }).sessions)
+    ? (parsed as { sessions: unknown[] }).sessions
+    : Array.isArray(parsed)
+      ? parsed
+      : [];
+  const titles = new Map<string, string>();
+  for (const row of rows) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
+    const source = row as Record<string, unknown>;
+    const key = readString(source.key) ?? readString(source.sessionKey);
+    const title = readString(source.derivedTitle)?.trim();
+    if (key && title) titles.set(key, title);
+  }
+  return titles;
 }
 
 async function resolveOpenClawSessionPreviews(sessions: RecentSession[]): Promise<RecentSessionPreviewMap> {
