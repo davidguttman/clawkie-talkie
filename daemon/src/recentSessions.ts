@@ -154,16 +154,25 @@ export async function buildRecentSessionsFromRows(
     titleMap = (await options.resolveSessionTitles?.(routedSessions)) ?? titleMap;
   } catch { /* fall back to labels below */ }
 
+  // Previews resolve before labeling so the fallback chain can use them.
+  const previewedSessions = await enrichRecentSessionsWithPreviews(routedSessions, options.resolveSessionPreviews);
+
   const labeledSessions = await Promise.all(
-    routedSessions.map(async (session) => {
+    previewedSessions.map(async (session) => {
       const derived = titleMap.get(session.sessionKey)?.trim();
+      // Only prefer the preview snippet over the key fallback when the key
+      // fallback is cryptic (embeds a UUID) — 'main' stays 'main'.
+      const previewLabel = isCrypticSessionLabel(session.displayLabel)
+        ? sessionLabelFromPreview(session)
+        : undefined;
       const displayLabel = derived
         || (await options.resolveDisplayLabel?.(session))?.trim()
+        || previewLabel
         || session.displayLabel;
       return { ...session, displayLabel };
     }),
   );
-  const sessions = await enrichRecentSessionsWithPreviews(labeledSessions, options.resolveSessionPreviews);
+  const sessions = labeledSessions;
 
   return {
     generatedAt: options.generatedAt ?? new Date().toISOString(),
@@ -303,6 +312,23 @@ function buildRecentSessionPreviewFields(items: unknown[]): RecentSessionPreview
   }
   if (latestAssistant) fields.lastAssistantPreview = latestAssistant.text;
   return fields.lastMessagePreview || fields.lastAssistantPreview ? fields : undefined;
+}
+
+// A key-derived label is cryptic when it embeds a raw UUID — reading that
+// aloud is useless, and a last-message snippet reads far better.
+function isCrypticSessionLabel(label: string | undefined): boolean {
+  if (!label) return false;
+  return /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/i.test(label);
+}
+
+// Last-resort label for sessions without a derived title or channel label:
+// a truncated snippet of the last message — reads far better in TTS than the
+// raw session key ('dashboard ed921257-…').
+function sessionLabelFromPreview(session: RecentSession): string | undefined {
+  const text = (session.lastMessagePreview ?? session.lastAssistantPreview ?? '').trim();
+  if (!text) return undefined;
+  const compact = text.replace(/\s+/g, ' ');
+  return compact.length > 60 ? `${compact.slice(0, 57)}…` : compact;
 }
 
 function normalizePreviewItem(item: unknown): { role?: string; text: string } | undefined {
