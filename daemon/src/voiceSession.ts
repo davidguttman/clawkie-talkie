@@ -23,7 +23,7 @@ import { createWasmVad, type SpeechDetector, type WasmVadOptions } from './vad.j
 import { SignalClient, type SignalData } from './signal.js';
 import { classifySignal, decideForwardToLivePeer, decideIncomingSignal } from './signalKind.js';
 import { createEmptyTtsCatalog, defaultTtsCatalogCache } from './ttsCatalog.js';
-import { PushAudioChannel, type PushAudioRequest, type PushAudioResult } from './pushAudio.js';
+import { PushAudioChannel, type PushAudioRequest, type PushAudioResult, type PushSpeechRequest } from './pushAudio.js';
 import type { VoiceSessionNotificationPort } from './voiceSessionPort.js';
 import { createEmptySttCatalog, defaultSttCatalogCache } from './sttCatalog.js';
 import { createEmptyRecentSessionsSnapshot, defaultRecentSessionsCache } from './recentSessions.js';
@@ -469,6 +469,11 @@ export class VoiceSession {
    */
   pushAudioFile(req: PushAudioRequest): Promise<PushAudioResult> {
     return this.pushChannel.pushFile(this.notificationPort(), req);
+  }
+
+  /** Speak unsolicited text over the notification wire (streaming ElevenLabs). */
+  pushSpeech(req: PushSpeechRequest): Promise<PushAudioResult> {
+    return this.pushChannel.pushSpeech(this.notificationPort(), req);
   }
 
   private notificationPort(): VoiceSessionNotificationPort {

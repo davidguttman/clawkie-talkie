@@ -23,6 +23,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { basename, resolve as resolvePath } from 'node:path';
 import { daemonToPhone } from './protocol.js';
+import { ElevenLabsTtsSession } from './elevenLabsTtsSession.js';
 import type { VoiceSessionNotificationPort } from './voiceSessionPort.js';
 
 export interface PushAudioRequest {
@@ -32,9 +33,16 @@ export interface PushAudioRequest {
   label?: string;
 }
 
+export interface PushSpeechRequest {
+  /** Text to speak (generated via the streaming ElevenLabs path, 16kHz). */
+  text: string;
+  /** Optional label carried in tts.start.text (defaults to a text excerpt). */
+  label?: string;
+}
+
 export type PushAudioResult =
   | { ok: true; notificationId: number; playedMs: number }
-  | { ok: false; error: 'no_client' | 'file_missing' | 'decode_failed' | 'send_failed'; detail?: string };
+  | { ok: false; error: 'no_client' | 'file_missing' | 'decode_failed' | 'send_failed' | 'speech_failed'; detail?: string };
 
 /** Target data-channel PCM rate the Pi client plays. */
 const DATA_CHANNEL_RATE = 16_000;
@@ -47,8 +55,9 @@ export class PushAudioChannel {
   private nextNotificationId = 1;
   private playing = false;
   private retryTimer: NodeJS.Timeout | null = null;
-  private readonly queue: Array<{
-    req: PushAudioRequest;
+  private activeSpeechSession: ElevenLabsTtsSession | null = null;
+  private queue: Array<{
+    req: PushAudioRequest | PushSpeechRequest;
     port: VoiceSessionNotificationPort;
     resolve: (r: PushAudioResult) => void;
   }> = [];
@@ -66,8 +75,22 @@ export class PushAudioChannel {
     });
   }
 
+  /**
+   * Speak text as an unsolicited notification via the streaming ElevenLabs
+   * path (16kHz PCM — matches the data-channel rate, no resampling).
+   * Same never-interrupt queue rules as file pushes.
+   */
+  pushSpeech(port: VoiceSessionNotificationPort, req: PushSpeechRequest): Promise<PushAudioResult> {
+    return new Promise((res) => {
+      this.queue.push({ req, port, resolve: res });
+      this.pump();
+    });
+  }
+
   close(): void {
     if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = null; }
+    try { this.activeSpeechSession?.cancel(); } catch { /* ignore */ }
+    this.activeSpeechSession = null;
     for (const item of this.queue.splice(0)) {
       item.resolve({ ok: false, error: 'no_client', detail: 'session closing' });
     }
@@ -93,7 +116,10 @@ export class PushAudioChannel {
 
     this.queue.shift();
     this.playing = true;
-    void this.streamFile(next.req, next.port)
+    const run = 'file' in next.req
+      ? this.streamFile(next.req as PushAudioRequest, next.port)
+      : this.streamSpeech(next.req as PushSpeechRequest, next.port);
+    void run
       .then((r) => next.resolve(r))
       .finally(() => {
         this.playing = false;
@@ -108,6 +134,68 @@ export class PushAudioChannel {
       this.pump();
     }, RETRY_MS);
     this.retryTimer.unref?.();
+  }
+
+  /**
+   * Speak text over the notification wire: streaming ElevenLabs session
+   * (44.1k→16k in-session) → 100ms frames → existing TTS wire path.
+   */
+  private async streamSpeech(req: PushSpeechRequest, port: VoiceSessionNotificationPort): Promise<PushAudioResult> {
+    const text = req.text.trim();
+    if (!text) {
+      return { ok: false, error: 'speech_failed', detail: 'empty text' };
+    }
+
+    const notificationId = this.nextNotificationId++;
+    const start = daemonToPhone.ttsStart(DATA_CHANNEL_RATE, {
+      kind: 'notification',
+      notificationId,
+      text: req.label ?? text.slice(0, 80),
+    });
+    if (!port.sendControl(start)) {
+      return { ok: false, error: 'send_failed' };
+    }
+
+    const startedAt = Date.now();
+    return await new Promise<PushAudioResult>((res) => {
+      let sent = 0;
+      let settled = false;
+      const finish = (r: PushAudioResult) => {
+        if (settled) return;
+        settled = true;
+        res(r);
+      };
+      const session = new ElevenLabsTtsSession({ text }, {
+        onAudio: (pcm) => {
+          if (settled) return;
+          if (!port.sendAudio(pcm)) {
+            finish({ ok: false, error: 'send_failed' });
+            return;
+          }
+          sent += pcm.byteLength;
+        },
+        onDone: () => {
+          if (settled) return;
+          port.sendControl(daemonToPhone.ttsDone());
+          finish({ ok: true, notificationId, playedMs: Date.now() - startedAt });
+        },
+        onError: (message) => {
+          if (settled) return;
+          // No audio went out yet — abort cleanly with tts.done so the
+          // client's playback state resets, then report the failure.
+          if (sent === 0) {
+            port.sendControl(daemonToPhone.ttsDone());
+            finish({ ok: false, error: 'speech_failed', detail: message });
+            return;
+          }
+          // Partial audio played — close the stream so the client drains;
+          // report success since audio was delivered.
+          port.sendControl(daemonToPhone.ttsDone());
+          finish({ ok: true, notificationId, playedMs: Date.now() - startedAt });
+        },
+      });
+      this.activeSpeechSession = session;
+    });
   }
 
   private async streamFile(req: PushAudioRequest, port: VoiceSessionNotificationPort): Promise<PushAudioResult> {

@@ -5,6 +5,7 @@
 //
 // Wire: newline-terminated JSON per connection:
 //   {"sessionId": "<uuid>", "file": "/abs/path.mp3", "label": "song"}
+//   {"sessionId": "<uuid>", "text": "Hello from the daemon", "label": "greeting"}
 // Response: one JSON line, then close.
 //   {"ok": true, "notificationId": 3, "playedMs": 5211}
 //   {"ok": false, "error": "no_client", "detail": "..."}
@@ -36,7 +37,7 @@ export function startPushControl(peer: DaemonPeer, socketPath = process.env.CLAW
       if (nl < 0) return;
       const line = buf.slice(0, nl);
       buf = '';
-      let cmd: { sessionId?: string; file?: string; label?: string };
+      let cmd: { sessionId?: string; file?: string; text?: string; label?: string };
       try {
         cmd = JSON.parse(line);
       } catch {
@@ -45,12 +46,15 @@ export function startPushControl(peer: DaemonPeer, socketPath = process.env.CLAW
       }
       const sessionId = (cmd.sessionId ?? '').trim();
       const file = (cmd.file ?? '').trim();
-      if (!sessionId || !file) {
-        sock.end(JSON.stringify({ ok: false, error: 'missing_session_or_file' }) + '\n');
+      const text = (cmd.text ?? '').trim();
+      if (!sessionId || (!file && !text)) {
+        sock.end(JSON.stringify({ ok: false, error: 'missing_session_or_file_or_text' }) + '\n');
         return;
       }
-      void peer
-        .pushAudioFile(sessionId, { file, ...(cmd.label ? { label: cmd.label } : {}) })
+      const push = text
+        ? peer.pushSpeech(sessionId, { text, ...(cmd.label ? { label: cmd.label } : {}) })
+        : peer.pushAudioFile(sessionId, { file, ...(cmd.label ? { label: cmd.label } : {}) });
+      void push
         .then((result) => {
           sock.end(JSON.stringify(result) + '\n');
         })
