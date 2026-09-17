@@ -23,6 +23,8 @@ import { createWasmVad, type SpeechDetector, type WasmVadOptions } from './vad.j
 import { SignalClient, type SignalData } from './signal.js';
 import { classifySignal, decideForwardToLivePeer, decideIncomingSignal } from './signalKind.js';
 import { createEmptyTtsCatalog, defaultTtsCatalogCache } from './ttsCatalog.js';
+import { PushAudioChannel, type PushAudioRequest, type PushAudioResult, type PushSpeechRequest, type PushStreamRequest } from './pushAudio.js';
+import type { VoiceSessionNotificationPort } from './voiceSessionPort.js';
 import { createEmptySttCatalog, defaultSttCatalogCache } from './sttCatalog.js';
 import { createEmptyRecentSessionsSnapshot, defaultRecentSessionsCache } from './recentSessions.js';
 import {
@@ -225,6 +227,8 @@ export interface VoiceSessionRuntimeOptions {
 
 export class VoiceSession {
   readonly roomId: string;
+  /** OpenClaw session this room speaks for (join target). */
+  readonly sessionId: string;
   private readonly state: VoiceSessionState;
   private readonly signalClient: SignalClient;
   private peer: SimplePeer.Instance | null = null;
@@ -265,6 +269,7 @@ export class VoiceSession {
   private readonly controlHistory: ControlEventRecord[] = [];
   private protocolUnsupported = false;
   private ttsAudioTurn: TtsAudioTurn | null = null;
+  private readonly pushChannel = new PushAudioChannel();
   private turnSnapshot: VoiceTurnSnapshot = {
     inFlight: false,
     phase: 'idle',
@@ -273,6 +278,7 @@ export class VoiceSession {
 
   constructor(private readonly opts: VoiceSessionRuntimeOptions) {
     this.roomId = opts.roomId;
+    this.sessionId = opts.sessionId;
     this.ttsSelection = normalizeTtsSelection(opts.voiceSettings);
     this.sttSelection = normalizeSttSelection(opts.voiceSettings);
     this.state = createVoiceSessionState({
@@ -432,6 +438,7 @@ export class VoiceSession {
   close(): void {
     if (this.closing) return;
     this.closing = true;
+    this.pushChannel.close();
     this.resetTurn('voice_session_closed');
     try {
       this.peer?.destroy();
@@ -453,6 +460,49 @@ export class VoiceSession {
     }
     this.state.close();
     this.opts.onClose(this.roomId);
+  }
+
+  /**
+   * Push unsolicited audio (e.g. a local workspace file) to the connected
+   * client, outside any chat turn. Queues while the room is busy so it
+   * never interrupts a turn or an open mic. See pushAudio.ts for rules.
+   */
+  pushAudioFile(req: PushAudioRequest): Promise<PushAudioResult> {
+    return this.pushChannel.pushFile(this.notificationPort(), req);
+  }
+
+  /** Speak unsolicited text over the notification wire (streaming ElevenLabs). */
+  pushSpeech(req: PushSpeechRequest): Promise<PushAudioResult> {
+    return this.pushChannel.pushSpeech(this.notificationPort(), req);
+  }
+
+  /** Stream a live audio URL as a notification (30-min cap). */
+  pushStream(req: PushStreamRequest): Promise<PushAudioResult> {
+    return this.pushChannel.pushStream(this.notificationPort(), req);
+  }
+
+  /** Stop the in-flight notification push (e.g. client triple-tap stop). */
+  stopPush(): void {
+    this.pushChannel.requestStop();
+  }
+
+  private notificationPort(): VoiceSessionNotificationPort {
+    return {
+      isRoomQuiet: () =>
+        !this.closing && !this.state.turnInFlight && this.stt === null,
+      isConnected: () =>
+        !this.closing && !this.protocolUnsupported && this.connected && !!this.peer && !this.peer.destroyed,
+      // Connection-scoped (not recorded into catch-up history): a client
+      // that reconnects missed the notification — that is correct;
+      // notifications are ephemeral by design.
+      sendControl: (msg) => {
+        if (msg.t === 'session.snapshot') return false;
+        const peer = this.peer;
+        if (!peer || !this.connected) return false;
+        return this.sendToPeer(peer, msg);
+      },
+      sendAudio: (pcm) => this.sendBinary(pcm),
+    };
   }
 
   private acceptPhone(remoteId: string, initiator: boolean, initialSignal?: SignalPayload): void {
@@ -873,6 +923,10 @@ export class VoiceSession {
     }
     if (msg.t === 'settings.update') {
       this.applyVoiceSettings(msg.settings);
+      return;
+    }
+    if (msg.t === 'push.stop') {
+      this.stopPush();
       return;
     }
   }
