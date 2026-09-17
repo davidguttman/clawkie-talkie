@@ -144,6 +144,23 @@ function trimmedString(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
+// Stable per-browser device identity for the voice-room device lane.
+// Persisted in localStorage so refreshes/reconnects reuse the same
+// room; two devices sharing a session each get their own lane instead
+// of fighting over the session's single peer slot (2026-09-17).
+function webClientDeviceId(): string | undefined {
+  try {
+    const KEY = 'clawkie.web.deviceId';
+    const existing = window.localStorage.getItem(KEY);
+    if (existing) return existing;
+    const id = `web-${(crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`).slice(0, 24)}`;
+    window.localStorage.setItem(KEY, id);
+    return id;
+  } catch {
+    return undefined; // storage unavailable (private mode) — legacy shared room
+  }
+}
+
 function isRetryableConnectionState(status: RtcStatus, detail: string | undefined, activeRoomId: string | undefined): boolean {
   return (
     !!activeRoomId &&
@@ -560,6 +577,7 @@ export function RtcProvider({
     clientRef.current?.sendControl(
       phoneToDaemon.rendezvousJoin({
         sessionId: rendezvous.sessionId,
+        ...(webClientDeviceId() ? { deviceId: webClientDeviceId() } : {}),
         ...(rendezvous.sessionKey ? { sessionKey: rendezvous.sessionKey } : {}),
         ...(rendezvous.channel ? { channel: rendezvous.channel } : {}),
         ...(rendezvous.target ? { target: rendezvous.target } : {}),

@@ -219,6 +219,7 @@ export type PhoneToDaemon =
   | {
       t: 'rendezvous.join';
       sessionId: string;
+      deviceId?: string;
       sessionKey?: string;
       channel?: string;
       target?: string;

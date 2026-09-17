@@ -194,7 +194,12 @@ function deriveChannelFromSessionKey(sessionKey: string | undefined): string | u
 
 // Internal OpenClaw surfaces with no external chat channel. Voice turns
 // for these run without `--deliver`: the reply only goes back over TTS.
-const NON_DELIVERED_CHANNELS = new Set(['webchat', 'main']);
+// `dashboard` (Control UI sidebar sessions, sessionKey agent:main:dashboard:*)
+// and `node` (agent:main:node:*) have no external reply target — attempting
+// delivery fails resolution with openclaw_delivery_unresolved and the caller
+// hears VOICE ERROR instead of the reply (hit by the web client 2026-09-17).
+// The turn itself still writes the reply into the session transcript.
+const NON_DELIVERED_CHANNELS = new Set(['webchat', 'main', 'dashboard', 'node']);
 
 export function shouldDeliverReplyForChatTarget(opts: {
   sessionId: string;

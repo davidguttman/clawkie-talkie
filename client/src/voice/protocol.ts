@@ -22,6 +22,7 @@ export interface DeliveryTarget {
 
 export interface RendezvousJoinInput {
   sessionId: string;
+  deviceId?: string;
   sessionKey?: string;
   channel?: string;
   target?: string;
@@ -297,6 +298,7 @@ export const phoneToDaemon = {
   rendezvousJoin: (input: RendezvousJoinInput & { settings?: VoiceSettings }): PhoneToDaemon => ({
     t: 'rendezvous.join',
     sessionId: input.sessionId,
+    ...(input.deviceId ? { deviceId: input.deviceId } : {}),
     ...(input.sessionKey ? { sessionKey: input.sessionKey } : {}),
     ...(input.channel ? { channel: input.channel } : {}),
     ...(input.target ? { target: input.target } : {}),

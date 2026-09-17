@@ -42,7 +42,7 @@ I can’t create the Clawkie link: Clawkie Talkie is not installed/configured fo
 For requests like “what's my Clawkie dashboard URL?”, “give me my Clawkie dashboard link”, or “what is the Clawkie Talkie dashboard link?”, generate only this public dashboard URL shape:
 
 ```txt
-https://clawkietalkie.app/dashboard/#host=<host>
+https://clawkie-talkie.studioalight.com/dashboard/#host=<host>
 ```
 
 Use `CLAWKIE_DAEMON_HOST_ID` as `<host>`. Do not include a `session`, `sessionKey`, `channel`, `target`, or `accountId` in dashboard URLs.
@@ -56,7 +56,7 @@ Use this only when the user explicitly asks to switch/open/continue a particular
 Generate only this public handoff URL shape:
 
 ```txt
-https://clawkietalkie.app/voice#host=<host>&session=<sessionId>&sessionKey=<sessionKey>&channel=<channel>&target=<target>&accountId=<accountId>
+https://clawkie-talkie.studioalight.com/voice#host=<host>&session=<sessionId>&sessionKey=<sessionKey>&channel=<channel>&target=<target>&accountId=<accountId>
 ```
 
 `sessionKey`, `channel`, `target`, and `accountId` are optional only when those values are not visible. Include them whenever they are visible in trusted runtime/session context. `session` remains the session identity passed to `openclaw agent --session-id`; `sessionKey` selects the OpenClaw agent and can derive Discord reply/transcript routing; `channel` + `target` are the explicit originating reply route and are also used for best-effort transcript mirroring. This explicit route is provider-agnostic: for Telegram/direct-chat contexts, preserve the trusted Telegram `channel`, `target`/chat id, and `accountId` in the hash so the daemon can call OpenClaw with `--reply-channel telegram --reply-to <target> --reply-account <accountId>` and transcript mirroring can use `openclaw message send --channel telegram --target <target> --account <accountId>`. If only a session key is visible, put that key in `session` and omit `sessionKey`. For OpenClaw web chat, `session=agent:main:main` is valid only as that fallback. If `target` is included, include `channel` too.
@@ -134,7 +134,7 @@ if (channel && target) {
   params.set('target', target);
 }
 if (accountId) params.set('accountId', accountId);
-const url = `https://clawkietalkie.app/voice#${params.toString()}`;
+const url = `https://clawkie-talkie.studioalight.com/voice#${params.toString()}`;
 ```
 
 For Telegram direct-chat context with trusted values like `session=<uuid>`, `channel=telegram`, `target=chat:<id>` (or the exact target shape exposed by OpenClaw), and `accountId=<account>`, the resulting hash must include all three routing fields alongside `host` and `session`; never replace the session with `agent:main:main`.
@@ -176,7 +176,7 @@ agent:main:discord:channel:1498020851298209852
 reply:
 
 ```txt
-Switch to voice: https://clawkietalkie.app/voice#host=<configured-host>&session=c44d9502-ce71-46b1-9b15-5d548004544a&sessionKey=agent%3Amain%3Adiscord%3Achannel%3A1498020851298209852&channel=discord&target=channel%3A1498020851298209852
+Switch to voice: https://clawkie-talkie.studioalight.com/voice#host=<configured-host>&session=c44d9502-ce71-46b1-9b15-5d548004544a&sessionKey=agent%3Amain%3Adiscord%3Achannel%3A1498020851298209852&channel=discord&target=channel%3A1498020851298209852
 ```
 
 Replace `<configured-host>` with `CLAWKIE_DAEMON_HOST_ID` from the installed copy of this skill.
