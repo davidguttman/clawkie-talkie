@@ -15,6 +15,7 @@ import { wrtc } from './wrtc-patch.js';
 import SimplePeer from 'simple-peer';
 import { runChat, ChatError, shouldDeliverReplyForChatTarget, type DeliveryTarget as ChatDeliveryTarget } from './chatSession.js';
 import { OpenClawInferTtsSession, TTS_SAMPLE_RATE, type TtsSessionCallbacks, type TtsSessionOptions } from './ttsSession.js';
+import { ElevenLabsTtsSession } from './elevenLabsTtsSession.js';
 import { daemonHandshakeResponse, daemonToPhone, type ControlEventRecord, type DaemonToPhone, type DaemonToPhoneEvent, type NewSessionDestinationOption, type NewSessionDestinationsCatalog, type PhoneToDaemon, type RecentSessionsSnapshot, type SttCatalog, type SttSelection, type TtsCatalog, type TtsSelection, type VoiceSettings, type VoiceTurnSnapshot } from './protocol.js';
 import { OpenClawInferSttSession, type OpenClawInferSttSessionOptions } from './inferSttSession.js';
 import type { SttSessionCallbacks } from './sttTypes.js';
@@ -1311,7 +1312,34 @@ export class VoiceSession {
       const catalog = await this.loadTtsCatalogForTurn();
       if (!this.isTurnActive(token)) return;
       const useTrack = !!this.audioSource;
-      const createTts = this.opts.ttsSessionFactory ?? ((opts, cb) => new OpenClawInferTtsSession(opts, cb));
+      // Streaming TTS (experimental/tts-stream): pipe ElevenLabs audio as
+      // it is generated — first audio in ~1s instead of after the whole MP3
+      // is synthesized (~28s on long replies). If the stream fails before
+      // any audio (spawn/auth error), fall back to the whole-file infer path.
+      const makeStreamingTts = (opts: TtsSessionOptions, cb: TtsSessionCallbacks) => {
+        let gotAudio = false;
+        return new ElevenLabsTtsSession({
+          text: opts.text,
+          ...(opts.voice ? { voiceId: opts.voice } : {}),
+          ...(opts.model ? { modelId: opts.model } : {}),
+        }, {
+          onOpen: cb.onOpen,
+          onAudio: (pcm) => { gotAudio = true; cb.onAudio(pcm); },
+          onDone: cb.onDone,
+          onError: (message) => {
+            if (!gotAudio && this.isTurnActive(token)) {
+              console.warn(`[voice ${this.roomId}] TTS stream failed before audio (${message}) — falling back to infer convert`);
+              try { new OpenClawInferTtsSession(opts, cb); } catch { cb.onError(message); }
+            } else {
+              cb.onError(message);
+            }
+          },
+        });
+      };
+      const createTts = this.opts.ttsSessionFactory
+        ?? (process.env.ELEVENLABS_API_KEY
+          ? makeStreamingTts
+          : ((opts, cb) => new OpenClawInferTtsSession(opts, cb)));
       const request = buildTtsSessionRequest(text, this.ttsSelection, { catalog });
       // When sending via data channel (not WebRTC audio track), request 16kHz PCM
       // directly from the TTS engine to skip the 24kHz→16kHz resample step.
