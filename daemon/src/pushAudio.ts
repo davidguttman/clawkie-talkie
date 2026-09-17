@@ -74,8 +74,6 @@ export class PushAudioChannel {
   private playing = false;
   private retryTimer: NodeJS.Timeout | null = null;
   private activeSpeechSession: ElevenLabsTtsSession | null = null;
-  /** Stop request for the in-flight push (streaming URLs); null when none. */
-  private stopRequested = false;
   private queue: Array<{
     req: PushAudioRequest | PushSpeechRequest | PushStreamRequest;
     port: VoiceSessionNotificationPort;
@@ -124,6 +122,7 @@ export class PushAudioChannel {
     this.activeSpeechSession = null;
     try { this.activeStreamProc?.kill('SIGKILL'); } catch { /* ignore */ }
     this.activeStreamProc = null;
+    this.stopActive = null;
     for (const item of this.queue.splice(0)) {
       item.resolve({ ok: false, error: 'no_client', detail: 'session closing' });
     }
@@ -172,14 +171,19 @@ export class PushAudioChannel {
   }
 
   /**
-   * Client-initiated stop of the in-flight notification (streaming URL
-   * source). Resolves the push with 'stopped' and closes the client stream.
+   * Stop the in-flight push, any source. Returns true when something was
+   * playing. Callers: client tap-stop (push.stop), PTT mic-priority
+   * (stt.start cuts a playing notification — the human is about to talk),
+   * and the control door's stop command (agreed 2026-09-17).
    */
-  requestStop(): void {
-    if (!this.playing) return;
-    this.stopRequested = true;
-    try { this.activeStreamProc?.kill('SIGKILL'); } catch { /* ignore */ }
+  requestStop(): boolean {
+    if (!this.playing) return false;
+    this.stopActive?.();
+    return true;
   }
+
+  /** Source-specific stop for the in-flight push: kill decoder, close the client stream, resolve 'stopped'. */
+  private stopActive: (() => void) | null = null;
 
   private activeStreamProc: import('node:child_process').ChildProcess | null = null;
 
@@ -225,7 +229,6 @@ export class PushAudioChannel {
       '-',
     ]);
     this.activeStreamProc = ffmpeg;
-    this.stopRequested = false;
 
     // 30-minute hard cap — a stream has no natural end (agreed 2026-09-17).
     const capTimer = setTimeout(() => { try { ffmpeg.kill('SIGTERM'); } catch { /* ignore */ } }, PUSH_STREAM_MAX_MS);
@@ -238,10 +241,16 @@ export class PushAudioChannel {
       const finish = (r: PushAudioResult) => {
         if (settled) return;
         settled = true;
+        this.stopActive = null;
         clearTimeout(capTimer);
         this.activeStreamProc = null;
         try { ffmpeg.kill('SIGKILL'); } catch { /* ignore */ }
         res(r);
+      };
+      this.stopActive = () => {
+        try { ffmpeg.kill('SIGKILL'); } catch { /* ignore */ }
+        port.sendControl(daemonToPhone.ttsDone());
+        finish({ ok: false, error: 'stopped' });
       };
       ffmpeg.stdout?.on('data', (chunk: Buffer) => {
         if (settled) return;
@@ -277,11 +286,6 @@ export class PushAudioChannel {
             return;
           }
           sent += pending.length;
-        }
-        if (this.stopRequested) {
-          port.sendControl(daemonToPhone.ttsDone());
-          finish({ ok: true, notificationId, playedMs: Date.now() - startedAt, ...({ stopped: true } as object) });
-          return;
         }
         if (code !== 0 && sent === 0) {
           finish({ ok: false, error: 'stream_failed', detail: `ffmpeg exit ${code}` });
@@ -320,6 +324,7 @@ export class PushAudioChannel {
       const finish = (r: PushAudioResult) => {
         if (settled) return;
         settled = true;
+        this.stopActive = null;
         res(r);
       };
       const session = new ElevenLabsTtsSession({ text }, {
@@ -352,6 +357,11 @@ export class PushAudioChannel {
         },
       });
       this.activeSpeechSession = session;
+      this.stopActive = () => {
+        try { session.cancel(); } catch { /* ignore */ }
+        port.sendControl(daemonToPhone.ttsDone());
+        finish({ ok: false, error: 'stopped' });
+      };
     });
   }
 
@@ -389,8 +399,14 @@ export class PushAudioChannel {
       const finish = (r: PushAudioResult) => {
         if (settled) return;
         settled = true;
+        this.stopActive = null;
         try { ffmpeg.kill('SIGKILL'); } catch { /* ignore */ }
         res(r);
+      };
+      this.stopActive = () => {
+        try { ffmpeg.kill('SIGKILL'); } catch { /* ignore */ }
+        port.sendControl(daemonToPhone.ttsDone());
+        finish({ ok: false, error: 'stopped' });
       };
       ffmpeg.stdout?.on('data', (chunk: Buffer) => {
         if (settled) return;

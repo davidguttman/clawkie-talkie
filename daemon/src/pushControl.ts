@@ -7,6 +7,7 @@
 //   {"sessionId": "<uuid>", "file": "/abs/path.mp3", "label": "song"}
 //   {"sessionId": "<uuid>", "text": "Hello from the daemon", "label": "greeting"}
 //   {"sessionId": "<uuid>", "url": "https://radio.example/stream", "label": "radio"}
+//   {"sessionId": "<uuid>", "stop": true}
 // Response: one JSON line, then close.
 //   {"ok": true, "notificationId": 3, "playedMs": 5211}
 //   {"ok": false, "error": "no_client", "detail": "..."}
@@ -38,7 +39,7 @@ export function startPushControl(peer: DaemonPeer, socketPath = process.env.CLAW
       if (nl < 0) return;
       const line = buf.slice(0, nl);
       buf = '';
-      let cmd: { sessionId?: string; file?: string; text?: string; url?: string; label?: string; volume?: number };
+      let cmd: { sessionId?: string; file?: string; text?: string; url?: string; label?: string; volume?: number; stop?: boolean };
       try {
         cmd = JSON.parse(line);
       } catch {
@@ -49,8 +50,15 @@ export function startPushControl(peer: DaemonPeer, socketPath = process.env.CLAW
       const file = (cmd.file ?? '').trim();
       const text = (cmd.text ?? '').trim();
       const url = (cmd.url ?? '').trim();
-      if (!sessionId || (!file && !text && !url)) {
+      const stop = cmd.stop === true;
+      if (!sessionId || (!file && !text && !url && !stop)) {
         sock.end(JSON.stringify({ ok: false, error: 'missing_session_or_source' }) + '\n');
+        return;
+      }
+      if (stop) {
+        // Symmetric stop: {sessionId, stop:true} cuts whatever is playing.
+        const wasPlaying = peer.stopPush(sessionId);
+        sock.end(JSON.stringify({ ok: true, stopped: wasPlaying }) + '\n');
         return;
       }
       const push = url

@@ -258,6 +258,18 @@ export class DaemonPeer {
     });
   }
 
+  /**
+   * Stop the in-flight notification push for a session. Returns true when
+   * something was playing; false when idle or no room is connected.
+   */
+  stopPush(sessionId: string): boolean {
+    const wanted = sessionId.trim();
+    for (const session of this.voiceSessions.values()) {
+      if (session.sessionId === wanted) return session.stopPush();
+    }
+    return false;
+  }
+
   private acceptRendezvous(remoteId: string, initiator: boolean, initialSignal?: SignalPayload): void {
     const existing = this.rendezvousPeers.get(remoteId);
     if (existing && !existing.peer.destroyed) {

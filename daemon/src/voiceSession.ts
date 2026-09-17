@@ -482,8 +482,8 @@ export class VoiceSession {
   }
 
   /** Stop the in-flight notification push (e.g. client triple-tap stop). */
-  stopPush(): void {
-    this.pushChannel.requestStop();
+  stopPush(): boolean {
+    return this.pushChannel.requestStop();
   }
 
   private notificationPort(): VoiceSessionNotificationPort {
@@ -879,6 +879,10 @@ export class VoiceSession {
       return;
     }
     if (msg.t === 'stt.start') {
+      // Mic priority: a PTT press means the human is about to talk — cut
+      // any playing notification (radio, song) immediately (2026-09-17,
+      // after field-testing showed voice arriving over the stream).
+      this.stopPush();
       this.resetTurn('stt_restart');
       // Routing is room-bound — ignore any payload on stt.start.
       const token = this.beginTurn();
