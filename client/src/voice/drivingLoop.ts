@@ -256,7 +256,13 @@ export function useDrivingLoop(opts: DrivingLoopOptions): DrivingLoop {
       }
       if (msg.t === 'tts.start') {
         stopHoldMusicForControlMessage(msg, holdMusicRef.current);
-        if (msg.buffered === true && !ttsRef.current) {
+        // Arm a player not only for buffered replies but for push
+        // notifications (kind:'notification'): they stream PCM outside
+        // any turn, and with no player armed the binary frames fall on
+        // the floor — the browser stays silent while the Pi plays
+        // (field-tested gap, 2026-09-17 evening).
+        const isNotification = (msg as { kind?: unknown }).kind === 'notification';
+        if ((msg.buffered === true || isNotification) && !ttsRef.current) {
           runArmTts(rtcRef, ttsRef, dispatch, msg);
         }
         dispatch({
