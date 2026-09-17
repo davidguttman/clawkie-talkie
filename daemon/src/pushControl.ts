@@ -38,7 +38,7 @@ export function startPushControl(peer: DaemonPeer, socketPath = process.env.CLAW
       if (nl < 0) return;
       const line = buf.slice(0, nl);
       buf = '';
-      let cmd: { sessionId?: string; file?: string; text?: string; url?: string; label?: string };
+      let cmd: { sessionId?: string; file?: string; text?: string; url?: string; label?: string; volume?: number };
       try {
         cmd = JSON.parse(line);
       } catch {
@@ -54,7 +54,11 @@ export function startPushControl(peer: DaemonPeer, socketPath = process.env.CLAW
         return;
       }
       const push = url
-        ? peer.pushStream(sessionId, { url, ...(cmd.label ? { label: cmd.label } : {}) })
+        ? peer.pushStream(sessionId, {
+            url,
+            ...(cmd.label ? { label: cmd.label } : {}),
+            ...(typeof cmd.volume === 'number' ? { volume: cmd.volume } : {}),
+          })
         : text
           ? peer.pushSpeech(sessionId, { text, ...(cmd.label ? { label: cmd.label } : {}) })
           : peer.pushAudioFile(sessionId, { file, ...(cmd.label ? { label: cmd.label } : {}) });

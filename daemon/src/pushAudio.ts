@@ -38,6 +38,9 @@ export interface PushStreamRequest {
   url: string;
   /** Optional label carried in tts.start.text. */
   label?: string;
+  /** Playback gain 0..1 (ffmpeg volume filter). Streams default to 0.3 —
+   * they decode at full line level and otherwise blast vs TTS speech. */
+  volume?: number;
 }
 
 export interface PushSpeechRequest {
@@ -57,6 +60,10 @@ const DATA_CHANNEL_RATE = 16_000;
 const CHUNK_BYTES = (DATA_CHANNEL_RATE / 10) * 2;
 /** Hard cap for streaming-URL notifications — they have no natural end. */
 const PUSH_STREAM_MAX_MS = 30 * 60 * 1000;
+/** Default gain for streaming pushes (0..1). Radio decodes at full line
+ * level and otherwise blasts far louder than TTS speech (reported
+ * 2026-09-17: "stream volume was way too loud"). */
+const DEFAULT_STREAM_VOLUME = 0.3;
 /** How often the queue re-checks room quietness. */
 const RETRY_MS = 1_500;
 
@@ -184,6 +191,7 @@ export class PushAudioChannel {
     if (!/^https?:\/\//i.test(url)) {
       return { ok: false, error: 'stream_failed', detail: 'not an http(s) URL' };
     }
+    const volume = typeof req.volume === 'number' && req.volume > 0 && req.volume <= 1 ? req.volume : DEFAULT_STREAM_VOLUME;
 
     const notificationId = this.nextNotificationId++;
     const start = daemonToPhone.ttsStart(DATA_CHANNEL_RATE, {
@@ -202,6 +210,9 @@ export class PushAudioChannel {
       // lets the encoder settle and gives the client its jitter cushion.
       '-re',
       '-i', url,
+      // Gain: streams decode at full line level — tame them to a level
+      // comparable to TTS speech unless the push overrides it.
+      '-af', `volume=${volume}`,
       '-ac', '1',
       '-ar', String(DATA_CHANNEL_RATE),
       '-f', 's16le',
