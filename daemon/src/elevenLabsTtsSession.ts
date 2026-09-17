@@ -74,11 +74,20 @@ export class ElevenLabsTtsSession {
   }
 
   private emitChunks(flush = false): void {
+    // Accumulate into PCM_CHUNK_BYTES frames; flush emits the tail.
+    // CRITICAL: Buffer.concat's second argument is a CAP that silently
+    // discards bytes beyond it. An earlier revision passed it here, which
+    // truncated every oversized network chunk to its first 100ms, desynced
+    // pendingBytes accounting, and then emitted zero-filled (silent) frames
+    // for the phantom bytes — audible as reply audio fading in and out with
+    // heavy loss, baked into the saved recordings too (diagnosed 2026-09-17
+    // via Fredrik's clip A/B test plus a direct concat truncation test).
+    // Never pass the cap argument here.
     while (this.pendingBytes >= PCM_CHUNK_BYTES) {
-      const frame = Buffer.concat(this.pending, PCM_CHUNK_BYTES);
-      this.pending = [frame.subarray(PCM_CHUNK_BYTES)];
+      const whole = Buffer.concat(this.pending); // full concat — no cap
+      this.pending = [whole.subarray(PCM_CHUNK_BYTES)];
       this.pendingBytes -= PCM_CHUNK_BYTES;
-      if (!this.closed) this.cb.onAudio(new Uint8Array(frame.subarray(0, PCM_CHUNK_BYTES)));
+      if (!this.closed) this.cb.onAudio(new Uint8Array(whole.subarray(0, PCM_CHUNK_BYTES)));
     }
     if (flush && this.pendingBytes > 0) {
       const tail = Buffer.concat(this.pending);
