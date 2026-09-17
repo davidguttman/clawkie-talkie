@@ -220,54 +220,62 @@ export class DaemonPeer {
    * Push unsolicited audio to the voice room speaking for a session.
    * Queues while the room is busy; never interrupts. See pushAudio.ts.
    */
-  pushAudioFile(sessionId: string, req: PushAudioRequest): Promise<PushAudioResult> {
+  /** All live voice rooms speaking for a session (Pi, web, ESP32…). */
+  private sessionsFor(sessionId: string): VoiceSession[] {
     const wanted = sessionId.trim();
+    const out: VoiceSession[] = [];
     for (const session of this.voiceSessions.values()) {
-      if (session.sessionId === wanted) return session.pushAudioFile(req);
+      if (session.sessionId === wanted) out.push(session);
     }
-    return Promise.resolve({
-      ok: false,
-      error: 'no_client',
-      detail: `no active voice room for session ${wanted}`,
-    });
+    return out;
   }
 
-  /** Speak unsolicited text to the voice room for a session (notification). */
-  pushSpeech(sessionId: string, req: PushSpeechRequest): Promise<PushAudioResult> {
-    const wanted = sessionId.trim();
-    for (const session of this.voiceSessions.values()) {
-      if (session.sessionId === wanted) return session.pushSpeech(req);
-    }
-    return Promise.resolve({
-      ok: false,
-      error: 'no_client',
-      detail: `no active voice room for session ${wanted}`,
-    });
-  }
-
-  /** Stream a live audio URL to the voice room for a session (30-min cap). */
-  pushStream(sessionId: string, req: PushStreamRequest): Promise<PushAudioResult> {
-    const wanted = sessionId.trim();
-    for (const session of this.voiceSessions.values()) {
-      if (session.sessionId === wanted) return session.pushStream(req);
-    }
-    return Promise.resolve({
-      ok: false,
-      error: 'no_client',
-      detail: `no active voice room for session ${wanted}`,
-    });
+  /** Aggregate fan-out results: first success wins, else the first failure. */
+  private combinePush(results: PushAudioResult[]): PushAudioResult {
+    return results.find((r) => r.ok) ?? results[0];
   }
 
   /**
-   * Stop the in-flight notification push for a session. Returns true when
-   * something was playing; false when idle or no room is connected.
+   * Push unsolicited audio to EVERY voice room speaking for a session —
+   * the session's devices are its speakers (Pi + web client both play;
+   * disconnected rooms fail fast inside their own channels).
+   */
+  pushAudioFile(sessionId: string, req: PushAudioRequest): Promise<PushAudioResult> {
+    const targets = this.sessionsFor(sessionId);
+    if (targets.length === 0) {
+      return Promise.resolve({ ok: false, error: 'no_client', detail: `no active voice room for session ${sessionId.trim()}` });
+    }
+    return Promise.all(targets.map((s) => s.pushAudioFile(req))).then((rs) => this.combinePush(rs));
+  }
+
+  /** Speak unsolicited text to every voice room for a session (notification). */
+  pushSpeech(sessionId: string, req: PushSpeechRequest): Promise<PushAudioResult> {
+    const targets = this.sessionsFor(sessionId);
+    if (targets.length === 0) {
+      return Promise.resolve({ ok: false, error: 'no_client', detail: `no active voice room for session ${sessionId.trim()}` });
+    }
+    return Promise.all(targets.map((s) => s.pushSpeech(req))).then((rs) => this.combinePush(rs));
+  }
+
+  /** Stream a live audio URL to every voice room for a session (30-min cap). */
+  pushStream(sessionId: string, req: PushStreamRequest): Promise<PushAudioResult> {
+    const targets = this.sessionsFor(sessionId);
+    if (targets.length === 0) {
+      return Promise.resolve({ ok: false, error: 'no_client', detail: `no active voice room for session ${sessionId.trim()}` });
+    }
+    return Promise.all(targets.map((s) => s.pushStream(req))).then((rs) => this.combinePush(rs));
+  }
+
+  /**
+   * Stop the in-flight notification push for a session — every room.
+   * Returns true when something was playing anywhere.
    */
   stopPush(sessionId: string): boolean {
-    const wanted = sessionId.trim();
-    for (const session of this.voiceSessions.values()) {
-      if (session.sessionId === wanted) return session.stopPush();
+    let stopped = false;
+    for (const session of this.sessionsFor(sessionId)) {
+      if (session.stopPush()) stopped = true;
     }
-    return false;
+    return stopped;
   }
 
   private acceptRendezvous(remoteId: string, initiator: boolean, initialSignal?: SignalPayload): void {
