@@ -13,10 +13,19 @@
 // long replies before any audio).
 
 import { Readable } from 'node:stream';
+import { spawn, type ChildProcess } from 'node:child_process';
 
 export const ELEVENLABS_TTS_SAMPLE_RATE = 16000;
 const PCM_CHUNK_BYTES = 3200; // 100 ms of mono PCM16 at 16 kHz
 const API_BASE = 'https://api.elevenlabs.io/v1';
+// The API's native rate is 44.1kHz. Asking for pcm_16000 makes ElevenLabs
+// downsample server-side — audibly different from the old non-streaming
+// path, which decoded full 44.1kHz audio and resampled with ffmpeg. To
+// match that fidelity we stream pcm_44100 and run the same ffmpeg
+// resample in-daemon, as a persistent pipe: HTTP chunk in, 16kHz chunk
+// out (first converted byte measured at 0.91s).
+const STREAM_INPUT_RATE = 44100;
+const RESAMPLE_RATE = 16000;
 
 // OpenClaw's configured speaker voice (gateway tts.providers.elevenlabs.
 // speakerVoiceId) — what the previous convert path spoke with.
@@ -43,6 +52,7 @@ export class ElevenLabsTtsSession {
   private openedFired = false;
   private pending: Buffer[] = [];
   private pendingBytes = 0;
+  private ffmpeg: ChildProcess | null = null;
 
   constructor(
     private readonly opts: ElevenLabsTtsSessionOptions,
@@ -54,6 +64,7 @@ export class ElevenLabsTtsSession {
   cancel(): void {
     if (this.closed) return;
     this.closed = true;
+    this.ffmpeg?.kill('SIGTERM');
     this.abortController.abort();
   }
 
@@ -96,11 +107,26 @@ export class ElevenLabsTtsSession {
     const modelId = rawModel.includes('/') ? (rawModel.split('/').pop() ?? rawModel) : rawModel;
     const rawVoice = this.opts.voiceId ?? DEFAULT_ELEVENLABS_VOICE_ID;
     const voiceId = rawVoice.includes('/') ? (rawVoice.split('/').pop() ?? rawVoice) : rawVoice;
-    const url = `${API_BASE}/text-to-speech/${encodeURIComponent(voiceId)}/stream?output_format=pcm_16000`;
+    const url = `${API_BASE}/text-to-speech/${encodeURIComponent(voiceId)}/stream?output_format=pcm_${STREAM_INPUT_RATE}`;
     const body = JSON.stringify({
       text: this.opts.text,
       model_id: modelId,
     });
+
+    // Persistent 44.1kHz→16kHz resampler pipe (same ffmpeg as the old
+    // whole-file path used, so the fidelity chain matches what the
+    // non-streaming replies produced).
+    const ffmpeg = spawn('ffmpeg', [
+      '-hide_banner', '-loglevel', 'error',
+      '-probesize', '32', '-analyzeduration', '0',
+      '-f', 's16le', '-ar', String(STREAM_INPUT_RATE), '-ac', '1',
+      '-i', 'pipe:0',
+      '-f', 's16le', '-ar', String(RESAMPLE_RATE), '-ac', '1',
+      'pipe:1',
+    ], { stdio: ['pipe', 'pipe', 'ignore'] });
+    this.ffmpeg = ffmpeg;
+    ffmpeg.stdout.on('data', (chunk: Buffer) => this.feed(chunk));
+    ffmpeg.on('error', (err: Error) => this.fail(`ffmpeg resampler failed: ${err.message}`));
 
     // One retry on transient conditions (network error, 429, 5xx). A 400
     // fails fast — the body is logged and the whole-file fallback takes it.
@@ -130,14 +156,14 @@ export class ElevenLabsTtsSession {
       if (response.ok) {
         this.cb.onOpen?.();
         this.openedFired = true;
-        const stream = Readable.fromWeb(response.body as unknown as import('node:stream/web').ReadableStream);
-        stream.on('data', (chunk: Buffer) => this.feed(chunk));
-        stream.on('end', () => {
+        const httpStream = Readable.fromWeb(response.body as unknown as import('node:stream/web').ReadableStream);
+        httpStream.pipe(ffmpeg.stdin);
+        ffmpeg.stdout.on('end', () => {
           if (this.closed) return;
           this.emitChunks(true);
           this.finish();
         });
-        stream.on('error', (err: Error) => this.fail(`stream read failed: ${err.message}`));
+        ffmpeg.stdout.on('error', (err: Error) => this.fail(`resampler read failed: ${err.message}`));
         return;
       }
 
