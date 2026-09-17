@@ -33,6 +33,13 @@ export interface PushAudioRequest {
   label?: string;
 }
 
+export interface PushStreamRequest {
+  /** HTTP(S) URL of an audio stream (radio, playlist, anything ffmpeg reads). */
+  url: string;
+  /** Optional label carried in tts.start.text. */
+  label?: string;
+}
+
 export interface PushSpeechRequest {
   /** Text to speak (generated via the streaming ElevenLabs path, 16kHz). */
   text: string;
@@ -42,12 +49,14 @@ export interface PushSpeechRequest {
 
 export type PushAudioResult =
   | { ok: true; notificationId: number; playedMs: number }
-  | { ok: false; error: 'no_client' | 'file_missing' | 'decode_failed' | 'send_failed' | 'speech_failed'; detail?: string };
+  | { ok: false; error: 'no_client' | 'file_missing' | 'decode_failed' | 'send_failed' | 'speech_failed' | 'stream_failed' | 'stopped'; detail?: string };
 
 /** Target data-channel PCM rate the Pi client plays. */
 const DATA_CHANNEL_RATE = 16_000;
 /** 100 ms of mono PCM16 at the data-channel rate. */
 const CHUNK_BYTES = (DATA_CHANNEL_RATE / 10) * 2;
+/** Hard cap for streaming-URL notifications — they have no natural end. */
+const PUSH_STREAM_MAX_MS = 30 * 60 * 1000;
 /** How often the queue re-checks room quietness. */
 const RETRY_MS = 1_500;
 
@@ -56,8 +65,10 @@ export class PushAudioChannel {
   private playing = false;
   private retryTimer: NodeJS.Timeout | null = null;
   private activeSpeechSession: ElevenLabsTtsSession | null = null;
+  /** Stop request for the in-flight push (streaming URLs); null when none. */
+  private stopRequested = false;
   private queue: Array<{
-    req: PushAudioRequest | PushSpeechRequest;
+    req: PushAudioRequest | PushSpeechRequest | PushStreamRequest;
     port: VoiceSessionNotificationPort;
     resolve: (r: PushAudioResult) => void;
   }> = [];
@@ -69,6 +80,17 @@ export class PushAudioChannel {
    * interrupt. Fails fast only for no-client / bad-file / send errors.
    */
   pushFile(port: VoiceSessionNotificationPort, req: PushAudioRequest): Promise<PushAudioResult> {
+    return new Promise((res) => {
+      this.queue.push({ req, port, resolve: res });
+      this.pump();
+    });
+  }
+
+  /**
+   * Stream a live audio URL (radio etc.) as a notification. The stream has
+   * no natural end — it plays until the 30-minute cap or a stop control.
+   */
+  pushStream(port: VoiceSessionNotificationPort, req: PushStreamRequest): Promise<PushAudioResult> {
     return new Promise((res) => {
       this.queue.push({ req, port, resolve: res });
       this.pump();
@@ -91,6 +113,8 @@ export class PushAudioChannel {
     if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = null; }
     try { this.activeSpeechSession?.cancel(); } catch { /* ignore */ }
     this.activeSpeechSession = null;
+    try { this.activeStreamProc?.kill('SIGKILL'); } catch { /* ignore */ }
+    this.activeStreamProc = null;
     for (const item of this.queue.splice(0)) {
       item.resolve({ ok: false, error: 'no_client', detail: 'session closing' });
     }
@@ -118,7 +142,9 @@ export class PushAudioChannel {
     this.playing = true;
     const run = 'file' in next.req
       ? this.streamFile(next.req as PushAudioRequest, next.port)
-      : this.streamSpeech(next.req as PushSpeechRequest, next.port);
+      : 'text' in next.req
+        ? this.streamSpeech(next.req as PushSpeechRequest, next.port)
+        : this.streamUrl(next.req as PushStreamRequest, next.port);
     void run
       .then((r) => next.resolve(r))
       .finally(() => {
@@ -134,6 +160,120 @@ export class PushAudioChannel {
       this.pump();
     }, RETRY_MS);
     this.retryTimer.unref?.();
+  }
+
+  /**
+   * Client-initiated stop of the in-flight notification (streaming URL
+   * source). Resolves the push with 'stopped' and closes the client stream.
+   */
+  requestStop(): void {
+    if (!this.playing) return;
+    this.stopRequested = true;
+    try { this.activeStreamProc?.kill('SIGKILL'); } catch { /* ignore */ }
+  }
+
+  private activeStreamProc: import('node:child_process').ChildProcess | null = null;
+
+  /**
+   * Live audio URL source: ffmpeg reads the network stream, resamples to
+   * 16k mono s16le, chunks to 100ms frames. Streams have no natural end —
+   * playback runs until the 30-minute cap (PUSH_STREAM_MAX_MS) or a stop.
+   */
+  private async streamUrl(req: PushStreamRequest, port: VoiceSessionNotificationPort): Promise<PushAudioResult> {
+    const url = req.url.trim();
+    if (!/^https?:\/\//i.test(url)) {
+      return { ok: false, error: 'stream_failed', detail: 'not an http(s) URL' };
+    }
+
+    const notificationId = this.nextNotificationId++;
+    const start = daemonToPhone.ttsStart(DATA_CHANNEL_RATE, {
+      kind: 'notification',
+      notificationId,
+      text: req.label ?? url,
+    });
+    if (!port.sendControl(start)) {
+      return { ok: false, error: 'send_failed' };
+    }
+
+    const startedAt = Date.now();
+    const ffmpeg = spawn('ffmpeg', [
+      '-v', 'error',
+      // Network sources can start mid-word or in silence; a little lead-in
+      // lets the encoder settle and gives the client its jitter cushion.
+      '-re',
+      '-i', url,
+      '-ac', '1',
+      '-ar', String(DATA_CHANNEL_RATE),
+      '-f', 's16le',
+      '-',
+    ]);
+    this.activeStreamProc = ffmpeg;
+    this.stopRequested = false;
+
+    // 30-minute hard cap — a stream has no natural end (agreed 2026-09-17).
+    const capTimer = setTimeout(() => { try { ffmpeg.kill('SIGTERM'); } catch { /* ignore */ } }, PUSH_STREAM_MAX_MS);
+    capTimer.unref?.();
+
+    return await new Promise<PushAudioResult>((res) => {
+      let sent = 0;
+      let pending = Buffer.alloc(0);
+      let settled = false;
+      const finish = (r: PushAudioResult) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(capTimer);
+        this.activeStreamProc = null;
+        try { ffmpeg.kill('SIGKILL'); } catch { /* ignore */ }
+        res(r);
+      };
+      ffmpeg.stdout?.on('data', (chunk: Buffer) => {
+        if (settled) return;
+        pending = Buffer.concat([pending, chunk]);
+        while (pending.length >= CHUNK_BYTES) {
+          const frame = pending.subarray(0, CHUNK_BYTES);
+          pending = pending.subarray(CHUNK_BYTES);
+          if (!port.sendAudio(new Uint8Array(frame))) {
+            finish({ ok: false, error: 'send_failed' });
+            return;
+          }
+          sent += frame.length;
+        }
+      });
+      ffmpeg.stderr?.on('data', (d: Buffer) => {
+        const text = d.toString().trim();
+        if (text) console.error(`[push-audio] ffmpeg(stream): ${text}`);
+      });
+      ffmpeg.on('error', (err) => {
+        if (settled) return;
+        if (sent === 0) {
+          finish({ ok: false, error: 'stream_failed', detail: err.message });
+        } else {
+          port.sendControl(daemonToPhone.ttsDone());
+          finish({ ok: true, notificationId, playedMs: Date.now() - startedAt });
+        }
+      });
+      ffmpeg.on('close', (code) => {
+        if (settled) return;
+        if (pending.length > 0) {
+          if (!port.sendAudio(new Uint8Array(pending))) {
+            finish({ ok: false, error: 'send_failed' });
+            return;
+          }
+          sent += pending.length;
+        }
+        if (this.stopRequested) {
+          port.sendControl(daemonToPhone.ttsDone());
+          finish({ ok: true, notificationId, playedMs: Date.now() - startedAt, ...({ stopped: true } as object) });
+          return;
+        }
+        if (code !== 0 && sent === 0) {
+          finish({ ok: false, error: 'stream_failed', detail: `ffmpeg exit ${code}` });
+          return;
+        }
+        port.sendControl(daemonToPhone.ttsDone());
+        finish({ ok: true, notificationId, playedMs: Date.now() - startedAt });
+      });
+    });
   }
 
   /**

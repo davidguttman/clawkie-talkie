@@ -228,6 +228,7 @@ export type PhoneToDaemon =
       settings?: VoiceSettings;
     }
   | { t: 'settings.update'; settings: VoiceSettings }
+  | { t: 'push.stop' }
   | { t: 'tts.catalog.request' }
   | { t: 'stt.catalog.request' }
   | { t: 'sessions.list.request' }

@@ -39,7 +39,7 @@ import {
   type NewSessionCreateRequestLike,
 } from './newSession.js';
 import { createEmptyTtsCatalog, defaultTtsCatalogCache } from './ttsCatalog.js';
-import type { PushAudioRequest, PushAudioResult, PushSpeechRequest } from './pushAudio.js';
+import type { PushAudioRequest, PushAudioResult, PushSpeechRequest, PushStreamRequest } from './pushAudio.js';
 import { createEmptySttCatalog, defaultSttCatalogCache } from './sttCatalog.js';
 import { DEFAULT_SIGNAL_SERVER } from './signalServer.js';
 import { makeVoiceRoomId } from './voiceRoom.js';
@@ -237,6 +237,19 @@ export class DaemonPeer {
     const wanted = sessionId.trim();
     for (const session of this.voiceSessions.values()) {
       if (session.sessionId === wanted) return session.pushSpeech(req);
+    }
+    return Promise.resolve({
+      ok: false,
+      error: 'no_client',
+      detail: `no active voice room for session ${wanted}`,
+    });
+  }
+
+  /** Stream a live audio URL to the voice room for a session (30-min cap). */
+  pushStream(sessionId: string, req: PushStreamRequest): Promise<PushAudioResult> {
+    const wanted = sessionId.trim();
+    for (const session of this.voiceSessions.values()) {
+      if (session.sessionId === wanted) return session.pushStream(req);
     }
     return Promise.resolve({
       ok: false,

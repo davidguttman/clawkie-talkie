@@ -23,7 +23,7 @@ import { createWasmVad, type SpeechDetector, type WasmVadOptions } from './vad.j
 import { SignalClient, type SignalData } from './signal.js';
 import { classifySignal, decideForwardToLivePeer, decideIncomingSignal } from './signalKind.js';
 import { createEmptyTtsCatalog, defaultTtsCatalogCache } from './ttsCatalog.js';
-import { PushAudioChannel, type PushAudioRequest, type PushAudioResult, type PushSpeechRequest } from './pushAudio.js';
+import { PushAudioChannel, type PushAudioRequest, type PushAudioResult, type PushSpeechRequest, type PushStreamRequest } from './pushAudio.js';
 import type { VoiceSessionNotificationPort } from './voiceSessionPort.js';
 import { createEmptySttCatalog, defaultSttCatalogCache } from './sttCatalog.js';
 import { createEmptyRecentSessionsSnapshot, defaultRecentSessionsCache } from './recentSessions.js';
@@ -476,6 +476,16 @@ export class VoiceSession {
     return this.pushChannel.pushSpeech(this.notificationPort(), req);
   }
 
+  /** Stream a live audio URL as a notification (30-min cap). */
+  pushStream(req: PushStreamRequest): Promise<PushAudioResult> {
+    return this.pushChannel.pushStream(this.notificationPort(), req);
+  }
+
+  /** Stop the in-flight notification push (e.g. client triple-tap stop). */
+  stopPush(): void {
+    this.pushChannel.requestStop();
+  }
+
   private notificationPort(): VoiceSessionNotificationPort {
     return {
       isRoomQuiet: () =>
@@ -913,6 +923,10 @@ export class VoiceSession {
     }
     if (msg.t === 'settings.update') {
       this.applyVoiceSettings(msg.settings);
+      return;
+    }
+    if (msg.t === 'push.stop') {
+      this.stopPush();
       return;
     }
   }
