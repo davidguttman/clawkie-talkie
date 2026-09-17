@@ -61,9 +61,11 @@ const CHUNK_BYTES = (DATA_CHANNEL_RATE / 10) * 2;
 /** Hard cap for streaming-URL notifications — they have no natural end. */
 const PUSH_STREAM_MAX_MS = 30 * 60 * 1000;
 /** Default gain for streaming pushes (0..1). Radio decodes at full line
- * level and otherwise blasts far louder than TTS speech (reported
- * 2026-09-17: "stream volume was way too loud"). */
-const DEFAULT_STREAM_VOLUME = 0.3;
+ * level; linear 0.3 still read as "way too loud" against TTS speech in
+ * field testing (2026-09-17): continuous music energy dominates even when
+ * LUFS-measured below speech (radio -20 LUFS vs speech -17.4 at 0.3).
+ * 0.15 puts streams at true background level; per-push volume overrides. */
+const DEFAULT_STREAM_VOLUME = 0.15;
 /** How often the queue re-checks room quietness. */
 const RETRY_MS = 1_500;
 
