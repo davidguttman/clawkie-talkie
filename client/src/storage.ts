@@ -79,7 +79,7 @@ export const DEFAULT_MUSIC_SETTINGS: MusicSettings = {
 
 export const DEFAULT_SETTINGS: Settings = {
   voice: '',
-  tts: {},
+  tts: { providerId: 'elevenlabs', model: 'eleven_v3' },
   stt: {},
   music: DEFAULT_MUSIC_SETTINGS,
   ...DEFAULT_EXPORT_SETTINGS,
@@ -421,8 +421,8 @@ function normalizeHostPeerId(value: unknown): string | undefined {
 
 function normalizeTtsSelection(value: unknown, legacyVoice: unknown): TtsSelection {
   const source = (value && typeof value === 'object') ? (value as Record<string, unknown>) : {};
-  const providerId = normalizeOptionalString(source.providerId);
-  const model = normalizeOptionalString(source.model);
+  const providerId = normalizeOptionalString(source.providerId) ?? 'elevenlabs';
+  const model = normalizeOptionalString(source.model) ?? 'eleven_v3';
   const voice = normalizeOptionalString(source.voice) ?? normalizeOptionalString(legacyVoice);
   return {
     ...(providerId ? { providerId } : {}),

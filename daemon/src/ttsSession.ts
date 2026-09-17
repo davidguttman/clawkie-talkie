@@ -17,9 +17,14 @@ import {
   type OpenClawInferExec,
 } from './openclawInfer.js';
 
-export const TTS_SAMPLE_RATE = 24000;
+export const TTS_SAMPLE_RATE = 24000;       // default — used for WebRTC audio track
+export const TTS_DATA_CHANNEL_RATE = 16000; // Pi client data channel rate
 const FFMPEG_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
-const PCM_CHUNK_BYTES = 4_800; // 100 ms of mono PCM16 at 24 kHz
+
+// Chunk size adapts to the requested sample rate (100 ms of mono PCM16)
+function pcmChunkBytes(sampleRate: number): number {
+  return Math.floor(sampleRate / 10) * 2;
+}
 
 export interface TtsSessionOptions {
   text: string;
@@ -100,8 +105,9 @@ export class OpenClawInferTtsSession {
       if (this.closed) return;
 
       this.cb.onOpen?.();
-      for (let offset = 0; offset < pcm.byteLength && !this.closed; offset += PCM_CHUNK_BYTES) {
-        this.cb.onAudio(new Uint8Array(pcm.subarray(offset, offset + PCM_CHUNK_BYTES)));
+      const chunkSize = pcmChunkBytes(this.sampleRate);
+      for (let offset = 0; offset < pcm.byteLength && !this.closed; offset += chunkSize) {
+        this.cb.onAudio(new Uint8Array(pcm.subarray(offset, offset + chunkSize)));
       }
       if (this.closed) return;
       this.finish();
