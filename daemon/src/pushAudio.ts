@@ -200,6 +200,10 @@ export class PushAudioChannel {
       kind: 'notification',
       notificationId,
       text: req.label ?? url,
+      // Live streams are ephemeral radio — do not record them on the
+      // client (a 30-min dump is pointless storage burn, and a live
+      // broadcast is not replayable) — agreed 2026-09-17.
+      noRecord: true,
     });
     if (!port.sendControl(start)) {
       return { ok: false, error: 'send_failed' };

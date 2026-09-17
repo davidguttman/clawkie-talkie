@@ -264,7 +264,7 @@ export type DaemonToPhoneEvent =
   | { t: 'reply.start'; text: string }
   | { t: 'reply.done'; text: string }
   | { t: 'reply.error'; message: string }
-  | { t: 'tts.start'; sample_rate: number; buffered?: boolean; turnId?: number; text?: string; kind?: 'turn' | 'notification'; notificationId?: number }
+  | { t: 'tts.start'; sample_rate: number; buffered?: boolean; turnId?: number; text?: string; kind?: 'turn' | 'notification'; notificationId?: number; noRecord?: boolean }
   | { t: 'tts.catalog'; catalog: TtsCatalog }
   | { t: 'stt.catalog'; catalog: SttCatalog }
   | { t: 'sessions.list'; generatedAt: string; sessions: RecentSession[] }
@@ -385,7 +385,7 @@ export const daemonToPhone = {
   replyError: (message: string): DaemonToPhone => ({ t: 'reply.error', message }),
   ttsStart: (
     sampleRate: number,
-    options: { buffered?: boolean; turnId?: number; text?: string; kind?: 'turn' | 'notification'; notificationId?: number } = {},
+    options: { buffered?: boolean; turnId?: number; text?: string; kind?: 'turn' | 'notification'; notificationId?: number; noRecord?: boolean } = {},
   ): DaemonToPhone => ({
     t: 'tts.start',
     sample_rate: sampleRate,
@@ -394,6 +394,7 @@ export const daemonToPhone = {
     ...(options.text ? { text: options.text } : {}),
     ...(options.kind ? { kind: options.kind } : {}),
     ...(typeof options.notificationId === 'number' ? { notificationId: options.notificationId } : {}),
+    ...(options.noRecord ? { noRecord: true } : {}),
   }),
   ttsCatalog: (catalog: TtsCatalog): DaemonToPhone => ({ t: 'tts.catalog', catalog }),
   sttCatalog: (catalog: SttCatalog): DaemonToPhone => ({ t: 'stt.catalog', catalog }),
