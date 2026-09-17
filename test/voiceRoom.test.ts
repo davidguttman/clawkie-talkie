@@ -20,4 +20,15 @@ describe('voice room derivation', () => {
       daemonMakeVoiceRoomId({ hostPeerId: 'host-123', sessionId: 'session-b' }),
     );
   });
+
+  it('gives each device its own lane for the same session', () => {
+    const base = { hostPeerId: 'host-123', sessionId: 'session-a' };
+    const piRoom = daemonMakeVoiceRoomId({ ...base, deviceId: 'clawcarry' });
+    const webRoom = daemonMakeVoiceRoomId({ ...base, deviceId: 'web-abc123' });
+    const legacyRoom = daemonMakeVoiceRoomId(base);
+    expect(piRoom).not.toBe(webRoom);
+    expect(piRoom).not.toBe(legacyRoom);
+    expect(webRoom).not.toBe(legacyRoom);
+    expect(clientMakeVoiceRoomId({ ...base, deviceId: 'clawcarry' })).toBe(piRoom);
+  });
 });

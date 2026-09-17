@@ -325,7 +325,7 @@ export class DaemonPeer {
 
     // Poll for data channel readiness (for web client that uses data channel)
     rp.channelPoll = setInterval(() => {
-      if (rp.joined) { clearInterval(rp.channelPoll); return; }
+      if (rp.joined) { if (rp.channelPoll) clearInterval(rp.channelPoll); return; }
       const p = peer as unknown as { _channel?: { readyState: string } };
       const ch = p._channel;
       if (ch && ch.readyState === 'open' && !rp.connected) {
@@ -512,6 +512,7 @@ export class DaemonPeer {
     if (rp.joinFallback) { clearTimeout(rp.joinFallback); rp.joinFallback = null; }
     rp.joined = true;
     const sessionId = (msg.sessionId ?? '').trim();
+    const deviceId = (msg.deviceId ?? '').trim();
     const sessionKey = (msg.sessionKey ?? '').trim();
     const channel = (msg.channel ?? '').trim();
     const target = (msg.target ?? '').trim();
@@ -527,7 +528,11 @@ export class DaemonPeer {
     }
     const delivery = deliveryValidation.delivery;
 
-    const roomId = makeVoiceRoomId({ hostPeerId: this.opts.peerId, sessionId });
+    const roomId = makeVoiceRoomId({
+      hostPeerId: this.opts.peerId,
+      sessionId,
+      ...(deviceId ? { deviceId } : {}),
+    });
 
     if (!this.ensureVoiceSessionCapacityFor(roomId)) {
       this.sendRendezvous(rp, daemonToPhone.rendezvousError('too_many_voice_sessions'));
