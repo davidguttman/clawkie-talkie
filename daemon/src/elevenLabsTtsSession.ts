@@ -89,11 +89,17 @@ export class ElevenLabsTtsSession {
       this.fail('ELEVENLABS_API_KEY missing from daemon environment');
       return;
     }
-    const voiceId = this.opts.voiceId ?? DEFAULT_ELEVENLABS_VOICE_ID;
+    // The daemon's TtsSelection packs OpenClaw's 'provider/model' composite
+    // (e.g. 'elevenlabs/eleven_v3'). The API wants the bare id — 'eleven_v3'.
+    // Reproduced 2026-09-17: composite → HTTP 400 invalid voice, bare → 200.
+    const rawModel = this.opts.modelId ?? 'eleven_v3';
+    const modelId = rawModel.includes('/') ? (rawModel.split('/').pop() ?? rawModel) : rawModel;
+    const rawVoice = this.opts.voiceId ?? DEFAULT_ELEVENLABS_VOICE_ID;
+    const voiceId = rawVoice.includes('/') ? (rawVoice.split('/').pop() ?? rawVoice) : rawVoice;
     const url = `${API_BASE}/text-to-speech/${encodeURIComponent(voiceId)}/stream?output_format=pcm_16000`;
     const body = JSON.stringify({
       text: this.opts.text,
-      model_id: this.opts.modelId ?? 'eleven_v3',
+      model_id: modelId,
     });
 
     // One retry on transient conditions (network error, 429, 5xx). A 400
