@@ -18,6 +18,13 @@ import { spawn, type ChildProcess } from 'node:child_process';
 export const ELEVENLABS_TTS_SAMPLE_RATE = 16000;
 const PCM_CHUNK_BYTES = 3200; // 100 ms of mono PCM16 at 16 kHz
 const API_BASE = 'https://api.elevenlabs.io/v1';
+// eleven_v3 on the stream endpoint embeds multi-second silences in its
+// output — measured 12.1s cumulative silence in a 22.3s clip, gaps to
+// 1.8s (2026-09-17), audible as clipping/fade-outs both live and in the
+// saved recording. eleven_flash_v2_5 is the low-latency streaming model:
+// same voice, zero gaps >=500ms, ~1.1s generation. The daemon always
+// streams with flash; the whole-file fallback keeps the configured model.
+const STREAM_MODEL = 'eleven_flash_v2_5';
 // The API's native rate is 44.1kHz. Asking for pcm_16000 makes ElevenLabs
 // downsample server-side — audibly different from the old non-streaming
 // path, which decoded full 44.1kHz audio and resampled with ffmpeg. To
@@ -101,10 +108,10 @@ export class ElevenLabsTtsSession {
       return;
     }
     // The daemon's TtsSelection packs OpenClaw's 'provider/model' composite
-    // (e.g. 'elevenlabs/eleven_v3'). The API wants the bare id — 'eleven_v3'.
-    // Reproduced 2026-09-17: composite → HTTP 400 invalid voice, bare → 200.
-    const rawModel = this.opts.modelId ?? 'eleven_v3';
-    const modelId = rawModel.includes('/') ? (rawModel.split('/').pop() ?? rawModel) : rawModel;
+    // (e.g. 'elevenlabs/eleven_v3'). Normalized here for reference, but the
+    // stream always uses STREAM_MODEL (flash) — see note above.
+    const rawModel = this.opts.modelId ?? STREAM_MODEL;
+    const modelId = STREAM_MODEL;
     const rawVoice = this.opts.voiceId ?? DEFAULT_ELEVENLABS_VOICE_ID;
     const voiceId = rawVoice.includes('/') ? (rawVoice.split('/').pop() ?? rawVoice) : rawVoice;
     const url = `${API_BASE}/text-to-speech/${encodeURIComponent(voiceId)}/stream?output_format=pcm_${STREAM_INPUT_RATE}`;
