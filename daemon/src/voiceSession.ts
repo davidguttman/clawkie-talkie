@@ -278,12 +278,27 @@ export class VoiceSession {
    * over a reply's still-draining burst (2026-09-18). */
   private audioDrainUntilMs = 0;
 
-  /** Track sent-audio bytes for the drain watermark. */
+  /** Cumulative audio bytes sent since the current drain anchor. */
+  private audioSentSinceAnchorBytes = 0;
+  /** When the current drain backlog began (first byte after idle). */
+  private audioDrainAnchorMs = 0;
+
+  /** Track sent-audio bytes for the drain watermark. Chunks arrive in bursts
+   * faster than realtime (26s of speech sent in ~6s), so the watermark must
+   * measure the CUMULATIVE backlog since an anchor — a per-chunk duration
+   * never adds up and the queue releases ~19s early (field 2026-09-18:
+   * radio started at 10:34:57 while the speech played until 10:35:16). */
   private noteAudioSent(byteLength: number): void {
     if (byteLength <= 0) return;
-    const playMs = (byteLength / (STT_SAMPLE_RATE * 2)) * 1000;
-    const until = Date.now() + playMs;
-    if (until > this.audioDrainUntilMs) this.audioDrainUntilMs = until;
+    const now = Date.now();
+    if (this.audioDrainUntilMs <= now) {
+      // Previous backlog fully drained (or none) — re-anchor at now.
+      this.audioSentSinceAnchorBytes = 0;
+      this.audioDrainAnchorMs = now;
+    }
+    this.audioSentSinceAnchorBytes += byteLength;
+    const playMs = (this.audioSentSinceAnchorBytes / (STT_SAMPLE_RATE * 2)) * 1000;
+    this.audioDrainUntilMs = this.audioDrainAnchorMs + playMs;
   }
   private turnSnapshot: VoiceTurnSnapshot = {
     inFlight: false,
