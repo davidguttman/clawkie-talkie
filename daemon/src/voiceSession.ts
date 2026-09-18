@@ -270,6 +270,21 @@ export class VoiceSession {
   private protocolUnsupported = false;
   private ttsAudioTurn: TtsAudioTurn | null = null;
   private readonly pushChannel = new PushAudioChannel();
+
+  /** Client-drain watermark: epoch ms until the client has plausibly finished
+   * PLAYING everything sent so far (bytes consumed at 16k realtime). Updated
+   * by noteAudioSent on every binary audio send; cleared by mic-priority and
+   * on teardown. The push queue gates on this so notifications never dequeue
+   * over a reply's still-draining burst (2026-09-18). */
+  private audioDrainUntilMs = 0;
+
+  /** Track sent-audio bytes for the drain watermark. */
+  private noteAudioSent(byteLength: number): void {
+    if (byteLength <= 0) return;
+    const playMs = (byteLength / (STT_SAMPLE_RATE * 2)) * 1000;
+    const until = Date.now() + playMs;
+    if (until > this.audioDrainUntilMs) this.audioDrainUntilMs = until;
+  }
   private turnSnapshot: VoiceTurnSnapshot = {
     inFlight: false,
     phase: 'idle',
@@ -489,7 +504,14 @@ export class VoiceSession {
   private notificationPort(): VoiceSessionNotificationPort {
     return {
       isRoomQuiet: () =>
-        !this.closing && !this.state.turnInFlight && this.stt === null,
+        !this.closing && !this.state.turnInFlight && this.stt === null &&
+        // Client drain awareness: burst-delivered audio (a reply sent in ~2s)
+        // keeps PLAYING on the client long after the daemon finished sending.
+        // A notification dequeued the moment sending ends plays over the tail
+        // (field 2026-09-18: radio started while the reply was still sounding
+        // — 'everything playing at the same time'). Hold the queue until the
+        // client has consumed the audio at realtime (see noteAudioSent).
+        Date.now() >= this.audioDrainUntilMs,
       isConnected: () =>
         !this.closing && !this.protocolUnsupported && this.connected && !!this.peer && !this.peer.destroyed,
       // Connection-scoped (not recorded into catch-up history): a client
@@ -883,6 +905,9 @@ export class VoiceSession {
       // any playing notification (radio, song) immediately (2026-09-17,
       // after field-testing showed voice arriving over the stream).
       this.stopPush();
+      // The client kills playback on press (client-side mic priority,
+      // 2026-09-18) — the audio it was draining no longer matters.
+      this.audioDrainUntilMs = 0;
       this.resetTurn('stt_restart');
       // Routing is room-bound — ignore any payload on stt.start.
       const token = this.beginTurn();
@@ -1622,6 +1647,7 @@ export class VoiceSession {
   }
 
   private sendBinary(pcm: Uint8Array): boolean {
+    this.noteAudioSent(pcm.byteLength);
     if (this.protocolUnsupported) return false;
     const peer = this.peer;
     if (!peer || !this.connected) return false;
