@@ -522,6 +522,7 @@ function parseOpenClawSessionRow(row: unknown): RecentSession | null {
     ?? readString(source.account)
     ?? readString(source.lastAccountId)
     ?? readString(source.lastAccount);
+  const color = readString(source.color);
 
   return {
     sessionId,
@@ -530,6 +531,7 @@ function parseOpenClawSessionRow(row: unknown): RecentSession | null {
     channel,
     target,
     ...(accountId ? { accountId } : {}),
+    ...(color ? { color } : {}),
     lastActivity,
     displayLabel: buildFallbackDisplayLabel(sessionKey),
   };

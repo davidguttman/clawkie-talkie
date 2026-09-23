@@ -91,6 +91,11 @@ export interface RecentSession {
   accountId?: string;
   lastActivity?: string;
   displayLabel: string;
+  /** Sidebar accent colour set in the Control UI (one of the eight palette
+   * ids: red, blue, green, yellow, purple, orange, pink, cyan). Served by the
+   * gateway's session catalog; rides along sessions.list so clients such as
+   * the Pi status light can show which session is addressed. */
+  color?: string;
   lastMessagePreview?: string;
   lastMessageRole?: string;
   lastAssistantPreview?: string;
