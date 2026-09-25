@@ -438,7 +438,19 @@ export class VoiceSession {
 
   applyVoiceSettings(settings: VoiceSettings | null | undefined): void {
     this.touchActivity();
-    this.ttsSelection = normalizeTtsSelection(settings);
+    // Merge, don't replace: an incoming settings.update WITHOUT a voice (or
+    // model) means "no preference" — the client is re-declaring its baseline
+    // on every lane rebuild, not asking for a reset. Port-applied voices
+    // survive rebuilds this way (field-verified 2026-09-25: the Pi's
+    // voiceless settings.update on data channel open otherwise wiped the
+    // dynamically-set voice back to the daemon default mid-conversation).
+    // Explicit reset = the control port's reset:true.
+    const incoming = normalizeTtsSelection(settings);
+    this.ttsSelection = {
+      providerId: incoming.providerId ?? this.ttsSelection.providerId,
+      model: incoming.model ?? this.ttsSelection.model,
+      voice: incoming.voice ?? this.ttsSelection.voice,
+    };
     this.sttSelection = normalizeSttSelection(settings);
   }
 
