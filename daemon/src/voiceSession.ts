@@ -442,6 +442,49 @@ export class VoiceSession {
     this.sttSelection = normalizeSttSelection(settings);
   }
 
+  // --- Live TTS volume (voice control port) --------------------------------
+  // Session state in dB, applied in the daemon's PCM forward path so every
+  // client (Pi, web, ESP32) receives pre-scaled audio — device-agnostic by
+  // construction. 0 = neutral: field-tuned device calibration on the client
+  // side is untouched. ElevenLabs exposes no volume parameter in
+  // voice_settings, so the code framework is the right (and only) layer.
+  private ttsGainDb = 0;
+
+  /** Set absolute TTS gain (dB), clamped to [-30, +12]. Returns the value
+   *  actually in effect. */
+  applyTtsVolume(gainDb: number): number {
+    const clamped = Math.min(12, Math.max(-30, Number.isFinite(gainDb) ? gainDb : 0));
+    if (clamped !== this.ttsGainDb) {
+      this.ttsGainDb = clamped;
+      console.log('[voice ' + this.roomId + '] TTS volume -> ' + (clamped >= 0 ? '+' : '') + clamped.toFixed(1) + ' dB');
+    }
+    return clamped;
+  }
+
+  /** Relative TTS gain step (dB). Returns the clamped value in effect. */
+  adjustTtsVolume(deltaDb: number): number {
+    return this.applyTtsVolume(this.ttsGainDb + deltaDb);
+  }
+
+  get ttsVolumeDb(): number {
+    return this.ttsGainDb;
+  }
+
+  /** Scale S16_LE PCM by the session TTS gain; untouched at 0 dB. */
+  private gainPcm(pcm: Uint8Array): Buffer {
+    if (this.ttsGainDb === 0 || pcm.length < 2) {
+      return Buffer.isBuffer(pcm) ? pcm : Buffer.from(pcm);
+    }
+    const src = Buffer.isBuffer(pcm) ? pcm : Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+    const k = Math.pow(10, this.ttsGainDb / 20);
+    const out = Buffer.allocUnsafe(src.length);
+    for (let i = 0; i + 1 < src.length; i += 2) {
+      const s = Math.round(src.readInt16LE(i) * k);
+      out.writeInt16LE(s > 32767 ? 32767 : s < -32768 ? -32768 : s, i);
+    }
+    return out;
+  }
+
   touchActivity(atMs = Date.now()): void {
     this.lastUsedAtMsValue = atMs;
   }
@@ -538,7 +581,7 @@ export class VoiceSession {
         if (!peer || !this.connected) return false;
         return this.sendToPeer(peer, msg);
       },
-      sendAudio: (pcm) => this.sendBinary(pcm),
+      sendAudio: (pcm) => this.sendBinary(this.gainPcm(pcm)),
     };
   }
 
@@ -1454,7 +1497,7 @@ export class VoiceSession {
         },
         onAudio: (pcm) => {
           if (!this.isTurnActive(token)) return;
-          const audio = this.appendTtsAudioPcm(token, pcm);
+          const audio = this.appendTtsAudioPcm(token, this.gainPcm(pcm));
           if (!audio) return;
           if (useTrack) {
             const turn = this.ttsAudioTurn;

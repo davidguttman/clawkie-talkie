@@ -248,6 +248,26 @@ export class DaemonPeer {
     return { ok: true, applied: targets.length };
   }
 
+  /** Set/adjust live TTS volume (dB) for a session's voice rooms — voice
+   *  control port. Absolute gainDb or relative adjustDb, clamped per session
+   *  ([-30, +12]). Returns the resulting gain (targets all match). */
+  setTtsVolume(sessionId: string, opts: { gainDb?: number; adjustDb?: number }): { ok: boolean; applied?: number; gainDb?: number; error?: string; detail?: string } {
+    const wanted = sessionId.trim();
+    const targets = wanted ? this.sessionsFor(wanted) : [...this.voiceSessions.values()];
+    if (targets.length === 0) {
+      return { ok: false, error: 'no_client', detail: 'no active voice room' + (wanted ? ' for session ' + wanted : '') };
+    }
+    let resultDb = 0;
+    for (const session of targets) {
+      resultDb = typeof opts.gainDb === 'number'
+        ? session.applyTtsVolume(opts.gainDb)
+        : typeof opts.adjustDb === 'number'
+          ? session.adjustTtsVolume(opts.adjustDb)
+          : session.ttsVolumeDb;
+    }
+    return { ok: true, applied: targets.length, gainDb: resultDb };
+  }
+
   /** Aggregate fan-out results: first success wins, else the first failure. */
   private combinePush(results: PushAudioResult[]): PushAudioResult {
     return results.find((r) => r.ok) ?? results[0];
