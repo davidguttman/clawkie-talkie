@@ -236,7 +236,7 @@ export class DaemonPeer {
    * Empty sessionId applies to every active voice room. Returns a JSON
    * result record for the control socket.
    */
-  applyVoiceSettings(sessionId: string, settings: Record<string, unknown>): { ok: boolean; applied?: number; error?: string; detail?: string } {
+  applyVoiceSettings(sessionId: string, settings: Record<string, unknown>, force = false): { ok: boolean; applied?: number; error?: string; detail?: string } {
     const wanted = sessionId.trim();
     const targets = wanted
       ? this.sessionsFor(wanted)
@@ -244,7 +244,7 @@ export class DaemonPeer {
     if (targets.length === 0) {
       return { ok: false, error: 'no_client', detail: `no active voice room${wanted ? ` for session ${wanted}` : ''}` };
     }
-    for (const session of targets) session.applyVoiceSettings(settings);
+    for (const session of targets) session.applyVoiceSettings(settings, force);
     return { ok: true, applied: targets.length };
   }
 

@@ -73,7 +73,7 @@ export function startVoiceControl(peer: DaemonPeer, socketPath = process.env.CLA
         const settings = reset
           ? {}
           : { tts: { providerId: 'elevenlabs', ...(model ? { model } : {}), voice: voiceId } };
-        const vr = peer.applyVoiceSettings(sessionId, settings);
+        const vr = peer.applyVoiceSettings(sessionId, settings, reset);
         if (!vr.ok) errors.push('voice: ' + (vr.error ?? 'failed'));
         else applied = Math.max(applied, vr.applied ?? 0);
       }

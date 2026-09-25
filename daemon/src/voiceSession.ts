@@ -436,8 +436,14 @@ export class VoiceSession {
     this.signalClient.subscribe();
   }
 
-  applyVoiceSettings(settings: VoiceSettings | null | undefined): void {
+  applyVoiceSettings(settings: VoiceSettings | null | undefined, force = false): void {
     this.touchActivity();
+    if (force) {
+      // Explicit reset from the control port: replace the selection entirely.
+      this.ttsSelection = normalizeTtsSelection(settings);
+      this.sttSelection = normalizeSttSelection(settings);
+      return;
+    }
     // Merge, don't replace: an incoming settings.update WITHOUT a voice (or
     // model) means "no preference" — the client is re-declaring its baseline
     // on every lane rebuild, not asking for a reset. Port-applied voices
