@@ -230,6 +230,24 @@ export class DaemonPeer {
     return out;
   }
 
+  /**
+   * Apply TTS/STT settings LIVE to a session's voice rooms (voice control
+   * port). Raw settings pass-through — the caller owns any name→id lookup.
+   * Empty sessionId applies to every active voice room. Returns a JSON
+   * result record for the control socket.
+   */
+  applyVoiceSettings(sessionId: string, settings: Record<string, unknown>): { ok: boolean; applied?: number; error?: string; detail?: string } {
+    const wanted = sessionId.trim();
+    const targets = wanted
+      ? this.sessionsFor(wanted)
+      : [...this.voiceSessions.values()];
+    if (targets.length === 0) {
+      return { ok: false, error: 'no_client', detail: `no active voice room${wanted ? ` for session ${wanted}` : ''}` };
+    }
+    for (const session of targets) session.applyVoiceSettings(settings);
+    return { ok: true, applied: targets.length };
+  }
+
   /** Aggregate fan-out results: first success wins, else the first failure. */
   private combinePush(results: PushAudioResult[]): PushAudioResult {
     return results.find((r) => r.ok) ?? results[0];

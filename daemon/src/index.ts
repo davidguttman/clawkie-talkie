@@ -23,6 +23,7 @@ import { parseCli } from './cli.js';
 import { formatDashboardJoinUrl } from './dashboardUrl.js';
 import { defaultRecentSessionsCache } from './recentSessions.js';
 import { startPushControl } from './pushControl.js';
+import { startVoiceControl } from './voiceControl.js';
 
 // Add HH:MM:SS.mmm timestamps to all console output (matching ESP32 log format)
 const origLog = console.log;
@@ -80,6 +81,7 @@ async function main(): Promise<void> {
   // Local push-audio control door (Unix socket, loopback-only):
   // lets the agent / automations push unsolicited audio into a voice room.
   startPushControl(peer);
+  startVoiceControl(peer);
 }
 
 main().catch((err) => {
