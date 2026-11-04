@@ -16,10 +16,11 @@ Windows native packages exist for the WebRTC dependency, but this repo does not 
 ## What you need
 
 - A machine that can stay online while you want voice handoff to work.
-- Node.js and npm. Use a current Node release; Node 22 LTS or newer is recommended.
+- Node.js and npm in the range OpenClaw itself requires. OpenClaw 2026.10.10's `engines.node` is `>=24.16.0 <25 || >=26.1.0`. Node 20 and Node 22 are outside that range: `npm install` in this repo can succeed while `npm run agent-install-preflight` and OpenClaw both fail. This repo's `package.json` `engines` field matches that range so npm prints an engine warning.
 - `curl` and `unzip` for downloading the source ZIP.
 - `ffmpeg` installed and available on `PATH` for the same user/service that runs the daemon. OpenClaw TTS currently writes encoded audio, and the daemon decodes that file to PCM16LE before sending audio over WebRTC.
-- OpenClaw installed, configured, and available on `PATH` as `openclaw` for the same user that runs the daemon.
+- OpenClaw installed, configured, and available on `PATH` as `openclaw` for the same user that runs the daemon. After `npm install -g openclaw` on Linux, check `command -v openclaw`. The binary often lands in `~/.local/bin` (see `npm prefix -g`) and is missing from non-login shells and from systemd user services until that directory is on `PATH`.
+- A local gateway the CLI can call. Set `gateway.mode=local`, `gateway.bind=loopback`, and `gateway.auth.mode=token` with a `gateway.auth.token`, then run `openclaw gateway run` as the daemon user and leave it running. Without gateway auth, `openclaw agent` fails before the websocket opens (`configure gateway.auth token/password, pair this device`). That is gateway setup, not a missing model API key.
 - Working OpenClaw provider configuration for agent replies, audio transcription, and TTS. If infer audio/TTS is missing, the installer must configure or repair it before reporting success. Otherwise the daemon can start and print a Join URL, but voice turns fail: STT failures surface as `INFER ERROR · OPENCLAW INFER STT FAILED`; TTS failures surface as `TTS ERROR · OPENCLAW INFER TTS FAILED`.
 - Outbound network access to the signaling service and any OpenClaw providers you use.
 
@@ -49,16 +50,24 @@ The daemon uses `@roamhq/wrtc` for native WebRTC. Its package includes prebuilt 
 
 The currently supported install path is from this repo. There is no published npm package installer for the daemon yet.
 
-Download the v1.0.0 source ZIP from GitHub into the installing agent's own OpenClaw workspace. Do **not** create a separate generic home-directory workspace and do **not** copy paths from this repo author's machine. Use the active OpenClaw workspace for the machine being installed; if you cannot determine it, stop and ask.
+Download the v1.0.7 source ZIP from GitHub into the OpenClaw workspace for the agent that should own this install, at `external/clawkie-talkie`. Do **not** copy paths from this repo author's machine.
+
+An installing agent should discover that workspace from the active runtime. If it cannot, it should stop and ask. A human doing this by hand can resolve it locally:
 
 ```bash
-OPENCLAW_WORKSPACE="/absolute/path/to/this-openclaw-workspace"
+openclaw config get agents.defaults.workspace --json
+```
+
+If that key is unset, OpenClaw's usual default workspace is `~/.openclaw/workspace`. Any stable directory you control also works: the daemon does not have to live inside the workspace to run. Keeping the source next to that workspace makes the handoff skill and later upgrades easy to find.
+
+```bash
+OPENCLAW_WORKSPACE="${OPENCLAW_WORKSPACE:-$HOME/.openclaw/workspace}"
 CLAWKIE_SOURCE_DIR="$OPENCLAW_WORKSPACE/external/clawkie-talkie"
 
 mkdir -p "$(dirname "$CLAWKIE_SOURCE_DIR")"
 cd "$(dirname "$CLAWKIE_SOURCE_DIR")"
 curl -L -o clawkie-talkie.zip \
-  https://github.com/davidguttman/clawkie-talkie/archive/refs/tags/v1.0.0.zip
+  https://github.com/davidguttman/clawkie-talkie/archive/refs/tags/v1.0.7.zip
 unzip -q clawkie-talkie.zip
 extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkie-talkie-*' | head -n 1)
 rm -rf "$CLAWKIE_SOURCE_DIR"
@@ -335,13 +344,13 @@ There is no inbound HTTP port for the daemon to expose. It reaches the signaling
 
 ## Update later
 
-If installed from a ZIP, download the v1.0.0 ZIP and refresh the source folder. Preserve your `.env` (it lives in the repo root and is not in the ZIP, but make a backup if you keep it elsewhere):
+If installed from a ZIP, download the v1.0.7 ZIP and refresh the source folder. Preserve your `.env` (it lives in the repo root and is not in the ZIP, but make a backup if you keep it elsewhere):
 
 ```bash
 : "${CLAWKIE_SOURCE_DIR:?set this to the existing Clawkie Talkie source directory}"
 cd "$(dirname "$CLAWKIE_SOURCE_DIR")"
 curl -L -o clawkie-talkie.zip \
-  https://github.com/davidguttman/clawkie-talkie/archive/refs/tags/v1.0.0.zip
+  https://github.com/davidguttman/clawkie-talkie/archive/refs/tags/v1.0.7.zip
 cp "$CLAWKIE_SOURCE_DIR/.env" /tmp/clawkie-talkie.env.bak
 unzip -q -o clawkie-talkie.zip
 extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkie-talkie-*' | head -n 1)
@@ -384,9 +393,21 @@ openclaw status
 
 The daemon found `openclaw`, but OpenClaw is not authenticated, configured, or running for that user. Fix OpenClaw first, then restart the daemon.
 
+If the error says the gateway agent requires credentials before opening a websocket, or tells you to configure `gateway.auth` token/password and pair the device, the gateway is not ready for local CLI calls. Set:
+
+```bash
+openclaw config set gateway.mode local
+openclaw config set gateway.bind loopback
+openclaw config set gateway.auth.mode token
+# set gateway.auth.token to a secret you keep out of chat logs
+openclaw gateway run
+```
+
+`gateway.mode=local` is required for the gateway to start. `bind=loopback` keeps it on this machine. `auth.mode=token` is what the CLI needs before it will open the websocket. Run `npm run agent-install-preflight` again after the gateway is up. Plain preflight prints `SKIP` for the agent-turn check; add `--agent-turn --session-id <stored-session-id>` to exercise a real reply.
+
 ### `npm install` fails on `@roamhq/wrtc`
 
-Use Node 22 LTS or newer, then reinstall:
+Use a Node in OpenClaw's range (`>=24.16.0 <25 || >=26.1.0` for OpenClaw 2026.10.10), then reinstall:
 
 ```bash
 rm -rf node_modules

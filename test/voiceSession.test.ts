@@ -260,6 +260,27 @@ describe('voice session state', () => {
     expect(s.turnInFlight).toBe(true);
   });
 
+  it('replaces the reply route when a later join corrects the channel', () => {
+    const s = createVoiceSessionState({
+      roomId: 'host-1:session-1',
+      sessionId: 'session-1',
+      sessionKey: 'agent:main:explicit:session-1',
+      channel: 'explicit',
+    });
+
+    s.applyChatRoute({
+      sessionKey: 'agent:main:explicit:session-1',
+      channel: 'webchat',
+    });
+
+    expect(s.chatTarget()).toEqual({
+      sessionId: 'session-1',
+      sessionKey: 'agent:main:explicit:session-1',
+      channel: 'webchat',
+      delivery: undefined,
+    });
+  });
+
   it('marks a voice session closed after cleanup', () => {
     const s = createVoiceSessionState({
       roomId: 'host:s1',

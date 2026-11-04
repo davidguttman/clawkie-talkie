@@ -34,6 +34,30 @@ export type SignalAction =
   | 'buffer-candidate'
   | 'ignore';
 
+export type AnnounceDecision = 'ignore' | 'remember' | 'initiate';
+
+// The signaling server announces a new subscriber only to peers already
+// in the room. The voice-room daemon subscribes when the session is
+// created, which races the phone's subscribe right after
+// rendezvous.accept. If the phone lands first, the daemon's later
+// subscribe is announced to the phone and the daemon never learns the
+// phone is waiting, so nobody offers and the UI stays on CONNECTING.
+// The phone must offer in that case. When the daemon was already in the
+// room it is the one who sees the announce and offers; the phone does
+// not get an announce and keeps the non-initiator path.
+export function decidePeerAnnounce(input: {
+  hasLivePeer: boolean;
+  currentRemoteId: string | null;
+  announcedPeerId: string;
+}): AnnounceDecision {
+  if (!input.announcedPeerId) return 'ignore';
+  if (input.hasLivePeer) {
+    if (input.currentRemoteId && input.currentRemoteId !== input.announcedPeerId) return 'ignore';
+    return 'remember';
+  }
+  return 'initiate';
+}
+
 export function decideIncomingSignal(input: {
   hasLivePeer: boolean;
   kind: SignalKind;

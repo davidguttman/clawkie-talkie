@@ -1283,6 +1283,12 @@ function errorLabelFor(code: string): string {
   // to the user's question.
   if (code.startsWith('openclaw_infer_tts_failed')) return 'AUDIO UNAVAILABLE · REPLY IS IN THE THREAD';
   if (code === 'openclaw_auth_unavailable') return 'REPLY ERROR · OPENCLAW AUTH UNAVAILABLE';
+  if (code === 'openclaw_gateway_auth_required') {
+    return 'REPLY ERROR · OPENCLAW GATEWAY AUTH IS NOT CONFIGURED. SET GATEWAY.MODE=LOCAL, BIND=LOOPBACK, AUTH.MODE=TOKEN, THEN RUN OPENCLAW GATEWAY RUN';
+  }
+  if (code === 'openclaw_delivery_unresolved') {
+    return 'NO REPLY ROUTE · THIS SESSION HAS NO CHAT CHANNEL. ON THE DASHBOARD CHOOSE + NEW → WEB ONLY (NO CHAT CHANNEL), OR OPEN A DISCORD/SLACK SESSION';
+  }
   if (code.startsWith('xai_http_')) return `DAEMON · XAI ${code.replace('xai_http_', 'HTTP ')}`;
   if (code === 'xai_empty_reply') return 'DAEMON · XAI EMPTY REPLY';
   return `VOICE ERROR · ${code}`;

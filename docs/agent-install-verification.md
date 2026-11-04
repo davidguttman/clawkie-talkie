@@ -28,7 +28,7 @@ From the Clawkie Talkie source directory, the Node preflight can run the status 
 npm run agent-install-preflight
 ```
 
-This checks Node/npm, `openclaw --version`, `openclaw status --json`, `command -v ffmpeg`, `openclaw infer audio transcribe`, `openclaw infer tts convert`, and an `ffmpeg` MP3-to-PCM decode of the TTS output. Passing status/infer/audio-decode checks still does not prove the daemon can run an agent reply.
+This checks Node/npm, `openclaw --version`, `openclaw status --json`, `command -v ffmpeg`, `openclaw infer audio transcribe`, `openclaw infer tts convert`, and an `ffmpeg` MP3-to-PCM decode of the TTS output. It prints `SKIP openclaw-agent-turn` unless you pass `--agent-turn --session-id <stored-session-id>`. Passing status/infer/audio-decode checks still does not prove the daemon can run an agent reply.
 
 ## Manual daemon verification
 

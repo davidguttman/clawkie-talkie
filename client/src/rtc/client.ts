@@ -10,7 +10,7 @@
 
 import SimplePeer from 'simple-peer';
 import { SignalClient, type SignalData, type SignalEvent } from './signal';
-import { classifySignal, decideForwardToLivePeer, decideIncomingSignal } from './signalKind';
+import { classifySignal, decideForwardToLivePeer, decideIncomingSignal, decidePeerAnnounce } from './signalKind';
 
 const MAX_BUFFERED_CANDIDATES_PER_PEER = 32;
 
@@ -130,12 +130,17 @@ export class RtcClient {
       this.setStatus('error', `signal:${err.message}`);
     });
     this.signalClient.on('announce', ({ peerId }) => {
-      // The daemon (already in the room) is the one that initiates per
-      // the rambly convention. The phone shouldn't initiate from announce
-      // — the daemon will signal us first. We just remember who it is so
-      // we can route signals.
-      if (this.remotePeerId && this.remotePeerId !== peerId) return;
+      if (this.closed) return;
+      const decision = decidePeerAnnounce({
+        hasLivePeer: !!this.peer && !this.peer.destroyed,
+        currentRemoteId: this.remotePeerId,
+        announcedPeerId: peerId,
+      });
+      if (decision === 'ignore') return;
       this.remotePeerId = peerId;
+      // `initiate` is the race where we subscribed before the daemon's
+      // voice-room connection. Nobody else will send the offer.
+      if (decision === 'initiate') this.setupPeer(true);
     });
     this.signalClient.on('signal', (event: SignalEvent) => {
       this.handleSignal(event);

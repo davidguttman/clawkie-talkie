@@ -534,6 +534,14 @@ describe('voice reply delivery for webchat sessions', () => {
       shouldDeliverReplyForChatTarget({ sessionId: 'uuid', sessionKey: 'agent:main:webchat:session:uuid' }),
     ).toBe(false);
     expect(shouldDeliverReplyForChatTarget({ sessionId: 'agent:main:main' })).toBe(false);
+    expect(shouldDeliverReplyForChatTarget({
+      sessionId: '019e0000-0000-7000-8000-0000000000aa',
+      sessionKey: 'agent:main:explicit:019e0000-0000-7000-8000-0000000000aa',
+    })).toBe(false);
+    expect(shouldDeliverReplyForChatTarget({
+      sessionId: '019e0000-0000-7000-8000-0000000000aa',
+      channel: 'explicit',
+    })).toBe(false);
   });
 
   it('keeps mandatory delivery for external chat channels and unknown routes', () => {

@@ -420,6 +420,17 @@ export class DaemonPeer {
       });
       this.voiceSessions.set(roomId, session);
     } else {
+      // The room id is only host+session. A later join can correct the
+      // reply route (for example channel=webchat on a session first opened
+      // as OpenClaw's `explicit` key). Replace the stored route with this
+      // join, including clearing fields the new join omits.
+      existingSession.applyChatRoute({
+        sessionKey: sessionKey || undefined,
+        channel: channel || undefined,
+        target: target || undefined,
+        accountId: accountId || undefined,
+        delivery,
+      });
       // A returning phone may have changed its TTS/STT preference between
       // joins. Omitted settings on an existing session mean local Default,
       // so clear any explicit hints retained by the daemon.

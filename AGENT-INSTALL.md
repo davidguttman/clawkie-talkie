@@ -12,7 +12,7 @@ Before reporting success, verify all of this:
 2. The daemon has a stable `DAEMON_PEER_ID` in repo-root `.env`.
 3. The daemon is persistent after login/reboot through launchd or `systemd --user`.
 4. The OpenClaw `clawkie-voice-handoff` skill is installed and points at the same daemon host ID.
-5. OpenClaw infer STT and TTS work for the same OS user that runs the daemon, and `messages.tts.timeoutMs` is raised to at least `120000` so long replies don't hit the 30s default and fail with `openclaw_infer_tts_failed: fetch timeout after 30000ms`.
+5. OpenClaw infer STT and TTS work for the same OS user that runs the daemon, and top-level `tts.timeoutMs` is raised to at least `120000` so long replies don't hit the 30s default and fail with `openclaw_infer_tts_failed: fetch timeout after 30000ms`. OpenClaw 2026.10.10 rejects `messages.tts` (`messages: Unrecognized key: "tts"`).
 6. `ffmpeg` is installed and available on `PATH` for the daemon service user, because the daemon currently decodes OpenClaw TTS output into PCM before sending it over WebRTC.
 7. The daemon, skill, infer config, persistence, and OpenClaw agent-turn path are verified. See [`docs/agent-install-verification.md`](docs/agent-install-verification.md).
 8. The browser client is current by definition; if verification shows a daemon protocol/capability mismatch, update the installed daemon from the current source instead of changing the browser link.
@@ -54,7 +54,7 @@ OPENCLAW_SKILLS_DIR="${OPENCLAW_SKILLS_DIR:-$OPENCLAW_WORKSPACE/skills}"
 CLAWKIE_SKILL_DIR="$OPENCLAW_SKILLS_DIR/clawkie-voice-handoff"
 ```
 
-If the active OpenClaw workspace or skills directory cannot be determined, stop and ask the user.
+If the active OpenClaw workspace or skills directory cannot be determined, stop and ask the user. A human following the manual daemon guide instead of this agent flow can use `openclaw config get agents.defaults.workspace --json`, or `~/.openclaw/workspace` when that key is unset. See [`docs/install-daemon.md`](docs/install-daemon.md).
 
 ## Choose install mode first
 
@@ -79,7 +79,7 @@ openclaw --version || true
 openclaw status --json
 ```
 
-Use Node 22 LTS or newer when possible. Install `ffmpeg` before daemon verification if it is missing. Stop until OpenClaw 2026.4.25+ is installed and configured. After the source is present, use the repo preflight script for repeatable status/infer/agent-turn checks.
+Use a Node that satisfies OpenClaw's engines. OpenClaw 2026.10.10 requires `>=24.16.0 <25 || >=26.1.0`. Node 22 is too old for that release even when `npm install` succeeds. Install `ffmpeg` before daemon verification if it is missing. Confirm `command -v openclaw` for this user; on Linux a global npm install often places the binary in `~/.local/bin`, which is not always on `PATH` or in the systemd user service environment. Add that directory (`npm prefix -g`) to both. Stop until OpenClaw 2026.4.25+ is installed, `openclaw status --json` works, and a local gateway is running with `gateway.mode=local`, `gateway.bind=loopback`, and `gateway.auth.mode=token` (`openclaw gateway run`). After the source is present, use the repo preflight script. Plain `npm run agent-install-preflight` skips the agent-turn check and says so; pass `--agent-turn --session-id <stored-session-id>` to run it.
 
 ### 2. Fetch and inspect source
 
@@ -94,7 +94,7 @@ fi
 workdir=$(mktemp -d)
 trap 'rm -rf "$workdir"' EXIT
 cd "$workdir"
-curl -L -o clawkie-talkie.zip https://github.com/davidguttman/clawkie-talkie/archive/refs/tags/v1.0.0.zip
+curl -L -o clawkie-talkie.zip https://github.com/davidguttman/clawkie-talkie/archive/refs/tags/v1.0.7.zip
 unzip -q clawkie-talkie.zip
 extracted_dir=$(find . -maxdepth 1 -type d -name 'clawkie-talkie-*' | head -n 1)
 mkdir -p "$(dirname "$CLAWKIE_SOURCE_DIR")"

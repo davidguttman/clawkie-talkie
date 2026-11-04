@@ -2,6 +2,9 @@
   "name": "clawkie-talkie",
   "version": "1.0.7",
   "type": "module",
+  "engines": {
+    "node": ">=24.16.0 <25 || >=26.1.0"
+  },
   "description": "Walkie-talkie voice surface for an OpenClaw session",
   "scripts": {
     "predev": "npm install",
