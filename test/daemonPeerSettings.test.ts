@@ -59,6 +59,7 @@ function makeManagedVoiceSession(options: {
 }) {
   const session = {
     applyVoiceSettings: vi.fn(() => session.touchActivity()),
+    applyChatRoute: vi.fn(() => session.touchActivity()),
     close: vi.fn(),
     touchActivity: vi.fn(),
     lastUsedAtMs: options.lastUsedAtMs,
@@ -216,8 +217,10 @@ describe('DaemonPeer rendezvous voice settings', () => {
     });
     const roomId = makeVoiceRoomId({ hostPeerId: 'host-1', sessionId: 'session-1' });
     const applyVoiceSettings = vi.fn();
+    const applyChatRoute = vi.fn();
     (peer as unknown as { voiceSessions: Map<string, unknown> }).voiceSessions.set(roomId, {
       applyVoiceSettings,
+      applyChatRoute,
       touchActivity: vi.fn(),
     });
     const rendezvousPeer = makeRendezvousPeer();
@@ -234,9 +237,57 @@ describe('DaemonPeer rendezvous voice settings', () => {
     );
 
     expect(applyVoiceSettings).toHaveBeenCalledWith({});
+    expect(applyChatRoute).toHaveBeenCalledWith({
+      sessionKey: undefined,
+      channel: undefined,
+      target: undefined,
+      accountId: undefined,
+      delivery: undefined,
+    });
     expect(rendezvousPeer.peer.send).toHaveBeenCalledWith(
       JSON.stringify({ t: 'rendezvous.accept', roomId }),
     );
+
+    clearTimeout(rendezvousPeer.timeout);
+    peer.close();
+  });
+
+  it('applies a later join channel onto an existing voice room', async () => {
+    const { DaemonPeer } = await import('../daemon/src/peer');
+    const peer = new DaemonPeer({
+      peerId: 'host-1',
+      signalServer: 'https://signal.example',
+      iceServers: [],
+      onReady: vi.fn(),
+    });
+    const roomId = makeVoiceRoomId({ hostPeerId: 'host-1', sessionId: 'session-1' });
+    const applyChatRoute = vi.fn();
+    (peer as unknown as { voiceSessions: Map<string, unknown> }).voiceSessions.set(roomId, {
+      applyVoiceSettings: vi.fn(),
+      applyChatRoute,
+      touchActivity: vi.fn(),
+    });
+    const rendezvousPeer = makeRendezvousPeer();
+
+    (peer as unknown as {
+      handleRendezvousData(rp: unknown, data: unknown): void;
+    }).handleRendezvousData(
+      rendezvousPeer,
+      JSON.stringify({
+        t: 'rendezvous.join',
+        sessionId: 'session-1',
+        sessionKey: 'agent:main:explicit:session-1',
+        channel: 'webchat',
+      }),
+    );
+
+    expect(applyChatRoute).toHaveBeenCalledWith({
+      sessionKey: 'agent:main:explicit:session-1',
+      channel: 'webchat',
+      target: undefined,
+      accountId: undefined,
+      delivery: undefined,
+    });
 
     clearTimeout(rendezvousPeer.timeout);
     peer.close();

@@ -50,6 +50,11 @@ interface DaemonNegotiationState {
 
 const RECENT_SESSIONS_SUPPORT_TIMEOUT_MS = 12_000;
 const CLIENT_HELLO_FALLBACK_MS = 250;
+// A voice-room handshake that never finishes used to leave the driving
+// screen on CONNECTING forever. The daemon's offer can be missed when
+// this tab subscribes to the new room before the daemon does; retrying
+// the same room after the daemon is present completes the normal path.
+export const CONNECTING_TIMEOUT_MS = 15_000;
 const RTC_RETRY_BACKOFF_MS = [1_000, 2_500, 5_000, 10_000, 15_000] as const;
 
 export interface RtcContextValue {
@@ -512,6 +517,14 @@ export function RtcProvider({
   useEffect(() => {
     if (status === 'open') setAutoRetryAttempt(0);
   }, [status]);
+
+  useEffect(() => {
+    if (!activeRoomId || status !== 'connecting') return;
+    const timeout = setTimeout(() => {
+      setStatus((current) => (current === 'connecting' ? 'closed' : current));
+    }, CONNECTING_TIMEOUT_MS);
+    return () => clearTimeout(timeout);
+  }, [activeRoomId, retrySeq, status]);
 
   useEffect(() => {
     if (!canRetryConnection) return;

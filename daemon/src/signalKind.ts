@@ -34,6 +34,24 @@ export type SignalAction =
   | 'buffer-candidate'
   | 'ignore';
 
+export type AnnounceDecision = 'ignore' | 'remember' | 'initiate';
+
+// Mirror of client/src/rtc/signalKind.ts. The phone uses this when it
+// observes a peer that subscribed after it did. See that file for the
+// voice-room race this decision exists to break.
+export function decidePeerAnnounce(input: {
+  hasLivePeer: boolean;
+  currentRemoteId: string | null;
+  announcedPeerId: string;
+}): AnnounceDecision {
+  if (!input.announcedPeerId) return 'ignore';
+  if (input.hasLivePeer) {
+    if (input.currentRemoteId && input.currentRemoteId !== input.announcedPeerId) return 'ignore';
+    return 'remember';
+  }
+  return 'initiate';
+}
+
 export function decideIncomingSignal(input: {
   hasLivePeer: boolean;
   kind: SignalKind;

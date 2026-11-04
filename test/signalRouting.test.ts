@@ -3,12 +3,14 @@ import {
   classifySignal,
   decideForwardToLivePeer,
   decideIncomingSignal,
+  decidePeerAnnounce,
   type SdpRouteState,
 } from '../daemon/src/signalKind';
 import {
   classifySignal as classifyClient,
   decideForwardToLivePeer as decideForwardClient,
   decideIncomingSignal as decideClient,
+  decidePeerAnnounce as decidePeerAnnounceClient,
 } from '../client/src/rtc/signalKind';
 
 describe('classifySignal', () => {
@@ -90,6 +92,41 @@ describe('decideIncomingSignal', () => {
     ];
     for (const inp of inputs) {
       expect(decideClient(inp)).toBe(decideIncomingSignal(inp));
+    }
+  });
+});
+
+describe('decidePeerAnnounce', () => {
+  it('has the phone offer when it subscribed before the daemon', () => {
+    expect(decidePeerAnnounce({
+      hasLivePeer: false,
+      currentRemoteId: null,
+      announcedPeerId: 'host:session',
+    })).toBe('initiate');
+    expect(decidePeerAnnounceClient({
+      hasLivePeer: false,
+      currentRemoteId: null,
+      announcedPeerId: 'host:session',
+    })).toBe('initiate');
+  });
+
+  it('ignores a second peer once a live connection exists', () => {
+    expect(decidePeerAnnounce({
+      hasLivePeer: true,
+      currentRemoteId: 'daemon-room',
+      announcedPeerId: 'other-phone',
+    })).toBe('ignore');
+  });
+
+  it('keeps the client and daemon decisions identical', () => {
+    const cases = [
+      { hasLivePeer: false, currentRemoteId: null, announcedPeerId: 'daemon' },
+      { hasLivePeer: true, currentRemoteId: 'daemon', announcedPeerId: 'daemon' },
+      { hasLivePeer: true, currentRemoteId: 'daemon', announcedPeerId: 'other' },
+      { hasLivePeer: false, currentRemoteId: null, announcedPeerId: '' },
+    ];
+    for (const input of cases) {
+      expect(decidePeerAnnounceClient(input)).toBe(decidePeerAnnounce(input));
     }
   });
 });

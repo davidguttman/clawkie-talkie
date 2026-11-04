@@ -54,27 +54,27 @@ If infer is not configured, do **not** improvise by installing random local spee
 
 ### Raise the TTS request timeout
 
-OpenClaw's speech-core default for `messages.tts.timeoutMs` is **30000ms**. Clawkie Talkie's daemon synthesizes an entire driving reply in a single call, and longer answers routinely take more than 30 seconds from real hosted providers, which surfaces to the user as `openclaw_infer_tts_failed: fetch timeout after 30000ms` and a missing audio reply.
+OpenClaw's speech-core default for `tts.timeoutMs` is **30000ms**. Clawkie Talkie's daemon synthesizes an entire driving reply in a single call, and longer answers routinely take more than 30 seconds from real hosted providers, which surfaces to the user as `openclaw_infer_tts_failed: fetch timeout after 30000ms` and a missing audio reply.
 
 Raise the per-request budget to **120000ms** for Clawkie Talkie installs (only this Clawkie Talkie surface — do not touch chat/LLM timeouts). Do not lower an existing larger timeout:
 
 ```bash
-current_tts_timeout=$(openclaw config get messages.tts.timeoutMs --json 2>/dev/null \
+current_tts_timeout=$(openclaw config get tts.timeoutMs --json 2>/dev/null \
   | node -e "let s=''; process.stdin.on('data', d => s += d); process.stdin.on('end', () => { try { const v = JSON.parse(s || 'null'); if (typeof v === 'number') console.log(Math.floor(v)); } catch {} });")
 if [ -z "$current_tts_timeout" ] || [ "$current_tts_timeout" -lt 120000 ]; then
-  openclaw config set messages.tts.timeoutMs 120000 --strict-json
+  openclaw config set tts.timeoutMs 120000 --strict-json
 fi
 ```
 
-Confirm it stuck and that nothing else under `messages.tts` was clobbered:
+Confirm it stuck and that nothing else under `tts` was clobbered:
 
 ```bash
-openclaw config get messages.tts --json
+openclaw config get tts --json
 ```
 
-If the existing `messages.tts` block already specifies a larger value, leave it alone. Smaller values that pre-date this install must be raised to at least `120000`.
+If the existing `tts` block already specifies a larger value, leave it alone. Smaller values that pre-date this install must be raised to at least `120000`.
 
-If the installed `openclaw` build does not support `messages.tts.timeoutMs`, fix the OpenClaw install rather than working around it — the daemon has no client-side override for this timeout and the user will keep hitting the same fetch timeout.
+Set the top-level `tts.timeoutMs` key. OpenClaw 2026.10.10 rejects `messages.tts` with `messages: Unrecognized key: "tts"`. The daemon has no client-side override for this timeout.
 
 ## Repair responsibility
 
@@ -97,7 +97,7 @@ Use OpenClaw config tooling rather than hand-editing when possible. Replace plac
 
 ```bash
 openclaw config set tools.media.audio '{"enabled":true,"models":[{"type":"provider","provider":"<stt-provider>","model":"<stt-model>"}]}' --strict-json --merge
-openclaw config set messages.tts '{"provider":"<tts-provider>","timeoutMs":120000,"providers":{"<tts-provider>":{}}}' --strict-json --merge
+openclaw config set tts '{"provider":"<tts-provider>","timeoutMs":120000,"providers":{"<tts-provider>":{}}}' --strict-json --merge
 ```
 
 If the user already has OpenAI, Deepgram, ElevenLabs, Microsoft, or another supported provider configured and the smoke tests pass, keep it. If a provider uses SecretRefs, verify they resolve for the daemon's user account.
@@ -128,7 +128,7 @@ openclaw config set models.providers.openai '{"baseUrl":"https://api.openai.com/
 openclaw config set tools.media.audio '{"enabled":true,"models":[{"type":"provider","provider":"openai","model":"gpt-4o-mini-transcribe"}]}' --strict-json --merge
 
 # TTS default + auth. This is the config surface used by `openclaw infer tts convert`.
-openclaw config set messages.tts '{"provider":"openai","timeoutMs":120000,"providers":{"openai":{"apiKey":"'"$OPENAI_KEY"'","model":"gpt-4o-mini-tts","voice":"alloy"}}}' --strict-json --merge
+openclaw config set tts '{"provider":"openai","timeoutMs":120000,"providers":{"openai":{"apiKey":"'"$OPENAI_KEY"'","model":"gpt-4o-mini-tts","voice":"alloy"}}}' --strict-json --merge
 unset OPENAI_KEY
 ```
 
@@ -139,13 +139,13 @@ OpenClaw has separate xAI config surfaces. Do not collapse them into one provide
 For Clawkie Talkie:
 
 - STT uses `models.providers.xai` for xAI auth/metadata and `tools.media.audio.models` to select the transcription model.
-- TTS uses `messages.tts.provider = "xai"` and `messages.tts.providers.xai.apiKey` plus `voiceId`.
+- TTS uses `tts.provider = "xai"` and `tts.providers.xai.apiKey` plus `voiceId`.
 - xAI TTS is voice-based. `openclaw infer tts providers --json` may show xAI with `models: []`; that is not a reason to switch providers.
 - xAI TTS does **not** become configured by adding `grok-tts` to `models.providers.xai.models`.
-- If TTS conversion reports `not_configured` or falls back to Microsoft/another provider, fix `messages.tts.provider` and `messages.tts.providers.xai.apiKey` for the same process/user running the command.
+- If TTS conversion reports `not_configured` or falls back to Microsoft/another provider, fix `tts.provider` and `tts.providers.xai.apiKey` for the same process/user running the command.
 - If an xAI API key exists only under `models.providers.xai`, copy/wire the same existing key into the supported xAI TTS config surface without printing it, or report the exact blocker.
 - Microsoft or another provider passing TTS does not satisfy an xAI Clawkie Talkie install unless the user explicitly approved changing providers.
-- The TTS CLI `--model` override, if used, must be a provider/model ref such as `openai/gpt-4o-mini-tts`; `--model xai` is invalid. Prefer setting `messages.tts.provider` and smoke-testing without a model override.
+- The TTS CLI `--model` override, if used, must be a provider/model ref such as `openai/gpt-4o-mini-tts`; `--model xai` is invalid. Prefer setting `tts.provider` and smoke-testing without a model override.
 
 ```bash
 read -rsp "Paste xAI API key for this machine, then press Enter: " XAI_KEY
@@ -159,7 +159,7 @@ openclaw config set models.providers.xai '{"apiKey":"'"$XAI_KEY"'"}' --strict-js
 openclaw config set tools.media.audio '{"enabled":true,"models":[{"type":"provider","provider":"xai","model":"grok-2-vision-latest"}]}' --strict-json --merge
 
 # TTS default + auth. This is the config surface used by `openclaw infer tts convert`.
-openclaw config set messages.tts '{"provider":"xai","timeoutMs":120000,"providers":{"xai":{"apiKey":"'"$XAI_KEY"'","voiceId":"eve"}}}' --strict-json --merge
+openclaw config set tts '{"provider":"xai","timeoutMs":120000,"providers":{"xai":{"apiKey":"'"$XAI_KEY"'","voiceId":"eve"}}}' --strict-json --merge
 unset XAI_KEY
 ```
 
@@ -168,7 +168,7 @@ unset XAI_KEY
 ```bash
 TTS_PROVIDER=<configured-tts-provider>
 # Confirm the long-form TTS timeout is set (>= 120000ms recommended for Clawkie Talkie).
-openclaw config get messages.tts.timeoutMs --json
+openclaw config get tts.timeoutMs --json
 rm -f /tmp/clawkie-openclaw-infer-smoke.mp3
 openclaw infer tts voices --provider "$TTS_PROVIDER" --json || openclaw infer tts voices --json
 openclaw infer tts convert \
@@ -184,4 +184,4 @@ test -s /tmp/clawkie-openclaw-infer-smoke.pcm
 openclaw infer audio transcribe --file /tmp/clawkie-openclaw-infer-smoke.mp3 --json
 ```
 
-If TTS passes but the `ffmpeg` decode step fails, install/fix `ffmpeg` for the daemon user or service environment. If TTS passes but audio transcription fails, fix `tools.media.audio`. If audio transcription passes but TTS fails, fix `messages.tts`.
+If TTS passes but the `ffmpeg` decode step fails, install/fix `ffmpeg` for the daemon user or service environment. If TTS passes but audio transcription fails, fix `tools.media.audio`. If audio transcription passes but TTS fails, fix `tts`.

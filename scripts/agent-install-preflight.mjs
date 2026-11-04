@@ -12,7 +12,9 @@ export const REQUIRED_AGENT_SCOPES = ['operator.pairing', 'operator.read', 'oper
 const DEFAULT_AGENT_MESSAGE = 'Clawkie Talkie install smoke test. Reply with exactly: ok';
 const CHECK_TIMEOUT_MS = 60_000;
 const DEFAULT_TIMEOUT_SECONDS = 60;
-const MIN_NODE_MAJOR = 22;
+// OpenClaw 2026.10.10 package engines (npm view openclaw@2026.10.10 engines).
+// Node 22 satisfies neither side of this range. Node 25 is excluded.
+const OPENCLAW_NODE_RANGE_TEXT = '>=24.16.0 <25 || >=26.1.0';
 const MIN_OPENCLAW_VERSION = { year: 2026, month: 4, patch: 25 };
 const MIN_OPENCLAW_VERSION_TEXT = '2026.4.25';
 export const STT_SMOKE_FIXTURE_PATH = fileURLToPath(new URL('../client/public/fixtures/stt-check-hi.wav', import.meta.url));
@@ -72,6 +74,7 @@ export function usage() {
   return `Usage: node scripts/agent-install-preflight.mjs [options]
 
 Checks Node/npm, OpenClaw status, and infer STT/TTS for a Clawkie Talkie install.
+Without --agent-turn (or --session-id), the agent-turn smoke test is reported as SKIP.
 
 Agent-turn smoke command (with --session-id):
   openclaw agent --agent main --session-id <session> --json --timeout <seconds> -m <message>
@@ -166,45 +169,48 @@ export async function runPreflight(options = {}, deps = {}) {
   }
 
   const agentTurnRequested = Boolean(options.agentTurn || sessionId);
-  if (agentTurnRequested) {
-    if (!sessionId) {
-      checks.push(missingSessionIdCheck('Agent-turn smoke requested, but no real --session-id was provided.'));
-      return summarize(checks);
-    }
-
-    const replyChannel = String(options.replyChannel ?? '').trim();
-    const replyTo = String(options.replyTo ?? '').trim();
-    const replyAccount = String(options.replyAccount ?? '').trim();
-    if (options.deliver && (!replyChannel || !replyTo)) {
-      checks.push(missingReplyTargetCheck('Delivered agent-turn smoke requested, but --reply-channel and --reply-to were not provided.'));
-      return summarize(checks);
-    }
-
-    const agentArgs = [
-      'agent',
-      '--agent', 'main',
-      '--session-id', sessionId,
-    ];
-    if (options.deliver) {
-      agentArgs.push('--deliver', '--reply-channel', replyChannel, '--reply-to', replyTo);
-      if (replyAccount) agentArgs.push('--reply-account', replyAccount);
-    }
-    agentArgs.push(
-      '--json',
-      '--timeout', String(timeoutSeconds),
-      '-m', options.agentMessage || DEFAULT_AGENT_MESSAGE,
-    );
-
-    const agentTurn = await runNamedCheck('openclaw-agent-turn', {
-      command: 'openclaw',
-      args: agentArgs,
-      timeoutMs: agentCommandTimeoutMs,
-      cwd,
-      runCommand,
-    });
-    checks.push(agentTurn);
-    if (agentTurn.status !== 'pass') return summarize(checks);
+  if (!agentTurnRequested) {
+    checks.push(skippedAgentTurnCheck());
+    return summarize(checks);
   }
+
+  if (!sessionId) {
+    checks.push(missingSessionIdCheck('Agent-turn smoke requested, but no real --session-id was provided.'));
+    return summarize(checks);
+  }
+
+  const replyChannel = String(options.replyChannel ?? '').trim();
+  const replyTo = String(options.replyTo ?? '').trim();
+  const replyAccount = String(options.replyAccount ?? '').trim();
+  if (options.deliver && (!replyChannel || !replyTo)) {
+    checks.push(missingReplyTargetCheck('Delivered agent-turn smoke requested, but --reply-channel and --reply-to were not provided.'));
+    return summarize(checks);
+  }
+
+  const agentArgs = [
+    'agent',
+    '--agent', 'main',
+    '--session-id', sessionId,
+  ];
+  if (options.deliver) {
+    agentArgs.push('--deliver', '--reply-channel', replyChannel, '--reply-to', replyTo);
+    if (replyAccount) agentArgs.push('--reply-account', replyAccount);
+  }
+  agentArgs.push(
+    '--json',
+    '--timeout', String(timeoutSeconds),
+    '-m', options.agentMessage || DEFAULT_AGENT_MESSAGE,
+  );
+
+  const agentTurn = await runNamedCheck('openclaw-agent-turn', {
+    command: 'openclaw',
+    args: agentArgs,
+    timeoutMs: agentCommandTimeoutMs,
+    cwd,
+    runCommand,
+  });
+  checks.push(agentTurn);
+  if (agentTurn.status !== 'pass') return summarize(checks);
 
   return summarize(checks);
 }
@@ -215,6 +221,15 @@ function normalizeTimeoutSeconds(value) {
   const seconds = Number(value);
   if (!Number.isFinite(seconds) || seconds <= 0) return DEFAULT_TIMEOUT_SECONDS;
   return seconds;
+}
+
+function skippedAgentTurnCheck() {
+  return {
+    name: 'openclaw-agent-turn',
+    status: 'skip',
+    code: 'agent_turn_not_requested',
+    summary: 'Skipped. Re-run with --agent-turn --session-id <stored-session-id> (the OpenClaw session UUID, not a session key). Status, gateway, and infer checks do not prove a voice reply can complete.',
+  };
 }
 
 function missingSessionIdCheck(summary) {
@@ -235,30 +250,44 @@ function missingReplyTargetCheck(summary) {
   };
 }
 
+export function nodeVersionSatisfiesOpenClaw(version) {
+  const match = String(version ?? '').trim().match(/^v?(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return false;
+  const tuple = [Number(match[1]), Number(match[2]), Number(match[3])];
+  const compare = (target) => {
+    for (let i = 0; i < 3; i += 1) {
+      if (tuple[i] !== target[i]) return tuple[i] < target[i] ? -1 : 1;
+    }
+    return 0;
+  };
+  if (compare([24, 16, 0]) >= 0 && compare([25, 0, 0]) < 0) return true;
+  return compare([26, 1, 0]) >= 0;
+}
+
 function checkNodeVersion(version) {
   const text = String(version ?? '').trim();
-  const major = Number(text.split('.')[0]);
-  if (!Number.isInteger(major)) {
+  const match = text.match(/^v?(\d+)\.(\d+)\.(\d+)/);
+  if (!match) {
     return {
       name: 'node-version',
       status: 'fail',
       code: 'node_version_unparseable',
-      summary: `Could not parse Node version: ${text || '(empty)'}.`,
+      summary: `Could not parse Node version: ${text || '(empty)'}. OpenClaw requires Node ${OPENCLAW_NODE_RANGE_TEXT}.`,
     };
   }
-  if (major < MIN_NODE_MAJOR) {
+  if (!nodeVersionSatisfiesOpenClaw(text)) {
     return {
       name: 'node-version',
       status: 'fail',
       code: 'node_version_too_old',
-      summary: `Node ${text} is too old; use Node ${MIN_NODE_MAJOR} LTS or newer.`,
+      summary: `Node ${text} is outside OpenClaw's supported range (${OPENCLAW_NODE_RANGE_TEXT}). Node 22 is not enough for OpenClaw 2026.10.10.`,
     };
   }
   return {
     name: 'node-version',
     status: 'pass',
     command: 'process.versions.node',
-    summary: `Node ${text} is present.`,
+    summary: `Node ${text} satisfies OpenClaw ${OPENCLAW_NODE_RANGE_TEXT}.`,
   };
 }
 
@@ -541,19 +570,45 @@ export function classifyPreflightFailure(text) {
   }
 
   if (/\b(command not found|not found|enoent)\b/i.test(raw)) {
-    return { code: 'openclaw_unavailable', summary: 'openclaw CLI is unavailable on PATH.' };
+    return { code: 'openclaw_unavailable', summary: 'openclaw CLI is unavailable on PATH. On Linux a global npm install often lands in ~/.local/bin, which is not always on PATH. Check `npm prefix -g` and `command -v openclaw`.' };
+  }
+  const gatewayAuth = classifyGatewayAuthRequired(raw);
+  if (gatewayAuth) return gatewayAuth;
+  if (/\b(econnrefused|gateway|fetch failed|failed to connect|127\.0\.0\.1|18789)\b/i.test(raw)) {
+    return { code: 'openclaw_gateway_unavailable', summary: 'OpenClaw gateway is unreachable from this user/environment.' };
   }
   if (/\b(auth|token|credential|unauthorized|forbidden|device-auth|read-only file system|erofs)\b/i.test(raw)) {
     return { code: 'openclaw_auth_unavailable', summary: 'OpenClaw authentication is unavailable for this user/environment.' };
-  }
-  if (/\b(econnrefused|gateway|fetch failed|failed to connect|127\.0\.0\.1|18789)\b/i.test(raw)) {
-    return { code: 'openclaw_gateway_unavailable', summary: 'OpenClaw gateway is unreachable from this user/environment.' };
   }
   if (/\bdelivery channel is required\b/i.test(raw)) {
     return { code: 'openclaw_delivery_unavailable', summary: 'OpenClaw agent delivery channel is unavailable for the supplied session.' };
   }
 
   return { code: 'openclaw_failed', summary: 'OpenClaw command failed.' };
+}
+
+function classifyGatewayAuthRequired(text) {
+  const raw = String(text ?? '');
+  const lower = raw.toLowerCase();
+  const gatewayAuthMisconfigured =
+    lower.includes('gateway.auth') ||
+    lower.includes('pair this device') ||
+    /credentials before opening a websocket/.test(lower);
+  if (!gatewayAuthMisconfigured) return null;
+  const detail = firstReportLine(raw);
+  return {
+    code: 'openclaw_gateway_auth_required',
+    summary: `OpenClaw gateway auth is not configured for local agent calls${detail ? `: ${detail}` : ''}. Set gateway.mode=local, gateway.bind=loopback, and gateway.auth.mode=token (with gateway.auth.token), then run \`openclaw gateway run\` as this user.`,
+  };
+}
+
+function firstReportLine(text) {
+  const line = String(text ?? '')
+    .split('\n')
+    .map((part) => part.trim())
+    .find((part) => part.length > 0) ?? '';
+  if (line.length <= 300) return line;
+  return `${line.slice(0, 300)}…`;
 }
 
 function extractApproval(text) {
@@ -568,7 +623,7 @@ function extractApproval(text) {
 }
 
 function summarize(checks) {
-  const failed = checks.find((check) => check.status !== 'pass');
+  const failed = checks.find((check) => check.status !== 'pass' && check.status !== 'skip');
   return {
     ok: !failed,
     exitCode: failed ? (failed.code === 'openclaw_scope_approval_pending' ? 20 : 1) : 0,
@@ -628,7 +683,7 @@ function shellCommand(command, args) {
 function printHuman(result) {
   console.log('Clawkie Talkie install preflight');
   for (const check of result.checks) {
-    const mark = check.status === 'pass' ? 'PASS' : 'FAIL';
+    const mark = check.status === 'pass' ? 'PASS' : check.status === 'skip' ? 'SKIP' : 'FAIL';
     console.log(`- ${mark} ${check.name}: ${check.summary}`);
     if (check.code === 'openclaw_scope_approval_pending') {
       console.log('  Relevant gate: agent-turn smoke test, not status/infer.');

@@ -2,7 +2,7 @@ import { act, createElement, type ReactNode } from 'react';
 import type { Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ControlMessage, RtcClientOptions, RtcStatus } from '../client/src/rtc/client';
-import type { RtcContextValue, RtcRendezvous } from '../client/src/rtc/RtcContext';
+import { CONNECTING_TIMEOUT_MS, type RtcContextValue, type RtcRendezvous } from '../client/src/rtc/RtcContext';
 import { PROTOCOL_FEATURES } from '../client/src/voice/protocol';
 import type { RecentSession, SttCatalog, TtsCatalog, VoiceSettings } from '../client/src/voice/protocol';
 
@@ -1460,6 +1460,29 @@ describe('RtcProvider connection retry', () => {
 
     detachBinary();
     detachStream();
+  });
+
+  it('retries a voice handshake that stays on connecting', async () => {
+    vi.useFakeTimers();
+    const rendered = await renderRtcProvider();
+    const client = rtcMock.instances[0];
+    await act(async () => {
+      client.emitStatus('connecting');
+    });
+    expect(rendered.context().status).toBe('connecting');
+
+    await act(async () => {
+      vi.advanceTimersByTime(CONNECTING_TIMEOUT_MS);
+    });
+    expect(rendered.context().status).toBe('closed');
+    expect(rendered.context().canRetryConnection).toBe(true);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(client.closed).toBe(true);
+    expect(rtcMock.instances.length).toBeGreaterThan(1);
+    expect(rtcMock.instances.at(-1)?.connected).toBe(true);
   });
 
   it('does not retry replaced sessions automatically or manually', async () => {

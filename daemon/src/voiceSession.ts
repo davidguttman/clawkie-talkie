@@ -60,12 +60,27 @@ export interface VoiceSessionState {
   close(): void;
   readonly turnInFlight: boolean;
   readonly closed: boolean;
+  applyChatRoute(route: {
+    sessionKey?: string;
+    channel?: string;
+    target?: string;
+    accountId?: string;
+    delivery?: ChatDeliveryTarget;
+  }): void;
   chatTarget(): { sessionId: string; sessionKey?: string; channel?: string; target?: string; accountId?: string; delivery?: ChatDeliveryTarget };
 }
 
 export function createVoiceSessionState(config: VoiceSessionConfig): VoiceSessionState {
   let turnInFlight = false;
   let closed = false;
+  // Session id is the room identity and does not change. Channel/target
+  // can: a later rendezvous.join is the phone's current route, and keeping
+  // the first join's channel made `channel=webchat` on a reused room a no-op.
+  let sessionKey = config.sessionKey;
+  let channel = config.channel;
+  let target = config.target;
+  let accountId = config.accountId;
+  let delivery = config.delivery;
 
   return {
     roomId: config.roomId,
@@ -84,14 +99,21 @@ export function createVoiceSessionState(config: VoiceSessionConfig): VoiceSessio
     get closed() {
       return closed;
     },
+    applyChatRoute(route) {
+      sessionKey = route.sessionKey;
+      channel = route.channel;
+      target = route.target;
+      accountId = route.accountId;
+      delivery = route.delivery;
+    },
     chatTarget() {
       return {
         sessionId: config.sessionId,
-        ...(config.sessionKey ? { sessionKey: config.sessionKey } : {}),
-        ...(config.channel ? { channel: config.channel } : {}),
-        ...(config.target ? { target: config.target } : {}),
-        ...(config.accountId ? { accountId: config.accountId } : {}),
-        delivery: config.delivery,
+        ...(sessionKey ? { sessionKey } : {}),
+        ...(channel ? { channel } : {}),
+        ...(target ? { target } : {}),
+        ...(accountId ? { accountId } : {}),
+        delivery,
       };
     },
   };
@@ -362,6 +384,17 @@ export class VoiceSession {
     this.touchActivity();
     this.ttsSelection = normalizeTtsSelection(settings);
     this.sttSelection = normalizeSttSelection(settings);
+  }
+
+  applyChatRoute(route: {
+    sessionKey?: string;
+    channel?: string;
+    target?: string;
+    accountId?: string;
+    delivery?: ChatDeliveryTarget;
+  }): void {
+    this.touchActivity();
+    this.state.applyChatRoute(route);
   }
 
   touchActivity(atMs = Date.now()): void {

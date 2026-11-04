@@ -1,9 +1,11 @@
 // Local dev orchestrator for Clawkie-Talkie.
 //
 // Runs the two processes the stack needs:
-//   1. daemon  — peerjs host (reads XAI_API_KEY and other config from the
-//                process environment; the dev:daemon script also loads a
-//                repo-root .env if one is present, but it's optional)
+//   1. daemon  — local WebRTC/OpenClaw bridge. LLM, STT, and TTS auth
+//                live in the OpenClaw config for this user, not in a
+//                daemon XAI_API_KEY. The dev:daemon script loads a
+//                repo-root .env when one is present (DAEMON_PEER_ID and
+//                optional overrides); that file is optional.
 //   2. client  — vite dev server on http://localhost:5173
 //
 // If either process exits, the other is killed; Ctrl-C kills both.

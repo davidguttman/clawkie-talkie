@@ -7,8 +7,18 @@ import {
   parseArgs,
   REQUIRED_AGENT_SCOPES,
   STT_SMOKE_FIXTURE_PATH,
+  nodeVersionSatisfiesOpenClaw,
   runPreflight,
 } from '../scripts/agent-install-preflight.mjs';
+
+const SUPPORTED_NODE = '24.16.0';
+
+async function runInstallPreflight(
+  options: Record<string, unknown> = {},
+  deps: Record<string, unknown> = {},
+) {
+  return runPreflight(options, { nodeVersion: SUPPORTED_NODE, ...deps });
+}
 
 function successfulCommand(calls: Array<{ command: string; args: string[] }>) {
   return async (command: string, args: string[]) => {
@@ -38,7 +48,7 @@ describe('agent install preflight', () => {
     const tempRoot = await mkdtemp(join(tmpdir(), 'clawkie-preflight-test-'));
     const calls: Array<{ command: string; args: string[] }> = [];
     try {
-      const result = await runPreflight({ skipInfer: false }, {
+      const result = await runInstallPreflight({ skipInfer: false }, {
         tempRoot,
         runCommand: successfulCommand(calls),
       });
@@ -53,7 +63,13 @@ describe('agent install preflight', () => {
         'openclaw-infer-stt',
         'openclaw-infer-tts',
         'ffmpeg-tts-decode',
+        'openclaw-agent-turn',
       ]);
+      expect(result.checks.at(-1)).toMatchObject({
+        name: 'openclaw-agent-turn',
+        status: 'skip',
+        code: 'agent_turn_not_requested',
+      });
       expect(calls.some((call) => call.args[0] === 'agent')).toBe(false);
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
@@ -62,7 +78,7 @@ describe('agent install preflight', () => {
 
   it('runs agent-turn smoke without delivery by default', async () => {
     const calls: Array<{ command: string; args: string[] }> = [];
-    const result = await runPreflight({ sessionId: 'agent:main:main', skipInfer: true, timeoutSeconds: 9 }, {
+    const result = await runInstallPreflight({ sessionId: 'agent:main:main', skipInfer: true, timeoutSeconds: 9 }, {
       runCommand: successfulCommand(calls),
     });
 
@@ -81,7 +97,7 @@ describe('agent install preflight', () => {
 
   it('derives the spawned agent command timeout from --timeout', async () => {
     const calls: Array<{ command: string; args: string[]; opts?: { timeoutMs?: number } }> = [];
-    const result = await runPreflight({ sessionId: 'agent:main:main', skipInfer: true, timeoutSeconds: 9 }, {
+    const result = await runInstallPreflight({ sessionId: 'agent:main:main', skipInfer: true, timeoutSeconds: 9 }, {
       runCommand: async (command: string, args: string[], opts?: { timeoutMs?: number }) => {
         calls.push({ command, args, opts });
         return successfulCommand([])(command, args);
@@ -94,7 +110,7 @@ describe('agent install preflight', () => {
 
   it('adds --deliver with an explicit reply target only when requested', async () => {
     const calls: Array<{ command: string; args: string[] }> = [];
-    const result = await runPreflight({
+    const result = await runInstallPreflight({
       sessionId: 'agent:main:main',
       deliver: true,
       replyChannel: 'discord',
@@ -118,7 +134,7 @@ describe('agent install preflight', () => {
 
   it('fails delivered agent-turn smoke before spawning the agent when the explicit reply target is missing', async () => {
     const calls: Array<{ command: string; args: string[] }> = [];
-    const result = await runPreflight({ sessionId: 'agent:main:main', deliver: true, skipInfer: true }, {
+    const result = await runInstallPreflight({ sessionId: 'agent:main:main', deliver: true, skipInfer: true }, {
       runCommand: successfulCommand(calls),
     });
 
@@ -133,7 +149,7 @@ describe('agent install preflight', () => {
 
   it('fails before status checks when --require-agent-turn has no session id', async () => {
     const calls: Array<{ command: string; args: string[] }> = [];
-    const result = await runPreflight({ requireAgentTurn: true, skipInfer: true }, {
+    const result = await runInstallPreflight({ requireAgentTurn: true, skipInfer: true }, {
       runCommand: successfulCommand(calls),
     });
 
@@ -150,7 +166,7 @@ describe('agent install preflight', () => {
 
   it('uses openclaw status --json and validates JSON status output', async () => {
     const calls: Array<{ command: string; args: string[] }> = [];
-    const result = await runPreflight({ skipInfer: true }, {
+    const result = await runInstallPreflight({ skipInfer: true }, {
       runCommand: successfulCommand(calls),
     });
 
@@ -160,7 +176,7 @@ describe('agent install preflight', () => {
 
   it('fails before infer checks when ffmpeg is missing from PATH', async () => {
     const calls: Array<{ command: string; args: string[] }> = [];
-    const result = await runPreflight({ skipInfer: false }, {
+    const result = await runInstallPreflight({ skipInfer: false }, {
       runCommand: async (command: string, args: string[]) => {
         calls.push({ command, args });
         if (command === 'npm') return { exitCode: 0, stdout: '10.9.0\n', stderr: '' };
@@ -187,7 +203,7 @@ describe('agent install preflight', () => {
     const commandCwd = await mkdtemp(join(tmpdir(), 'clawkie-preflight-cwd-'));
     const calls: Array<{ command: string; args: string[] }> = [];
     try {
-      const result = await runPreflight({ skipInfer: false }, {
+      const result = await runInstallPreflight({ skipInfer: false }, {
         tempRoot,
         cwd: commandCwd,
         runCommand: successfulCommand(calls),
@@ -216,7 +232,7 @@ describe('agent install preflight', () => {
   it('fails the STT smoke check when infer returns an empty transcript', async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), 'clawkie-preflight-test-'));
     try {
-      const result = await runPreflight({ skipInfer: false }, {
+      const result = await runInstallPreflight({ skipInfer: false }, {
         tempRoot,
         runCommand: async (command: string, args: string[]) => {
           if (args.includes('transcribe')) {
@@ -241,7 +257,7 @@ describe('agent install preflight', () => {
   it('fails the STT smoke check when infer returns the wrong non-empty transcript', async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), 'clawkie-preflight-test-'));
     try {
-      const result = await runPreflight({ skipInfer: false }, {
+      const result = await runInstallPreflight({ skipInfer: false }, {
         tempRoot,
         runCommand: async (command: string, args: string[]) => {
           if (args.includes('transcribe')) {
@@ -266,7 +282,7 @@ describe('agent install preflight', () => {
   it('passes the STT smoke check when any transcript output is a normalized Hi variant', async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), 'clawkie-preflight-test-'));
     try {
-      const result = await runPreflight({ skipInfer: false }, {
+      const result = await runInstallPreflight({ skipInfer: false }, {
         tempRoot,
         runCommand: async (command: string, args: string[]) => {
           if (args.includes('transcribe')) {
@@ -291,7 +307,7 @@ describe('agent install preflight', () => {
     const tempRoot = await mkdtemp(join(tmpdir(), 'clawkie-preflight-test-'));
     const calls: Array<{ command: string; args: string[] }> = [];
     try {
-      const result = await runPreflight({ skipInfer: false }, {
+      const result = await runInstallPreflight({ skipInfer: false }, {
         tempRoot,
         runCommand: async (command: string, args: string[]) => {
           calls.push({ command, args });
@@ -315,7 +331,7 @@ describe('agent install preflight', () => {
 
   it('fails when a parseable openclaw --version is below 2026.4.25', async () => {
     const calls: Array<{ command: string; args: string[] }> = [];
-    const result = await runPreflight({ skipInfer: true }, {
+    const result = await runInstallPreflight({ skipInfer: true }, {
       runCommand: async (command: string, args: string[]) => {
         calls.push({ command, args });
         if (command === 'npm') return { exitCode: 0, stdout: '10.9.0\n', stderr: '' };
@@ -337,7 +353,7 @@ describe('agent install preflight', () => {
     const tempRoot = await mkdtemp(join(tmpdir(), 'clawkie-preflight-test-'));
     const requestId = 'a8b414c2-0d4b-4266-85b8-ab94662dce18';
     try {
-      const result = await runPreflight({ sessionId: 'agent:main:main' }, {
+      const result = await runInstallPreflight({ sessionId: 'agent:main:main' }, {
         tempRoot,
         runCommand: async (command: string, args: string[]) => {
           if (command === 'npm') return { exitCode: 0, stdout: '10.9.0\n', stderr: '' };
@@ -418,5 +434,36 @@ describe('agent install preflight', () => {
       agentTurn: true,
       requireAgentTurn: true,
     });
+  });
+
+  it('rejects Node versions outside the OpenClaw 2026.10.10 engines range', async () => {
+    expect(nodeVersionSatisfiesOpenClaw('24.16.0')).toBe(true);
+    expect(nodeVersionSatisfiesOpenClaw('24.22.1')).toBe(true);
+    expect(nodeVersionSatisfiesOpenClaw('26.1.0')).toBe(true);
+    expect(nodeVersionSatisfiesOpenClaw('26.12.1')).toBe(true);
+    for (const nodeVersion of ['20.19.0', '22.23.4', '24.15.9', '25.0.0', '26.0.9']) {
+      expect(nodeVersionSatisfiesOpenClaw(nodeVersion)).toBe(false);
+      const result = await runPreflight({ skipInfer: true }, {
+        nodeVersion,
+        runCommand: async () => ({ exitCode: 0, stdout: 'should-not-run', stderr: '' }),
+      });
+      expect(result.ok).toBe(false);
+      expect(result.checks).toHaveLength(1);
+      expect(result.checks[0]).toMatchObject({
+        name: 'node-version',
+        status: 'fail',
+        code: 'node_version_too_old',
+      });
+      expect(result.checks[0]?.summary).toContain('>=24.16.0 <25 || >=26.1.0');
+    }
+  });
+
+  it('reports the gateway auth configuration error instead of a generic auth failure', () => {
+    const stderr = 'gateway agent requires credentials before opening a websocket: configure gateway.auth token/password, pair this device';
+    const classified = classifyPreflightFailure(stderr);
+    expect(classified.code).toBe('openclaw_gateway_auth_required');
+    expect(classified.summary).toContain(stderr);
+    expect(classified.summary).toContain('gateway.mode=local');
+    expect(classified.summary).toContain('openclaw gateway run');
   });
 });

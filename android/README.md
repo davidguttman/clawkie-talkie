@@ -166,7 +166,7 @@ daemon through the production rambly signaling broker:
   frames over the data channel, real OpenClaw STT transcript rendered
   ("Hi!"), thinking state with streamed hold music + live waveform +
   track label, and daemon error surfacing
-  (`VOICE ERROR · openclaw_delivery_unresolved` for a route-less session).
+  (`NO REPLY ROUTE · …` / `openclaw_delivery_unresolved` for a route-less session).
 
 Still unproven (needs a human run, ~1 minute):
 

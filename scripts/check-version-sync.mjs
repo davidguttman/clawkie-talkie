@@ -6,6 +6,13 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const packageJsonPath = resolve(root, 'package.json');
 const androidBuildPath = resolve(root, 'android/app/build.gradle.kts');
+const installDocPaths = [
+  'README.md',
+  'AGENT-INSTALL.md',
+  'docs/install-daemon.md',
+  'docs/agent-install-upgrade-repair.md',
+  'client/index.html',
+];
 
 function fail(message) {
   console.error(`version:check failed: ${message}`);
@@ -44,6 +51,21 @@ try {
 
   if (packageVersion && androidVersionName && packageVersion !== androidVersionName) {
     fail(`package.json version ${packageVersion} does not match Android versionName ${androidVersionName}`);
+  }
+
+  if (packageVersion) {
+    const tag = `v${packageVersion}`;
+    for (const rel of installDocPaths) {
+      const text = readFileSync(resolve(root, rel), 'utf8');
+      const tags = [...text.matchAll(/\bv(\d+\.\d+\.\d+)\b/g)].map((match) => `v${match[1]}`);
+      if (!tags.includes(tag)) {
+        fail(`${rel} does not mention install tag ${tag}`);
+      }
+      const stale = [...new Set(tags.filter((found) => found !== tag))];
+      if (stale.length > 0) {
+        fail(`${rel} still pins ${stale.join(', ')} instead of ${tag}`);
+      }
+    }
   }
 
   if (packageVersion && androidVersionCodeRaw) {

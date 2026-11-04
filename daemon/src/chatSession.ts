@@ -194,7 +194,11 @@ function deriveChannelFromSessionKey(sessionKey: string | undefined): string | u
 
 // Internal OpenClaw surfaces with no external chat channel. Voice turns
 // for these run without `--deliver`: the reply only goes back over TTS.
-const NON_DELIVERED_CHANNELS = new Set(['webchat', 'main']);
+// `explicit` is the session-key channel OpenClaw assigns to sessions
+// created with `openclaw agent --session-id` (`agent:<agent>:explicit:<id>`).
+// That key is not a chat route, so trying to --deliver it fails with
+// openclaw_delivery_unresolved.
+const NON_DELIVERED_CHANNELS = new Set(['webchat', 'main', 'explicit']);
 
 export function shouldDeliverReplyForChatTarget(opts: {
   sessionId: string;
@@ -783,6 +787,9 @@ export function classifyOpenClawError(err: unknown): string {
   const text = stripBenignOpenClawDiagnostics(collectOpenClawErrorText(err)).toLowerCase();
   if (/\b(command not found|not found|enoent)\b/.test(text)) return 'openclaw_unavailable';
   if (/\bdelivery channel is required\b/.test(text)) return 'openclaw_delivery_unavailable';
+  if (/gateway\.auth|pair this device|credentials before opening a websocket/.test(text)) {
+    return 'openclaw_gateway_auth_required';
+  }
   if (/\b(econnrefused|gateway|fetch failed|failed to connect|127\.0\.0\.1|18789)\b/.test(text)) {
     return 'openclaw_gateway_unavailable';
   }

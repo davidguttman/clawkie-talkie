@@ -21,7 +21,7 @@ host dashboard ──▶ Recent OpenClaw Sessions ──▶ talk next step
 The normal install path is agent-run. Tell your agent:
 
 ```text
-Install Clawkie-Talkie for me by following https://github.com/davidguttman/clawkie-talkie/blob/v1.0.0/AGENT-INSTALL.md. 
+Install Clawkie-Talkie for me by following https://github.com/davidguttman/clawkie-talkie/blob/v1.0.7/AGENT-INSTALL.md. 
 
 Before installing, download or clone the repo and inspect the source; stop and ask me if anything looks suspicious, harmful, or you are not confident. 
 The install should set up the persistent Clawkie-Talkie daemon and the OpenClaw clawkie-voice-handoff skill.
@@ -163,10 +163,20 @@ Clawkie Talkie depends on a working OpenClaw install for the same OS user that r
 
 At minimum, that user needs:
 
-- `openclaw` available on `PATH`;
-- a working OpenClaw session/runtime;
-- a configured audio transcription provider;
-- a configured text-to-speech provider.
+- Node.js in OpenClaw's supported range. OpenClaw 2026.10.10 requires `>=24.16.0 <25 || >=26.1.0`. Node 20 and Node 22 can `npm install` this repo and still fail OpenClaw and `npm run agent-install-preflight`. `package.json` `engines` matches that range so npm warns on an older Node.
+- `openclaw` on `PATH` for the interactive user and for the daemon service. On Linux, `npm install -g openclaw` often installs the binary into `~/.local/bin`, which is not on `PATH` for every shell or for systemd user services. Run `command -v openclaw` and `npm prefix -g`, and add that bin directory to both environments before continuing.
+- A local OpenClaw gateway that agent calls can authenticate to. For a same-machine install, set `gateway.mode=local`, `gateway.bind=loopback`, and `gateway.auth.mode=token` with `gateway.auth.token`, then keep `openclaw gateway run` up as the same OS user. If that auth is missing, agent calls fail with a websocket credential error (`configure gateway.auth token/password, pair this device`), which is a gateway setup problem.
+- `ffmpeg` on `PATH` for that same user. OpenClaw TTS writes an encoded audio file; the daemon decodes it to PCM16LE before WebRTC. Install it with the platform package manager (`apt install ffmpeg`, `brew install ffmpeg`, and so on) and confirm `command -v ffmpeg` from the daemon user.
+- A configured audio transcription provider and a configured text-to-speech provider. The TTS request timeout is top-level `tts.timeoutMs` (at least `120000`). OpenClaw 2026.10.10 rejects `messages.tts`.
+
+From the installed source, check the machine before trusting a Join URL:
+
+```bash
+npm run agent-install-preflight
+npm run agent-install-preflight -- --agent-turn --session-id <stored-openclaw-session-id>
+```
+
+Plain preflight checks Node, the CLI, gateway status, ffmpeg, and infer STT/TTS. It reports `SKIP` for the agent-turn smoke test until you pass `--agent-turn --session-id`. Status and infer passing does not prove a voice reply can complete. The daemon also warns at startup when `openclaw --version` fails, then still prints the Join URL.
 
 The daemon uses these commands at runtime:
 
@@ -250,11 +260,12 @@ The compatibility voice URL is missing routing fields or was built for the wrong
 
 Check daemon logs. Common causes are:
 
-- `openclaw` is not on the service user's `PATH`;
-- OpenClaw is not authenticated/configured for that user;
+- `openclaw` is not on the service user's `PATH` (on Linux, check `~/.local/bin`);
+- OpenClaw gateway auth is not configured (`gateway.mode=local`, `gateway.bind=loopback`, `gateway.auth.mode=token`, then `openclaw gateway run`);
 - STT provider config is missing;
-- TTS provider config is missing;
-- the session ID in the link does not identify a real OpenClaw session.
+- TTS provider config is missing, or `tts.timeoutMs` is still the 30s default;
+- `ffmpeg` is missing from the service user's `PATH`;
+- the session was created with `openclaw agent --session-id` and is stored as `agent:<agent>:explicit:<id>`. That key has no chat channel, so voice delivery fails until you start a session from the dashboard with `+ NEW → Web only (no chat channel)` or pick a Discord/Slack session. A direct `/voice` URL that only adds `channel=webchat` is applied on the next join to that room.
 
 ### Links break after restart
 

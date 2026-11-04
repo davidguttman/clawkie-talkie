@@ -45,6 +45,11 @@ export class MicPermissionError extends Error {
 // same stream + AudioContext + MediaStreamAudioSourceNode for every
 // subsequent press. Only the per-turn `ScriptProcessorNode` (and its
 // silent sink) is created and torn down on each start/stop.
+// `ScriptProcessorNode` is deprecated. Replacing it with AudioWorklet
+// is not a local swap: the worklet must keep this same long-lived mic
+// stream and AudioContext so iOS/Safari does not re-prompt, and it has
+// to post PCM frames on the existing transport clock. Left as-is until
+// that path can be retested on device.
 let cachedStream: MediaStream | null = null;
 let cachedAudioCtx: AudioContext | null = null;
 let cachedSourceNode: MediaStreamAudioSourceNode | null = null;

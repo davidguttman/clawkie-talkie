@@ -1795,6 +1795,9 @@ describe('classifyOpenClawError', () => {
     expect(classifyOpenClawError(new Error('connect ECONNREFUSED 127.0.0.1:18789'))).toBe(
       'openclaw_gateway_unavailable',
     );
+    expect(classifyOpenClawError(new Error(
+      'gateway agent requires credentials before opening a websocket: configure gateway.auth token/password, pair this device',
+    ))).toBe('openclaw_gateway_auth_required');
     expect(classifyOpenClawError(new Error('delivery channel is required'))).toBe(
       'openclaw_delivery_unavailable',
     );

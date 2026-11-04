@@ -152,9 +152,7 @@ a safe destination catalog and performs the creation:
   Session entry point for daemons that do not advertise both features,
   including legacy daemons that never send `daemon.hello`.
 
-Webchat/no-chat sessions (explicit `channel=webchat`, or webchat/`main`
-session keys) run their voice turns without `--deliver`: the assistant reply
-comes back over TTS only instead of failing on an unresolvable reply target.
+Webchat/no-chat sessions run their voice turns without `--deliver`: the assistant reply comes back over TTS only instead of failing on an unresolvable reply target. That includes explicit `channel=webchat`, webchat/`main` session keys, and OpenClaw's `explicit` session keys (`agent:<agent>:explicit:<id>`), which is the shape stored for `openclaw agent --session-id`. Those explicit sessions have no chat channel. To talk to one from the dashboard, create it with `+ NEW → Web only (no chat channel)`, or pick a Discord/Slack session that already has a reply route. A later join can correct the room's channel; the daemon keeps the latest join's route rather than the first one.
 
 ## URL contract
 
